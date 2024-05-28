@@ -248,11 +248,12 @@ class TionClimate(ClimateEntity):
             elif hvac_mode == HVACMode.FAN_ONLY:
                 self._breezer.heater_enabled = False
                 self._breezer.send()
-            if (
-                self.hvac_mode == HVACMode.OFF
-                and self._last_fan_speed_synced is not None
-            ):
-                self.set_fan_mode(self._last_fan_speed_synced)
+            if self.hvac_mode == HVACMode.OFF:
+                self.set_fan_mode(
+                    self._last_fan_speed_synced
+                    if self._last_fan_speed_synced is not None
+                    else "1"
+                )
 
     def set_swing_mode(self, swing_mode: str) -> None:
         """Set Tion breezer air gate."""
@@ -267,7 +268,15 @@ class TionClimate(ClimateEntity):
         _LOGGER.info(
             "Device: %s Swing mode changed to %s", self._breezer.name, swing_mode
         )
+
+        if self.hvac_mode != HVACMode.OFF:
+            self.set_fan_mode(
+                self._last_fan_speed_synced
+                if self._last_fan_speed_synced is not None
+                else "1"
+            )
         self._breezer.send()
+        self._breezer.load()
 
     def update(self):
         """Fetch new state data for the breezer.
