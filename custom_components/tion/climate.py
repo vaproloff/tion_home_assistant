@@ -46,6 +46,8 @@ async def async_setup_platform(
 class TionClimate(ClimateEntity):
     """Tion climate devices,include air conditioner,heater."""
 
+    _attr_translation_key = "tion_breezer"
+
     def __init__(self, tion, guid) -> None:
         """Init climate device."""
         self._breezer: Breezer = tion.get_devices(guid=guid)[0]
@@ -197,43 +199,19 @@ class TionClimate(ClimateEntity):
         """Set new target fan mode."""
         new_mode = "manual"
         new_speed = None
-        new_min_speed = new_max_speed = None
-        new_co2 = self._zone.target_co2
-        if fan_mode == FAN_OFF:
+        if fan_mode == FAN_AUTO:
+            new_mode = FAN_AUTO
+        elif fan_mode == FAN_OFF:
             new_speed = 0
-        elif fan_mode == FAN_AUTO:
-            new_mode = "auto"
-            new_min_speed = 0
-            new_max_speed = 6
         elif fan_mode.isdigit():  # 1-6
             new_speed = int(fan_mode)
-        elif fan_mode.count("-") == 1:  # {min}-{max}
-            new_mode = "auto"
-            speeds = fan_mode
-            if fan_mode.count(":") == 1:  # {min}-{max}:{co2}
-                speeds, new_co2 = fan_mode.split(":")
-            new_min_speed, new_max_speed = speeds.split("-")
-            new_min_speed = int(new_min_speed)
-            new_max_speed = int(new_max_speed)
-        if self._zone.mode != new_mode or self._zone.target_co2 != new_co2:
-            if self._zone.mode != new_mode:
-                _LOGGER.info("Setting zone mode to %s", new_mode)
-                self._zone.mode = new_mode
-            if self._zone.target_co2 != new_co2:
-                _LOGGER.info("Setting zone target co2 to %s", new_co2)
-                self._zone.target_co2 = new_co2
+        if self._zone.mode != new_mode:
+            _LOGGER.info("Setting zone mode to %s", new_mode)
+            self._zone.mode = new_mode
             self._zone.send()
-        if new_mode == "manual":
-            if new_speed is not None:
-                _LOGGER.info("Setting breezer fan_mode to %s", new_speed)
-                self._breezer.speed = new_speed
-                self._breezer.send()
-        elif (new_min_speed is not None and new_max_speed is not None) and (
-            self.speed_min_set != new_min_speed or self.speed_max_set != new_max_speed
-        ):
-            _LOGGER.info("Sending breezer speeds %s-%s", new_min_speed, new_max_speed)
-            self._breezer.speed_min_set = new_min_speed
-            self._breezer.speed_max_set = new_max_speed
+        if new_mode == "manual" and new_speed is not None:
+            _LOGGER.info("Setting breezer fan_mode to %s", new_speed)
+            self._breezer.speed = new_speed
             self._breezer.send()
 
     def set_hvac_mode(self, hvac_mode):
@@ -307,6 +285,11 @@ class TionClimate(ClimateEntity):
         return self._breezer.t_max if self._breezer.valid else STATE_UNKNOWN
 
     @property
+    def speed(self) -> str:
+        """Return the current speed."""
+        return self._breezer.speed if self._breezer.valid else STATE_UNKNOWN
+
+    @property
     def speed_min_set(self) -> str:
         """Return the minimum speed for auto mode."""
         return self._breezer.speed_min_set if self._breezer.valid else STATE_UNKNOWN
@@ -334,6 +317,7 @@ class TionClimate(ClimateEntity):
         data = super().state_attributes
         data["mode"] = self.mode
         data["target_co2"] = self.target_co2
+        data["speed"] = self.speed
         data["speed_min_set"] = self.speed_min_set
         data["speed_max_set"] = self.speed_max_set
         data["filter_need_replace"] = self.filter_need_replace

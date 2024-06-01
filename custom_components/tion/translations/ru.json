@@ -1,0 +1,16 @@
+{
+  "entity": {
+    "climate": {
+      "tion_breezer": {
+        "state_attributes": {
+          "swing_mode": {
+            "state": {
+              "Outside": "С улицы",
+              "Inside": "Из комнаты"
+            }
+          }
+        }
+      }
+    }
+  }
+}
