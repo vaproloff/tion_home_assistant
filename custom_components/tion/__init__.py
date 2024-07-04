@@ -13,7 +13,6 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import discovery
 import homeassistant.helpers.config_validation as cv
-from tion import Breezer, MagicAir, TionApi
 
 from .const import (
     BREEZER_DEVICE,
@@ -23,6 +22,7 @@ from .const import (
     MAGICAIR_DEVICE,
     TION_API,
 )
+from .tion_api import Breezer, MagicAir, TionApi
 
 _LOGGER = logging.getLogger(__name__)
 

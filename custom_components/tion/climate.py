@@ -17,19 +17,22 @@ from homeassistant.const import (
     MAJOR_VERSION,
     MINOR_VERSION,
     STATE_UNKNOWN,
+    Platform,
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_platform
-from tion import Breezer, Zone
+from homeassistant.helpers.reload import async_setup_reload_service
 
 from .const import (
+    DOMAIN,
     LAST_FAN_SPEED_SYNCED,
     SWING_INSIDE,
     SWING_MIXED,
     SWING_OUTSIDE,
     TION_API,
 )
+from .tion_api import Breezer, Zone
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +41,8 @@ async def async_setup_platform(
     hass: HomeAssistant, config, async_add_entities, discovery_info=None
 ):
     """Set up Tion climate platform."""
+    await async_setup_reload_service(hass, DOMAIN, [Platform.CLIMATE])
+
     tion = hass.data[TION_API]
     if discovery_info is None:
         return
