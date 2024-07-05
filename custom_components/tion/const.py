@@ -2,7 +2,11 @@
 
 from datetime import timedelta
 
+from homeassistant.const import Platform
+
 DOMAIN = "tion"
+PLATFORMS = [Platform.CLIMATE, Platform.SENSOR]
+
 TION_API = "data_tion"
 DEFAULT_AUTH_FILENAME = "tion_auth"
 DEFAULT_SCAN_INTERVAL = timedelta(minutes=1)

@@ -8,8 +8,9 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import STATE_UNKNOWN, UnitOfTemperature
+from homeassistant.const import STATE_UNKNOWN, Platform, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.reload import async_setup_reload_service
 
 from .const import (
     BREEZER_DEVICE,
@@ -64,6 +65,8 @@ async def async_setup_platform(
     hass: HomeAssistant, config, async_add_entities, discovery_info=None
 ):
     """Set up the sensor platform."""
+    await async_setup_reload_service(hass, DOMAIN, [Platform.SENSOR])
+
     tion = hass.data[TION_API]
     if discovery_info is None:
         return

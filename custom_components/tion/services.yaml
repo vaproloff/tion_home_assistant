@@ -1,0 +1,62 @@
+set_zone_target_co2:
+  name: Set Zone Target CO2
+  description: Sets target CO2 level for Zone
+  target:
+    entity:
+      integration: tion
+      domain: climate
+  fields:
+    target_co2:
+      name: Zone Target CO2
+      description: Target CO2 level for current zone
+      required: true
+      advanced: false
+      example: 800
+      selector:
+        number:
+          min: 400
+          max: 2000
+          step: 10
+          mode: slider
+
+set_breezer_min_speed:
+  name: Set Breezer Min Speed
+  description: Sets minimum speed level for breezer in auto mode
+  target:
+    entity:
+      integration: tion
+      domain: climate
+  fields:
+    min_speed:
+      name: Min Speed
+      description: Minimum speed level
+      required: true
+      advanced: false
+      example: 2
+      selector:
+        number:
+          min: 0
+          max: 6
+          step: 1
+          mode: slider
+
+set_breezer_max_speed:
+  name: Set Breezer Max Speed
+  description: Sets maximum speed level for breezer in auto mode
+  target:
+    entity:
+      integration: tion
+      domain: climate
+  fields:
+    max_speed:
+      name: Max Speed
+      description: Maximum speed level
+      required: true
+      advanced: false
+      example: 5
+      selector:
+        number:
+          min: 0
+          max: 6
+          step: 1
+          mode: slider

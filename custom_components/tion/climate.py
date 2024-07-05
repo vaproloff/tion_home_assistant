@@ -2,6 +2,8 @@
 
 import logging
 
+import voluptuous as vol
+
 from homeassistant.components.climate import (
     ATTR_HVAC_MODE,
     FAN_AUTO,
@@ -15,18 +17,22 @@ from homeassistant.const import (
     MAJOR_VERSION,
     MINOR_VERSION,
     STATE_UNKNOWN,
+    Platform,
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
-from tion import Breezer, Zone
+from homeassistant.helpers import entity_platform
+from homeassistant.helpers.reload import async_setup_reload_service
 
 from .const import (
+    DOMAIN,
     LAST_FAN_SPEED_SYNCED,
     SWING_INSIDE,
     SWING_MIXED,
     SWING_OUTSIDE,
     TION_API,
 )
+from .tion_api import Breezer, Zone
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,12 +41,41 @@ async def async_setup_platform(
     hass: HomeAssistant, config, async_add_entities, discovery_info=None
 ):
     """Set up Tion climate platform."""
+    await async_setup_reload_service(hass, DOMAIN, [Platform.CLIMATE])
+
     tion = hass.data[TION_API]
     if discovery_info is None:
         return
     devices = [TionClimate(tion, device["guid"]) for device in discovery_info]
 
     async_add_entities(devices)
+
+    platform = entity_platform.current_platform.get()
+    assert platform
+
+    platform.async_register_entity_service(
+        "set_zone_target_co2",
+        {
+            vol.Optional("target_co2"): vol.Coerce(int),
+        },
+        "set_zone_target_co2",
+    )
+
+    platform.async_register_entity_service(
+        "set_breezer_min_speed",
+        {
+            vol.Optional("min_speed"): vol.Coerce(int),
+        },
+        "set_breezer_min_speed",
+    )
+
+    platform.async_register_entity_service(
+        "set_breezer_max_speed",
+        {
+            vol.Optional("max_speed"): vol.Coerce(int),
+        },
+        "set_breezer_max_speed",
+    )
 
 
 class TionClimate(ClimateEntity):
@@ -263,6 +298,30 @@ class TionClimate(ClimateEntity):
         """
         self._zone.load()
         self._breezer.load()
+
+    def set_zone_target_co2(self, **kwargs):
+        """Set zone new target co2 level."""
+        new_target_co2 = kwargs.get("target_co2", None)
+        if new_target_co2 is not None and self._zone.target_co2 != new_target_co2:
+            _LOGGER.info("Setting zone target co2 to %s", new_target_co2)
+            self._zone.target_co2 = new_target_co2
+            self._zone.send()
+
+    def set_breezer_min_speed(self, **kwargs):
+        """Set breezer new min speed."""
+        new_min_speed = kwargs.get("min_speed", None)
+        if new_min_speed is not None and self.speed_min_set != new_min_speed:
+            _LOGGER.info("Setting breezer min speed to %s", new_min_speed)
+            self._breezer.speed_min_set = new_min_speed
+            self._breezer.send()
+
+    def set_breezer_max_speed(self, **kwargs):
+        """Set breezer new min speed."""
+        new_max_speed = kwargs.get("max_speed", None)
+        if new_max_speed is not None and self.speed_max_set != new_max_speed:
+            _LOGGER.info("Setting breezer max speed to %s", new_max_speed)
+            self._breezer.speed_max_set = new_max_speed
+            self._breezer.send()
 
     @property
     def mode(self) -> str:
