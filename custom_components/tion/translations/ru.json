@@ -1,16 +1,34 @@
 {
-  "entity": {
-    "climate": {
-      "tion_breezer": {
-        "state_attributes": {
-          "swing_mode": {
-            "state": {
-              "Outside": "С улицы",
-              "Inside": "Из комнаты"
+    "config": {
+        "abort": {
+            "already_configured": "Устройство уже было добавлено"
+        },
+        "error": {
+            "invalid_auth": "Ошибка аутентификации"
+        },
+        "step": {
+            "user": {
+                "description": "Введите данные учётной записи Tion:",
+                "data": {
+                    "username": "Логин",
+                    "password": "Пароль",
+                    "scan_interval": "Интервал обновления"
+                }
             }
-          }
         }
-      }
+    },
+    "entity": {
+        "climate": {
+            "tion_breezer": {
+                "state_attributes": {
+                    "swing_mode": {
+                        "state": {
+                            "Outside": "С улицы",
+                            "Inside": "Из комнаты"
+                        }
+                    }
+                }
+            }
+        }
     }
-  }
 }

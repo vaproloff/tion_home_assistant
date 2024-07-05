@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2024-07-05
+### Changes
+- добавление интеграции через UI
+
+## [1.1.3] - 2024-07-05
+### Changes
+- api встроен в компонент
+- добавлена возможность перезагрузки конфигурации компонента
+- добавлены службы для задания целевых CO2, min_speed и max_speed
+
 ## [1.1.2] - 2024-06-02
 ### Changes
 - возвращен атрибут скорости
