@@ -2,45 +2,20 @@
 
 import logging
 
-import voluptuous as vol
-
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_FILE_PATH,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
 )
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import discovery
-import homeassistant.helpers.config_validation as cv
+from homeassistant.core import Config, HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
-from .const import (
-    BREEZER_DEVICE,
-    DEFAULT_AUTH_FILENAME,
-    DEFAULT_SCAN_INTERVAL,
-    DOMAIN,
-    MAGICAIR_DEVICE,
-    TION_API,
-)
+from .const import BREEZER_DEVICE, DOMAIN, MAGICAIR_DEVICE, MODELS, PLATFORMS
 from .tion_api import Breezer, MagicAir, TionApi
 
 _LOGGER = logging.getLogger(__name__)
-
-CONFIG_SCHEMA = vol.Schema(
-    {
-        DOMAIN: vol.Schema(
-            {
-                vol.Required(CONF_USERNAME): cv.string,
-                vol.Required(CONF_PASSWORD): cv.string,
-                vol.Optional(
-                    CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
-                ): cv.time_period,
-                vol.Optional(CONF_FILE_PATH, default=DEFAULT_AUTH_FILENAME): cv.string,
-            }
-        )
-    },
-    extra=vol.ALLOW_EXTRA,
-)
 
 
 def create_api(user, password, interval, auth_fname):
@@ -50,25 +25,37 @@ def create_api(user, password, interval, auth_fname):
     )
 
 
-async def async_setup(hass: HomeAssistant, config):
-    """Set up Tion Component."""
-    api = await hass.async_add_executor_job(
+async def async_setup(hass: HomeAssistant, config: Config):
+    """Set up integration with the YAML. Not supported."""
+    hass.data.setdefault(DOMAIN, {})
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+    """Set up this integration using UI."""
+    if hass.data.get(DOMAIN) is None:
+        hass.data.setdefault(DOMAIN, {})
+
+    tion_api = await hass.async_add_executor_job(
         create_api,
-        config[DOMAIN][CONF_USERNAME],
-        config[DOMAIN][CONF_PASSWORD],
-        (config[DOMAIN][CONF_SCAN_INTERVAL]).seconds,
-        hass.config.path(config[DOMAIN][CONF_FILE_PATH]),
+        entry.data.get(CONF_USERNAME),
+        entry.data.get(CONF_PASSWORD),
+        entry.data.get(CONF_SCAN_INTERVAL),
+        entry.data.get(CONF_FILE_PATH),
     )
 
-    assert api.authorization, "Couldn't get authorisation data!"
-    _LOGGER.info("Api initialized with authorization %s", api.authorization)
+    assert tion_api.authorization, "Couldn't get authorisation data!"
+    _LOGGER.info("Api initialized with authorization %s", tion_api.authorization)
 
-    hass.data[TION_API] = api
+    hass.data[DOMAIN][entry.entry_id] = tion_api
 
-    discovery_info = {}
-    devices = await hass.async_add_executor_job(api.get_devices)
-    device: Breezer | MagicAir
+    device_registry = dr.async_get(hass)
+
+    devices: list[MagicAir | Breezer] = await hass.async_add_executor_job(
+        tion_api.get_devices
+    )
     for device in devices:
+        _LOGGER.info("Device type: %s", device.type)
         if device.valid:
             device_type = (
                 BREEZER_DEVICE
@@ -76,25 +63,35 @@ async def async_setup(hass: HomeAssistant, config):
                 else (MAGICAIR_DEVICE if type(device) == MagicAir else None)
             )
             if device_type:
-                if "sensor" not in discovery_info:
-                    discovery_info["sensor"] = []
-                discovery_info["sensor"].append(
-                    {"type": device_type, "guid": device.guid}
+                device_registry.async_get_or_create(
+                    config_entry_id=entry.entry_id,
+                    identifiers={(DOMAIN, device.guid)},
+                    manufacturer="TION",
+                    model=MODELS.get(device.type, "Unknown device"),
+                    name=device.name,
                 )
-                if device_type == BREEZER_DEVICE:
-                    if "climate" not in discovery_info:
-                        discovery_info["climate"] = []
-                    discovery_info["climate"].append(
-                        {"type": device_type, "guid": device.guid}
-                    )
             else:
-                _LOGGER.info("Unused device %s", device)
+                _LOGGER.info("Unused device: %s", device)
         else:
             _LOGGER.info("Skipped device %s, because of 'valid' property", device)
 
-    for device_type, devices in discovery_info.items():
-        await discovery.async_load_platform(hass, device_type, DOMAIN, devices, config)
-        _LOGGER.info("Found %s %s devices", len(devices), device_type)
+    await hass.async_create_task(
+        hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    )
 
-    # Return boolean to indicate that initialization was successful.
     return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Handle removal of an entry."""
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        hass.data[DOMAIN].pop(entry.entry_id)
+
+    return unloaded
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry."""
+    await async_unload_entry(hass, entry)
+    await async_setup_entry(hass, entry)

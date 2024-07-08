@@ -12,17 +12,16 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
     HVACMode,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_TEMPERATURE,
     MAJOR_VERSION,
     MINOR_VERSION,
     STATE_UNKNOWN,
-    Platform,
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_platform
-from homeassistant.helpers.reload import async_setup_reload_service
 
 from .const import (
     DOMAIN,
@@ -30,25 +29,30 @@ from .const import (
     SWING_INSIDE,
     SWING_MIXED,
     SWING_OUTSIDE,
-    TION_API,
 )
-from .tion_api import Breezer, Zone
+from .tion_api import Breezer, TionApi, TionZonesDevices, Zone
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_platform(
-    hass: HomeAssistant, config, async_add_entities, discovery_info=None
-):
-    """Set up Tion climate platform."""
-    await async_setup_reload_service(hass, DOMAIN, [Platform.CLIMATE])
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+) -> bool:
+    """Set up climate Tion entities."""
+    tion_api: TionApi = hass.data[DOMAIN][entry.entry_id]
 
-    tion = hass.data[TION_API]
-    if discovery_info is None:
-        return
-    devices = [TionClimate(tion, device["guid"]) for device in discovery_info]
+    entities = []
+    devices = await hass.async_add_executor_job(tion_api.get_devices)
+    device: TionZonesDevices
+    for device in devices:
+        if device.valid:
+            if type(device) == Breezer:
+                entities.append(TionClimate(tion_api, device.guid))
 
-    async_add_entities(devices)
+        else:
+            _LOGGER.info("Skipped device %s, because of 'valid' property", device)
+
+    async_add_entities(entities)
 
     platform = entity_platform.current_platform.get()
     assert platform
@@ -77,6 +81,8 @@ async def async_setup_platform(
         "set_breezer_max_speed",
     )
 
+    return True
+
 
 class TionClimate(ClimateEntity):
     """Tion climate devices,include air conditioner,heater."""
@@ -99,6 +105,13 @@ class TionClimate(ClimateEntity):
             self._enable_turn_on_off_backwards_compatibility = False
             self._attr_supported_features |= ClimateEntityFeature.TURN_OFF
             self._attr_supported_features |= ClimateEntityFeature.TURN_ON
+
+    @property
+    def device_info(self):
+        """Link entity to the device."""
+        return {
+            "identifiers": {(DOMAIN, self._breezer.guid)},
+        }
 
     @property
     def temperature_unit(self):

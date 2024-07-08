@@ -6,7 +6,7 @@ from time import sleep, time
 
 import requests
 
-_LOGGER = logging.getLogger("tion")
+_LOGGER = logging.getLogger(__name__)
 
 
 class TionConnection:
@@ -683,6 +683,7 @@ class Zone:
 
 class MagicAir(TionZonesDevices):
     def __init__(self, device: TionZonesDevices, zone_data: TionZones, api: TionApi):
+        self._type = device.type
         self._name = device.name
         self._guid = device.guid
         self._zone: Zone = Zone(zone_data, api)
@@ -699,6 +700,10 @@ class MagicAir(TionZonesDevices):
     @property
     def name(self):
         return self._name
+
+    @property
+    def type(self):
+        return self._type
 
     @property
     def co2(self):
@@ -738,6 +743,7 @@ class Breezer(TionZonesDevices):
     def __init__(self, device: TionZonesDevices, zone_data: TionZones, api: TionApi):
         self._name = device.name
         self._guid = device.guid
+        self._type = device.type
         self.zone: Zone = Zone(zone_data, api)
         self._api: TionApi = api
         self._t_in = None
@@ -764,6 +770,10 @@ class Breezer(TionZonesDevices):
     @property
     def guid(self):
         return self._guid
+
+    @property
+    def type(self):
+        return self._type
 
     @property
     def t_in(self):
