@@ -12,7 +12,7 @@ from homeassistant.const import (
 from homeassistant.core import Config, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from .const import BREEZER_DEVICE, DOMAIN, MAGICAIR_DEVICE, PLATFORMS
+from .const import BREEZER_DEVICE, DOMAIN, MAGICAIR_DEVICE, MODELS, PLATFORMS
 from .tion_api import Breezer, MagicAir, TionApi
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ def create_api(user, password, interval, auth_fname):
 
 
 async def async_setup(hass: HomeAssistant, config: Config):
-    """Set up this integration with the UI. YAML is not supported."""
+    """Set up integration with the YAML. Not supported."""
     hass.data.setdefault(DOMAIN, {})
     return True
 
@@ -51,16 +51,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     device_registry = dr.async_get(hass)
 
-    devices = await hass.async_add_executor_job(tion_api.get_devices)
-    models = {
-        "co2mb": "MagicAir",
-        "co2Plus": "Модуль CO2+",
-        "tionO2Rf": "Бризер O2",
-        "tionClever": "Clever",
-        "breezer3": "Бризер 3S",
-        "breezer4": "Бризер 4S",
-    }
-    device: Breezer
+    devices: list[MagicAir | Breezer] = await hass.async_add_executor_job(
+        tion_api.get_devices
+    )
     for device in devices:
         _LOGGER.info("Device type: %s", device.type)
         if device.valid:
@@ -74,7 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     config_entry_id=entry.entry_id,
                     identifiers={(DOMAIN, device.guid)},
                     manufacturer="TION",
-                    model=models.get(device.type, "Unknown device"),
+                    model=MODELS.get(device.type, "Unknown device"),
                     name=device.name,
                 )
             else:
@@ -87,3 +80,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     )
 
     return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Handle removal of an entry."""
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        hass.data[DOMAIN].pop(entry.entry_id)
+
+    return unloaded
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry."""
+    await async_unload_entry(hass, entry)
+    await async_setup_entry(hass, entry)
