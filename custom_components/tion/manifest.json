@@ -1,11 +1,14 @@
 {
   "domain": "tion",
   "name": "Tion",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "documentation": "https://github.com/vaproloff/tion_home_assistant",
   "requirements": [],
   "issue_tracker": "https://github.com/vaproloff/tion_home_assistant/issues",
   "dependencies": [],
-  "codeowners": ["Valeriy Chistyakov", "Konstantin Pivnov"],
+  "codeowners": [
+    "Valeriy Chistyakov",
+    "Konstantin Pivnov"
+  ],
   "config_flow": true
 }

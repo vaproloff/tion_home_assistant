@@ -2,20 +2,48 @@
 
 import logging
 
-from homeassistant.config_entries import ConfigEntry
+import voluptuous as vol
+
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import (
     CONF_FILE_PATH,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
 )
-from homeassistant.core import Config, HomeAssistant
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, Config, HomeAssistant
 from homeassistant.helpers import device_registry as dr
+import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 
-from .const import BREEZER_DEVICE, DOMAIN, MAGICAIR_DEVICE, MODELS, PLATFORMS
+from .const import (
+    BREEZER_DEVICE,
+    DEFAULT_AUTH_FILENAME,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    MAGICAIR_DEVICE,
+    MODELS,
+    PLATFORMS,
+)
 from .tion_api import Breezer, MagicAir, TionApi
 
 _LOGGER = logging.getLogger(__name__)
+
+CONFIG_SCHEMA = vol.Schema(
+    {
+        DOMAIN: vol.Schema(
+            {
+                vol.Required(CONF_USERNAME): cv.string,
+                vol.Required(CONF_PASSWORD): cv.string,
+                vol.Optional(
+                    CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
+                ): cv.time_period,
+                vol.Optional(CONF_FILE_PATH, default=DEFAULT_AUTH_FILENAME): cv.string,
+            }
+        )
+    },
+    extra=vol.ALLOW_EXTRA,
+)
 
 
 def create_api(user, password, interval, auth_fname):
@@ -27,7 +55,49 @@ def create_api(user, password, interval, auth_fname):
 
 async def async_setup(hass: HomeAssistant, config: Config):
     """Set up integration with the YAML. Not supported."""
-    hass.data.setdefault(DOMAIN, {})
+
+    tion_entries: list[ConfigEntry] = hass.config_entries.async_entries(DOMAIN)
+    for entry in tion_entries:
+        if entry.title == config[DOMAIN].get(CONF_USERNAME):
+            _LOGGER.debug("Config entry already exists: %s", entry.title)
+            async_create_issue(
+                hass,
+                HOMEASSISTANT_DOMAIN,
+                f"deprecated_yaml_{DOMAIN}",
+                breaks_in_ha_version="2025.1.0",
+                is_fixable=False,
+                issue_domain=DOMAIN,
+                severity=IssueSeverity.WARNING,
+                translation_key="deprecated_yaml",
+                translation_placeholders={
+                    "domain": DOMAIN,
+                    "integration_title": "Tion",
+                },
+            )
+            return True
+
+    hass.async_create_task(
+        hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": SOURCE_IMPORT},
+            data=config[DOMAIN],
+        ),
+    )
+    async_create_issue(
+        hass,
+        HOMEASSISTANT_DOMAIN,
+        f"deprecated_yaml_{DOMAIN}",
+        breaks_in_ha_version="2025.1.0",
+        is_fixable=False,
+        issue_domain=DOMAIN,
+        severity=IssueSeverity.WARNING,
+        translation_key="deprecated_yaml",
+        translation_placeholders={
+            "domain": DOMAIN,
+            "integration_title": "Tion",
+        },
+    )
+
     return True
 
 
