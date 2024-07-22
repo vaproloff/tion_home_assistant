@@ -55,48 +55,48 @@ def create_api(user, password, interval, auth_fname):
 
 async def async_setup(hass: HomeAssistant, config: Config):
     """Set up integration with the YAML. Not supported."""
+    if config.get(DOMAIN):
+        tion_entries: list[ConfigEntry] = hass.config_entries.async_entries(DOMAIN)
+        for entry in tion_entries:
+            if entry.title == config[DOMAIN].get(CONF_USERNAME):
+                _LOGGER.debug("Config entry already exists: %s", entry.title)
+                async_create_issue(
+                    hass,
+                    HOMEASSISTANT_DOMAIN,
+                    f"deprecated_yaml_{DOMAIN}",
+                    breaks_in_ha_version="2025.1.0",
+                    is_fixable=False,
+                    issue_domain=DOMAIN,
+                    severity=IssueSeverity.WARNING,
+                    translation_key="deprecated_yaml",
+                    translation_placeholders={
+                        "domain": DOMAIN,
+                        "integration_title": "Tion",
+                    },
+                )
+                return True
 
-    tion_entries: list[ConfigEntry] = hass.config_entries.async_entries(DOMAIN)
-    for entry in tion_entries:
-        if entry.title == config[DOMAIN].get(CONF_USERNAME):
-            _LOGGER.debug("Config entry already exists: %s", entry.title)
-            async_create_issue(
-                hass,
-                HOMEASSISTANT_DOMAIN,
-                f"deprecated_yaml_{DOMAIN}",
-                breaks_in_ha_version="2025.1.0",
-                is_fixable=False,
-                issue_domain=DOMAIN,
-                severity=IssueSeverity.WARNING,
-                translation_key="deprecated_yaml",
-                translation_placeholders={
-                    "domain": DOMAIN,
-                    "integration_title": "Tion",
-                },
-            )
-            return True
-
-    hass.async_create_task(
-        hass.config_entries.flow.async_init(
-            DOMAIN,
-            context={"source": SOURCE_IMPORT},
-            data=config[DOMAIN],
-        ),
-    )
-    async_create_issue(
-        hass,
-        HOMEASSISTANT_DOMAIN,
-        f"deprecated_yaml_{DOMAIN}",
-        breaks_in_ha_version="2025.1.0",
-        is_fixable=False,
-        issue_domain=DOMAIN,
-        severity=IssueSeverity.WARNING,
-        translation_key="deprecated_yaml",
-        translation_placeholders={
-            "domain": DOMAIN,
-            "integration_title": "Tion",
-        },
-    )
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": SOURCE_IMPORT},
+                data=config[DOMAIN],
+            ),
+        )
+        async_create_issue(
+            hass,
+            HOMEASSISTANT_DOMAIN,
+            f"deprecated_yaml_{DOMAIN}",
+            breaks_in_ha_version="2025.1.0",
+            is_fixable=False,
+            issue_domain=DOMAIN,
+            severity=IssueSeverity.WARNING,
+            translation_key="deprecated_yaml",
+            translation_placeholders={
+                "domain": DOMAIN,
+                "integration_title": "Tion",
+            },
+        )
 
     return True
 
