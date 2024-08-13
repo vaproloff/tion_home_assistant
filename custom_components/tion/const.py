@@ -15,7 +15,6 @@ HUM_PERCENT = "%"
 SWING_INSIDE = "Inside"
 SWING_OUTSIDE = "Outside"
 SWING_MIXED = "Mixed"
-LAST_FAN_SPEED_SYNCED = "last_fan_speed_synced"
 MODELS = {
     "co2mb": "MagicAir",
     "co2Plus": "Module CO2+",

@@ -16,7 +16,7 @@ from homeassistant.const import (
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import DOMAIN
-from .tion_api import TionApi
+from .tion_api import TionClient
 
 DEFAULT_SCAN_INTERVAL = 60
 
@@ -29,11 +29,11 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def _check_auth(self, user, password, interval, auth_fname) -> bool:
-        api = TionApi(
+        api = TionClient(
             user, password, min_update_interval_sec=interval, auth_fname=auth_fname
         )
 
-        return api.get_data()
+        return api.get_location_data()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

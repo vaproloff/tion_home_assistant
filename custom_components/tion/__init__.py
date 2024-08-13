@@ -25,7 +25,7 @@ from .const import (
     MODELS,
     PLATFORMS,
 )
-from .tion_api import Breezer, MagicAir, TionApi
+from .tion_api import Breezer, MagicAir, TionClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ CONFIG_SCHEMA = vol.Schema(
 
 def create_api(user, password, interval, auth_fname):
     """Return Tion Api."""
-    return TionApi(
+    return TionClient(
         user, password, min_update_interval_sec=interval, auth_fname=auth_fname
     )
 
@@ -129,8 +129,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         if device.valid:
             device_type = (
                 BREEZER_DEVICE
-                if type(device) == Breezer
-                else (MAGICAIR_DEVICE if type(device) == MagicAir else None)
+                if isinstance(device, Breezer)
+                else (MAGICAIR_DEVICE if isinstance(device, MagicAir) else None)
             )
             if device_type:
                 device_registry.async_get_or_create(
