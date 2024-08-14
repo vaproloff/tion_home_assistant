@@ -15,8 +15,8 @@ from homeassistant.const import (
 )
 from homeassistant.data_entry_flow import FlowResult
 
+from .client import TionClient
 from .const import DOMAIN
-from .tion_api import TionClient
 
 DEFAULT_SCAN_INTERVAL = 60
 

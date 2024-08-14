@@ -1,4 +1,4 @@
-"""Support for Tion breezer heater."""
+"""Support for Tion breezer."""
 
 from collections.abc import Mapping
 import logging
@@ -24,10 +24,10 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_platform
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN, SWING_INSIDE, SWING_MIXED, SWING_OUTSIDE
-from .tion_api import Breezer, TionClient, TionZoneDevice
+from .client import TionClient, TionZoneDevice
+from .const import DOMAIN, MODELS_SUPPORTED, SwingMode, TionDeviceType
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,14 +40,12 @@ async def async_setup_entry(
 
     entities = []
     devices = await hass.async_add_executor_job(tion_api.get_devices)
-    device: TionZoneDevice
     for device in devices:
-        if device.valid:
-            if isinstance(device, Breezer):
-                entities.append(TionClimate(device))
+        if device.valid and device.type in MODELS_SUPPORTED:
+            entities.append(TionClimate(tion_api, device))
 
         else:
-            _LOGGER.info("Skipped device %s, because of 'valid' property", device.name)
+            _LOGGER.info("Skipped device %s (not valid)", device.name)
 
     async_add_entities(entities)
 
@@ -86,24 +84,55 @@ class TionClimate(ClimateEntity):
 
     _attr_translation_key = "tion_breezer"
 
-    def __init__(self, breezer: Breezer) -> None:
-        """Init climate device."""
-        self._breezer: Breezer = breezer
+    def __init__(self, client: TionClient, breezer: TionZoneDevice) -> None:
+        """Initialize climate device for Tion Breezer."""
+        self._api = client
+        self._breezer_data = breezer
+
+        self._breezer_guid = breezer.guid
+        self._attr_name = breezer.name
+        self._type = breezer.type
+        self._attr_max_temp = breezer.t_max
+        self._attr_min_temp = breezer.t_min
+        self._breezer_valid = breezer.valid
+        self._is_on = breezer.data.is_on
+        self._t_in = breezer.data.t_in
+        self._t_out = breezer.data.t_out
+        self._t_set = breezer.data.t_set
+        self._heater_enabled = breezer.data.heater_enabled
+        self._heater_mode = breezer.data.heater_mode
+        self._heater_power = breezer.data.heater_power
+        self._speed = breezer.data.speed
+        self._speed_min_set = breezer.data.speed_min_set
+        self._speed_max_set = breezer.data.speed_max_set
+        self._gate = breezer.data.gate
+        self._backlight = breezer.data.backlight
+        self._sound_is_on = breezer.data.sound_is_on
+        self._filter_need_replace = breezer.data.filter_need_replace
+
+        self._mode = None
+        self._target_co2 = None
+        self._zone_valid = None
+        self._load_zone()
+
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, breezer.guid)},
+        )
         self._hvac_modes = [HVACMode.OFF, HVACMode.FAN_ONLY]
 
-        self._swing_modes = [SWING_OUTSIDE, SWING_INSIDE]
-        if self._breezer != "breezer4":
-            self._swing_modes.append(SWING_MIXED)
+        self._swing_modes = [SwingMode.SWING_OUTSIDE, SwingMode.SWING_INSIDE]
+        if self._type == TionDeviceType.BREEZER_3S:
+            self._swing_modes.append(SwingMode.SWING_MIXED)
 
         self._fan_modes = [FAN_AUTO]
         self._fan_modes.extend(
-            [str(speed) for speed in range(1, self._breezer.max_speed + 1)]
+            [str(speed) for speed in range(1, breezer.max_speed + 1)]
         )
 
         self._attr_supported_features = (
             ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.SWING_MODE
         )
-        if self._breezer.heater_installed:
+        if breezer.data.heater_installed or breezer.data.heater_type is not None:
             self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
             self._hvac_modes.append(HVACMode.HEAT)
 
@@ -113,33 +142,19 @@ class TionClimate(ClimateEntity):
             self._attr_supported_features |= ClimateEntityFeature.TURN_ON
 
     @property
-    def device_info(self) -> DeviceInfo:
-        """Link entity to the device."""
-        return DeviceInfo(
-            connections={(CONNECTION_NETWORK_MAC, self._breezer.mac)},
-            identifiers={(DOMAIN, self._breezer.guid)},
-            manufacturer="Tion",
-            model_id=self._breezer.type,
-            name=self._breezer.name,
-            suggested_area=self._breezer.zone.name,
-            sw_version=self._breezer.firmware,
-            hw_version=self._breezer.hardware,
-        )
-
-    @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._breezer.valid and self._breezer.zone.valid
+        return self._breezer_valid and self._zone_valid
 
     @property
     def name(self) -> str:
         """Return the name of the breezer."""
-        return self._breezer.name
+        return self._attr_name
 
     @property
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return self._breezer.guid
+        return self._breezer_guid
 
     @property
     def icon(self):
@@ -176,22 +191,22 @@ class TionClimate(ClimateEntity):
     @property
     def min_temp(self) -> float:
         """Return the minimum temperature."""
-        return self._breezer.t_min if self._breezer.valid else STATE_UNKNOWN
+        return self._attr_min_temp if self._breezer_valid else STATE_UNKNOWN
 
     @property
     def max_temp(self) -> float:
         """Return the maximum temperature."""
-        return self._breezer.t_max if self._breezer.valid else STATE_UNKNOWN
+        return self._attr_max_temp if self._breezer_valid else STATE_UNKNOWN
 
     @property
     def current_temperature(self):
         """Return the current temperature."""
-        return self._breezer.t_out if self._breezer.valid else STATE_UNKNOWN
+        return self._t_out if self._breezer_valid else STATE_UNKNOWN
 
     @property
     def target_temperature(self):
         """Return the temperature we try to reach."""
-        return self._breezer.t_set if self._breezer.valid else STATE_UNKNOWN
+        return self._t_set if self._breezer_valid else STATE_UNKNOWN
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
@@ -201,11 +216,11 @@ class TionClimate(ClimateEntity):
     @property
     def hvac_mode(self) -> HVACMode | None:
         """Return current operation."""
-        if self._breezer.valid:
-            if not self._breezer.is_on:
+        if self._breezer_valid:
+            if not self._is_on:
                 return HVACMode.OFF
 
-            if self._breezer.heater_enabled:
+            if self._heater_enabled:
                 return HVACMode.HEAT
 
             return HVACMode.FAN_ONLY
@@ -218,7 +233,7 @@ class TionClimate(ClimateEntity):
         if self.hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
 
-        if self._breezer.heater_power:
+        if self._heater_power:
             return HVACAction.HEATING
 
         return HVACAction.FAN
@@ -231,10 +246,10 @@ class TionClimate(ClimateEntity):
     @property
     def fan_mode(self):
         """Return the fan setting."""
-        if self._breezer.zone.mode == FAN_AUTO:
+        if self._mode == FAN_AUTO:
             return FAN_AUTO
 
-        return str(int(self._breezer.speed))
+        return str(int(self._speed))
 
     @property
     def swing_modes(self):
@@ -244,57 +259,53 @@ class TionClimate(ClimateEntity):
     @property
     def swing_mode(self):
         """Return current swing mode."""
-        if self._breezer.gate == 0:
-            return SWING_OUTSIDE
+        if self._gate == 0:
+            return SwingMode.SWING_OUTSIDE
 
-        if self._breezer.gate == 1:
-            if self._breezer.type == "breezer4":
-                return SWING_INSIDE
+        if self._gate == 1:
+            if self._type == "breezer4":
+                return SwingMode.SWING_INSIDE
 
-            return SWING_MIXED
+            return SwingMode.SWING_MIXED
 
-        if self._breezer.gate == 2:
-            return SWING_INSIDE
+        if self._gate == 2:
+            return SwingMode.SWING_INSIDE
 
         return STATE_UNKNOWN
 
     @property
     def mode(self) -> str:
         """Return the current mode."""
-        return self._breezer.zone.mode if self._breezer.zone.valid else STATE_UNKNOWN
+        return self._mode if self._zone_valid else STATE_UNKNOWN
 
     @property
     def target_co2(self) -> str:
         """Return the current mode."""
-        return (
-            self._breezer.zone.target_co2 if self._breezer.zone.valid else STATE_UNKNOWN
-        )
+        return self._target_co2 if self._zone_valid else STATE_UNKNOWN
 
     @property
     def speed(self) -> str:
         """Return the current speed."""
-        return self._breezer.speed if self._breezer.valid else STATE_UNKNOWN
+        return self._speed if self._breezer_valid else STATE_UNKNOWN
 
     @property
     def speed_min_set(self) -> str:
         """Return the minimum speed for auto mode."""
-        return self._breezer.speed_min_set if self._breezer.valid else STATE_UNKNOWN
+        return self._speed_min_set if self._breezer_valid else STATE_UNKNOWN
 
     @property
     def speed_max_set(self) -> str:
         """Return the maximum speed for auto mode."""
-        return self._breezer.speed_max_set if self._breezer.valid else STATE_UNKNOWN
+        return self._speed_max_set if self._breezer_valid else STATE_UNKNOWN
 
     @property
     def filter_need_replace(self) -> str:
         """Return if filter need replace."""
-        return (
-            self._breezer.filter_need_replace if self._breezer.valid else STATE_UNKNOWN
-        )
+        return self._filter_need_replace if self._breezer_valid else STATE_UNKNOWN
 
     def turn_on(self) -> None:
         """Turn breezer on."""
-        if self._breezer.heater_enabled:
+        if self._heater_enabled:
             self.set_hvac_mode(HVACMode.HEAT)
         else:
             self.set_hvac_mode(HVACMode.FAN_ONLY)
@@ -321,17 +332,17 @@ class TionClimate(ClimateEntity):
             "%s: changing HVAC mode (%s -> %s)", self.name, self.hvac_mode, hvac_mode
         )
         if hvac_mode == HVACMode.OFF:
-            self._breezer.is_on = False
+            self._is_on = False
         else:
             if hvac_mode == HVACMode.HEAT:
-                self._breezer.heater_enabled = True
+                self._heater_enabled = True
             elif hvac_mode == HVACMode.FAN_ONLY:
-                self._breezer.heater_enabled = False
+                self._heater_enabled = False
 
             if self.hvac_mode == HVACMode.OFF:
-                self._breezer.is_on = True
+                self._is_on = True
 
-        self._breezer.send()
+        self._send_breezer()
 
     def set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
@@ -342,8 +353,8 @@ class TionClimate(ClimateEntity):
                 _LOGGER.warning("%s: undefined target temperature", self.name)
                 return
 
-            self._breezer.t_set = int(temperature)
-            self._breezer.send()
+            self._t_set = int(temperature)
+            self._send_breezer()
 
         else:
             _LOGGER.warning("%s: service not supported", self.name)
@@ -362,96 +373,155 @@ class TionClimate(ClimateEntity):
         else:
             new_speed = int(fan_mode)
 
-        if self._breezer.zone.mode != new_mode:
+        if self._mode != new_mode:
             _LOGGER.info(
                 "%s: changing zone mode (%s -> %s)",
                 self.name,
-                self._breezer.zone.mode,
+                self._mode,
                 new_mode,
             )
-            self._breezer.zone.mode = new_mode
-            self._breezer.zone.send()
+            self._mode = new_mode
+            self._send_zone()
 
-        if (
-            new_mode == "manual"
-            and new_speed is not None
-            and self._breezer.speed != new_speed
-        ):
+        if new_mode == "manual" and new_speed is not None and self._speed != new_speed:
             _LOGGER.info(
                 "%s: changing breezer speed (%s -> %s)",
                 self.name,
-                self._breezer.speed,
+                self._speed,
                 new_speed,
             )
-            self._breezer.speed = new_speed
-            self._breezer.send()
+            self._speed = new_speed
+            self._send_breezer()
 
     def set_swing_mode(self, swing_mode: str) -> None:
         """Set Tion breezer air gate."""
         new_gate = 1
-        if swing_mode == SWING_OUTSIDE:
+        if swing_mode == SwingMode.SWING_OUTSIDE:
             new_gate = 0
-        elif swing_mode == SWING_INSIDE and self._breezer.type != "breezer4":
+        elif (
+            swing_mode == SwingMode.SWING_INSIDE
+            and self._type == TionDeviceType.BREEZER_3S
+        ):
             new_gate = 2
 
-        if self._breezer.gate != new_gate:
+        if self._gate != new_gate:
             _LOGGER.info(
                 "%s: changing gate (%s -> %s)",
-                self._breezer.name,
+                self.name,
                 self.swing_mode,
                 swing_mode,
             )
-            self._breezer.gate = new_gate
-            self._breezer.send()
+            self._gate = new_gate
+            self._send_breezer()
 
     def update(self):
         """Fetch new state data for the breezer.
 
         This is the only method that should fetch new data for Home Assistant.
         """
-        self._breezer.zone.load()
-        self._breezer.load()
+        self._load_zone()
+        self._load_breezer()
 
     def set_zone_target_co2(self, **kwargs):
         """Set zone new target co2 level."""
         new_target_co2 = kwargs.get("target_co2")
-        if (
-            new_target_co2 is not None
-            and self._breezer.zone.target_co2 != new_target_co2
-        ):
+        if new_target_co2 is not None and self._target_co2 != new_target_co2:
             _LOGGER.info(
                 "%s: changing zone target co2 (%s -> %s)",
                 self.name,
-                self._breezer.zone.target_co2,
+                self._target_co2,
                 new_target_co2,
             )
-            self._breezer.zone.target_co2 = new_target_co2
-            self._breezer.zone.send()
+            self._target_co2 = new_target_co2
+            self._send_zone()
 
     def set_breezer_min_speed(self, **kwargs):
         """Set breezer new min speed."""
         new_min_speed = kwargs.get("min_speed")
 
-        if new_min_speed is not None and self._breezer.speed_min_set != new_min_speed:
+        if new_min_speed is not None and self._speed_min_set != new_min_speed:
             _LOGGER.info(
                 "%s: changing breezer min speed (%s -> %s)",
                 self.name,
-                self._breezer.speed_min_set,
+                self._speed_min_set,
                 new_min_speed,
             )
-            self._breezer.speed_min_set = new_min_speed
-            self._breezer.send()
+            self._speed_min_set = new_min_speed
+            self._send_breezer()
 
     def set_breezer_max_speed(self, **kwargs):
         """Set breezer new min speed."""
         new_max_speed = kwargs.get("max_speed")
 
-        if new_max_speed is not None and self._breezer.speed_max_set != new_max_speed:
+        if new_max_speed is not None and self._speed_max_set != new_max_speed:
             _LOGGER.info(
                 "%s: changing breezer max speed (%s -> %s)",
                 self.name,
-                self._breezer.speed_max_set,
+                self._speed_max_set,
                 new_max_speed,
             )
-            self._breezer.speed_max_set = new_max_speed
-            self._breezer.send()
+            self._speed_max_set = new_max_speed
+            self._send_breezer()
+
+    def _load_breezer(self, force=False):
+        """Update breezer data from API."""
+        if device_data := self._api.get_device(guid=self._breezer_guid, force=force):
+            self._attr_name = device_data.name
+            self._breezer_guid = device_data.guid
+            self._breezer_valid = device_data.data.data_valid
+            self._is_on = device_data.data.is_on
+            self._heater_enabled = device_data.data.heater_enabled
+            self._heater_mode = device_data.data.heater_mode
+            self._heater_power = device_data.data.heater_power
+            self._t_set = device_data.data.t_set
+            self._speed = device_data.data.speed
+            self._speed_min_set = device_data.data.speed_min_set
+            self._speed_max_set = device_data.data.speed_max_set
+            self._gate = device_data.data.gate
+            self._t_in = device_data.data.t_in
+            self._t_out = device_data.data.t_out
+            self._backlight = device_data.data.backlight
+            self._sound_is_on = device_data.data.sound_is_on
+            self._filter_need_replace = device_data.data.filter_need_replace
+
+        return self.available
+
+    def _send_breezer(self) -> bool:
+        """Send new breezer data to API."""
+        if not self._breezer_valid:
+            return False
+
+        return self._api.send_breezer(
+            guid=self._breezer_guid,
+            is_on=self._is_on,
+            t_set=self._t_set,
+            speed=self._speed,
+            speed_min_set=self._speed_min_set,
+            speed_max_set=self._speed_max_set,
+            heater_enabled=self._heater_enabled,
+            heater_mode=self._heater_mode,
+            gate=self._gate,
+        )
+
+    def _load_zone(self, force=False) -> bool:
+        """Update zone data from API."""
+        if zone_data := self._api.get_device_zone(guid=self._breezer_guid, force=force):
+            self._mode = zone_data.mode.current
+            self._target_co2 = zone_data.mode.auto_set.co2
+            self._zone_valid = zone_data.valid
+
+        return self.available
+
+    def _send_zone(self) -> bool:
+        """Send new zone data to API."""
+        if not self._zone_valid:
+            return False
+
+        # data = {
+        #     "mode": self._mode if self._mode in ("auto", "manual") else "manual",
+        #     "co2": int(self._target_co2) if self._target_co2 is not None else 900,
+        # }
+
+        return self._api.send_zone(
+            guid=self._zone_guid, mode=self._mode, co2=self._target_co2
+        )

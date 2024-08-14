@@ -1,150 +1,360 @@
 """Platform for sensor integration."""
 
+import abc
 import logging
 
 from homeassistant.components.sensor import (
-    ATTR_STATE_CLASS as STATE_CLASS,
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNKNOWN, UnitOfTemperature
+from homeassistant.const import (
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    CONCENTRATION_PARTS_PER_MILLION,
+    PERCENTAGE,
+    STATE_UNKNOWN,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CO2_PPM, DOMAIN, HUM_PERCENT
-from .tion_api import Breezer, MagicAir, TionClient, TionZoneDevice
+from .client import TionClient, TionZoneDevice
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
-
-# Sensor types
-CO2_SENSOR = {
-    "native_unit_of_measurement": CO2_PPM,
-    "name": "co2",
-    STATE_CLASS: SensorStateClass.MEASUREMENT,
-    "device_class": SensorDeviceClass.CO2,
-    "suggested_display_precision": 0,
-}
-TEMP_SENSOR = {
-    "native_unit_of_measurement": UnitOfTemperature.CELSIUS,
-    "name": "temperature",
-    STATE_CLASS: SensorStateClass.MEASUREMENT,
-    "device_class": SensorDeviceClass.TEMPERATURE,
-    "suggested_display_precision": 0,
-}
-HUM_SENSOR = {
-    "native_unit_of_measurement": HUM_PERCENT,
-    "name": "humidity",
-    STATE_CLASS: SensorStateClass.MEASUREMENT,
-    "device_class": SensorDeviceClass.HUMIDITY,
-    "suggested_display_precision": 0,
-}
-TEMP_IN_SENSOR = {
-    "native_unit_of_measurement": UnitOfTemperature.CELSIUS,
-    "name": "temperature in",
-    STATE_CLASS: SensorStateClass.MEASUREMENT,
-    "device_class": SensorDeviceClass.TEMPERATURE,
-    "suggested_display_precision": 0,
-}
-TEMP_OUT_SENSOR = {
-    "native_unit_of_measurement": UnitOfTemperature.CELSIUS,
-    "name": "temperature out",
-    STATE_CLASS: SensorStateClass.MEASUREMENT,
-    "device_class": SensorDeviceClass.TEMPERATURE,
-    "suggested_display_precision": 0,
-}
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> bool:
     """Set up climate Tion entities."""
-    tion_api: TionClient = hass.data[DOMAIN][entry.entry_id]
+    client: TionClient = hass.data[DOMAIN][entry.entry_id]
 
     entities = []
-    devices = await hass.async_add_executor_job(tion_api.get_devices)
-    device: TionZoneDevice
+    devices = await hass.async_add_executor_job(client.get_devices)
     for device in devices:
         if device.valid:
-            if isinstance(device, MagicAir):
-                entities.append(TionSensor(device, CO2_SENSOR))
-                entities.append(TionSensor(device, TEMP_SENSOR))
-                entities.append(TionSensor(device, HUM_SENSOR))
-            elif isinstance(device, Breezer):
-                entities.append(TionSensor(device, TEMP_IN_SENSOR))
-                entities.append(TionSensor(device, TEMP_OUT_SENSOR))
+            if "breezer" in device.type:
+                entities.append(TionTemperatureInSensor(client, device))
+                entities.append(TionTemperatureOutSensor(client, device))
+            elif "co2" in device.type:
+                entities.append(TionTemperatureSensor(client, device))
+                entities.append(TionHumiditySensor(client, device))
+                entities.append(TionCO2Sensor(client, device))
+
+                if device.data.pm25 != "NaN":
+                    entities.append(TionPM25Sensor(client, device))
+
         else:
-            _LOGGER.info("Skipped device %s, because of 'valid' property", device)
+            _LOGGER.info("Skipped device %s (not valid)", device.name)
 
     async_add_entities(entities)
     return True
 
 
-class TionSensor(SensorEntity):
-    """Representation of a Sensor."""
+class TionSensor(SensorEntity, abc.ABC):
+    """Abstract Tion sensor."""
 
-    def __init__(self, device: Breezer | MagicAir, sensor_type) -> None:
+    def __init__(
+        self,
+        client: TionClient,
+        device: TionZoneDevice,
+    ) -> None:
         """Initialize sensor device."""
-        self._device = device
-        self._sensor_type = sensor_type
+        self._api = client
+        self._device_data = device
 
-        if sensor_type.get(STATE_CLASS, None) is not None:
-            self._attr_state_class = sensor_type[STATE_CLASS]
-        if sensor_type.get("device_class", None) is not None:
-            self._attr_device_class = sensor_type["device_class"]
-        if sensor_type.get("native_unit_of_measurement", None) is not None:
-            self._attr_native_unit_of_measurement = sensor_type[
-                "native_unit_of_measurement"
-            ]
-        if sensor_type.get("suggested_display_precision", None) is not None:
-            self._attr_suggested_display_precision = sensor_type[
-                "suggested_display_precision"
-            ]
+        self._device_guid = self._device_data.guid
+        self._device_name = self._device_data.name
+        self._device_valid = self._device_data.valid
 
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Link entity to the device."""
-        return DeviceInfo(
-            connections={(CONNECTION_NETWORK_MAC, self._device.mac)},
-            identifiers={(DOMAIN, self._device.guid)},
-            manufacturer="Tion",
-            model_id=self._device.type,
-            name=self._device.name,
-            suggested_area=self._device.zone.name,
-            sw_version=self._device.firmware,
-            hw_version=self._device.hardware,
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, self._device_guid)},
         )
 
     @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self._device_valid
+
+    @property
+    @abc.abstractmethod
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return self._device.guid + self._sensor_type["name"]
 
     @property
+    @abc.abstractmethod
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device.name} {self._sensor_type['name']}"
 
     @property
+    @abc.abstractmethod
     def state(self):
         """Return the state of the sensor."""
-        state = STATE_UNKNOWN
-        if self._sensor_type == CO2_SENSOR:
-            state = self._device.co2
-        elif self._sensor_type == TEMP_SENSOR:
-            state = self._device.temperature
-        elif self._sensor_type == HUM_SENSOR:
-            state = self._device.humidity
-        elif self._sensor_type == TEMP_IN_SENSOR:
-            state = self._device.t_in
-        elif self._sensor_type == TEMP_OUT_SENSOR:
-            state = self._device.t_out
-        return state if self._device.valid else STATE_UNKNOWN
 
     def update(self):
         """Fetch new state data for the sensor.
 
         This is the only method that should fetch new data for Home Assistant.
         """
-        self._device.load()
+        self._load()
+
+    def _load(self, force=False):
+        """Update device data from API."""
+        if self.__load(force=force):
+            self._device_name = self._device_data.name
+            self._device_guid = self._device_data.guid
+            self._device_valid = self._device_data.valid
+            return True
+
+        return False
+
+    def __load(self, force=False) -> bool:
+        if device_data := self._api.get_device(guid=self._device_guid, force=force):
+            self._device_data = device_data
+            return True
+
+        return False
+
+
+class TionTemperatureSensor(TionSensor):
+    """Tion room temperature sensor."""
+
+    def __init__(
+        self,
+        client: TionClient,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize sensor device."""
+        super().__init__(client, device)
+
+        self._temperature = device.data.temperature
+
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+        self._attr_suggested_display_precision = 1
+
+    @property
+    def unique_id(self):
+        """Return a unique id identifying the entity."""
+        return f"{self._device_guid}_temperature"
+
+    @property
+    def name(self):
+        """Return the name of the sensor."""
+        return f"{self._device_name} Temperature"
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._temperature if self.available else STATE_UNKNOWN
+
+    def _load(self, force=False):
+        """Update device data from API."""
+        if super()._load(force=force):
+            self._temperature = self._device_data.data.temperature
+
+        return self.available
+
+
+class TionHumiditySensor(TionSensor):
+    """Tion room humidity sensor."""
+
+    def __init__(
+        self,
+        client: TionClient,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize sensor device."""
+        super().__init__(client, device)
+
+        self._humidity = device.data.humidity
+
+        self._attr_device_class = SensorDeviceClass.HUMIDITY
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def unique_id(self):
+        """Return a unique id identifying the entity."""
+        return f"{self._device_guid}_humidity"
+
+    @property
+    def name(self):
+        """Return the name of the sensor."""
+        return f"{self._device_name} Humidity"
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._humidity if self.available else STATE_UNKNOWN
+
+    def _load(self, force=False):
+        """Update device data from API."""
+        if super()._load(force=force):
+            self._humidity = self._device_data.data.humidity
+
+        return self.available
+
+
+class TionCO2Sensor(TionSensor):
+    """Tion room CO2 sensor."""
+
+    def __init__(
+        self,
+        client: TionClient,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize sensor device."""
+        super().__init__(client, device)
+
+        self._co2 = device.data.co2
+
+        self._attr_device_class = SensorDeviceClass.CO2
+        self._attr_native_unit_of_measurement = CONCENTRATION_PARTS_PER_MILLION
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def unique_id(self):
+        """Return a unique id identifying the entity."""
+        return f"{self._device_guid}_co2"
+
+    @property
+    def name(self):
+        """Return the name of the sensor."""
+        return f"{self._device_name} CO2"
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._co2 if self.available else STATE_UNKNOWN
+
+    def _load(self, force=False):
+        """Update device data from API."""
+        if super()._load(force=force):
+            self._co2 = self._device_data.data.co2
+
+        return self.available
+
+
+class TionPM25Sensor(TionSensor):
+    """Tion room PM25 sensor."""
+
+    def __init__(
+        self,
+        client: TionClient,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize sensor device."""
+        super().__init__(client, device)
+
+        self._pm25 = device.data.pm25
+
+        self._attr_device_class = SensorDeviceClass.PM25
+        self._attr_native_unit_of_measurement = CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def unique_id(self):
+        """Return a unique id identifying the entity."""
+        return f"{self._device_guid}_pm25"
+
+    @property
+    def name(self):
+        """Return the name of the sensor."""
+        return f"{self._device_name} PM25"
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._pm25 if self.available else STATE_UNKNOWN
+
+    def _load(self, force=False):
+        """Update device data from API."""
+        if super()._load(force=force):
+            self._pm25 = self._device_data.data.pm25
+
+        return self.available
+
+
+class TionTemperatureInSensor(TionSensor):
+    """Tion inside air flow temperature sensor."""
+
+    def __init__(
+        self,
+        client: TionClient,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize sensor device."""
+        super().__init__(client, device)
+
+        self._temperature = device.data.t_in
+
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def unique_id(self):
+        """Return a unique id identifying the entity."""
+        return f"{self._device_guid}_temperature_in"
+
+    @property
+    def name(self):
+        """Return the name of the sensor."""
+        return f"{self._device_name} Inside Air Flow Temperature"
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._temperature if self.available else STATE_UNKNOWN
+
+    def _load(self, force=False):
+        """Update device data from API."""
+        if super()._load(force=force):
+            self._temperature = self._device_data.data.t_in
+
+        return self.available
+
+
+class TionTemperatureOutSensor(TionSensor):
+    """Tion outside air flow temperature sensor."""
+
+    def __init__(
+        self,
+        client: TionClient,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize sensor device."""
+        super().__init__(client, device)
+
+        self._temperature = device.data.t_out
+
+        self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+        self._attr_suggested_display_precision = 0
+
+    @property
+    def unique_id(self):
+        """Return a unique id identifying the entity."""
+        return f"{self._device_guid}_temperature_out"
+
+    @property
+    def name(self):
+        """Return the name of the sensor."""
+        return f"{self._device_name} Outside Air Flow Temperature"
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._temperature if self.available else STATE_UNKNOWN
+
+    def _load(self, force=False):
+        """Update device data from API."""
+        if super()._load(force=force):
+            self._temperature = self._device_data.data.t_out
+
+        return self.available
