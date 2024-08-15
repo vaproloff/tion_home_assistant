@@ -1,12 +1,14 @@
 {
   "domain": "tion",
   "name": "Tion",
-  "version": "2024.8.0",
+  "codeowners": [
+    "@vaproloff"
+  ],
+  "config_flow": true,
+  "dependencies": [],
   "documentation": "https://github.com/vaproloff/tion_home_assistant",
-  "requirements": [],
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/vaproloff/tion_home_assistant/issues",
-  "dependencies": [],
-  "codeowners": ["Konstantin Pivnov"],
-  "config_flow": true
+  "requirements": [],
+  "version": "2024.8.0"
 }

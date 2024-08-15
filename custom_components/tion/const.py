@@ -35,6 +35,6 @@ MODELS_SUPPORTED: dict[TionDeviceType, str] = {
 class SwingMode(StrEnum):
     """Component supported device types."""
 
-    SWING_INSIDE = "Inside"
-    SWING_OUTSIDE = "Outside"
-    SWING_MIXED = "Mixed"
+    SWING_INSIDE = "inside"
+    SWING_OUTSIDE = "outside"
+    SWING_MIXED = "mixed"
