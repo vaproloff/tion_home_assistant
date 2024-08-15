@@ -18,6 +18,7 @@ from homeassistant.helpers.issue_registry import IssueSeverity, async_create_iss
 
 from .client import TionClient
 from .const import (
+    AUTH_DATA,
     DEFAULT_AUTH_FILENAME,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -45,11 +46,9 @@ CONFIG_SCHEMA = vol.Schema(
 )
 
 
-def create_api(user, password, interval, auth_fname):
+def create_api(user, password, interval, auth_data):
     """Return Tion Api."""
-    return TionClient(
-        user, password, min_update_interval_sec=interval, auth_fname=auth_fname
-    )
+    return TionClient(user, password, min_update_interval_sec=interval, auth=auth_data)
 
 
 async def async_setup(hass: HomeAssistant, config: Config):
@@ -70,7 +69,7 @@ async def async_setup(hass: HomeAssistant, config: Config):
                     translation_key="deprecated_yaml",
                     translation_placeholders={
                         "domain": DOMAIN,
-                        "integration_title": "Tion",
+                        "integration_title": MANUFACTURER,
                     },
                 )
                 return True
@@ -93,7 +92,7 @@ async def async_setup(hass: HomeAssistant, config: Config):
             translation_key="deprecated_yaml",
             translation_placeholders={
                 "domain": DOMAIN,
-                "integration_title": "Tion",
+                "integration_title": MANUFACTURER,
             },
         )
 
@@ -105,22 +104,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     if hass.data.get(DOMAIN) is None:
         hass.data.setdefault(DOMAIN, {})
 
-    tion_api = await hass.async_add_executor_job(
+    async def update_auth_data(**kwargs):
+        hass.config_entries.async_update_entry(entry, data=kwargs)
+
+    client = await hass.async_add_executor_job(
         create_api,
         entry.data.get(CONF_USERNAME),
         entry.data.get(CONF_PASSWORD),
         entry.data.get(CONF_SCAN_INTERVAL),
-        entry.data.get(CONF_FILE_PATH),
+        entry.data.get(AUTH_DATA),
     )
 
-    assert tion_api.authorization, "Couldn't get authorisation data!"
-    _LOGGER.info("Api initialized with authorization %s", tion_api.authorization)
+    client.add_entry_data_updater(update_auth_data)
 
-    hass.data[DOMAIN][entry.entry_id] = tion_api
+    assert client.authorization, "Couldn't get authorisation data!"
+    _LOGGER.info("Api initialized with authorization %s", client.authorization)
+
+    hass.data[DOMAIN][entry.entry_id] = client
 
     device_registry = dr.async_get(hass)
 
-    devices = await hass.async_add_executor_job(tion_api.get_devices)
+    devices = await hass.async_add_executor_job(client.get_devices)
     for device in devices:
         _LOGGER.info("Device type: %s", device.type)
         if device.valid:

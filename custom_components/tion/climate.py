@@ -27,7 +27,7 @@ from homeassistant.helpers import entity_platform
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .client import TionClient, TionZoneDevice
-from .const import DOMAIN, MODELS_SUPPORTED, SwingMode, TionDeviceType
+from .const import DOMAIN, SwingMode, TionDeviceType
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,7 +41,10 @@ async def async_setup_entry(
     entities = []
     devices = await hass.async_add_executor_job(tion_api.get_devices)
     for device in devices:
-        if device.valid and device.type in MODELS_SUPPORTED:
+        if device.valid and device.type in [
+            TionDeviceType.BREEZER_3S,
+            TionDeviceType.BREEZER_4S,
+        ]:
             entities.append(TionClimate(tion_api, device))
 
         else:

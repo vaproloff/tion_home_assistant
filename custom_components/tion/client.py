@@ -1,7 +1,6 @@
 """The Tion API interaction module."""
 
 import logging
-from os import path
 from time import sleep, time
 from typing import Any
 
@@ -125,6 +124,9 @@ class TionClient:
     _API_ENDPOINT = "https://api2.magicair.tion.ru/"
     _AUTH_URL = "idsrv/oauth2/token"
     _LOCATION_URL = "location"
+    _DEVICE_URL = "device"
+    _ZONE_URL = "zone"
+    _TASK_URL = "task"
     _CLIENT_ID = "cd594955-f5ba-4c20-9583-5990bb29f4ef"
     _CLIENT_SECRET = "syRxSrT77P"
 
@@ -132,22 +134,19 @@ class TionClient:
         self,
         email: str,
         password: str,
-        auth_fname="tion_auth",
         min_update_interval_sec=10,
+        auth=None,
     ) -> None:
         """Tion API client initialization."""
         self._email = email
         self._password = password
-        self._auth_fname = auth_fname
         self._min_update_interval = min_update_interval_sec
-        if self._auth_fname and path.exists(self._auth_fname):
-            with open(self._auth_fname, encoding="utf-8") as file:
-                self.authorization = file.read()
-        else:
-            self.authorization = None
-            self._get_authorization()
-        self._last_update = 0
+        self._authorization = auth
+
         self._locations: list[TionLocation] = []
+        self._auth_update_listeners = []
+        self._last_update = 0
+
         self.get_location_data()
 
     @property
@@ -157,7 +156,7 @@ class TionClient:
             "Accept": "application/json, text/plain, */*",
             "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "ru-RU",
-            "Authorization": self.authorization,
+            "Authorization": self._authorization,
             "Connection": "Keep-Alive",
             "Content-Type": "application/json",
             "Host": "api2.magicair.tion.ru",
@@ -165,6 +164,15 @@ class TionClient:
             "Referer": "https://magicair.tion.ru/dashboard/overview",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2486.0 Safari/537.36 Edge/13.10586",
         }
+
+    @property
+    def authorization(self) -> str:
+        """Return authorization data."""
+        return self._authorization
+
+    def add_entry_data_updater(self, coro):
+        """Add entry data update listener function."""
+        self._auth_update_listeners.append(coro)
 
     def _get_authorization(self):
         data = {
@@ -181,32 +189,27 @@ class TionClient:
                 timeout=10,
             )
         except requests.exceptions.RequestException as e:
-            _LOGGER.error("Request exception while getting token:\n%s", e)
+            _LOGGER.error("TionClient: request exception while getting token:\n%s", e)
             return False
 
         if response.status_code == 200:
             response = response.json()
-            self.authorization = f"{response['token_type']} {response['access_token']}"
+            self._authorization = f"{response['token_type']} {response['access_token']}"
 
-            if self._auth_fname:
-                try:
-                    with open(self._auth_fname, "w", encoding="utf-8") as file:
-                        try:
-                            file.write(self.authorization)
-                        except OSError as e:
-                            _LOGGER.error(
-                                "Unable to write auth data to %s: %s",
-                                self._auth_fname,
-                                e,
-                            )
-                except (FileNotFoundError, PermissionError, OSError) as e:
-                    _LOGGER.error("Error opening file %s: %s", self._auth_fname, e)
+            _LOGGER.info("TionClient: got new authorization token")
 
-            _LOGGER.info("Got new authorization token")
+            for coro in self._auth_update_listeners:
+                coro(
+                    username=self._email,
+                    password=self._password,
+                    scan_interval=self._min_update_interval,
+                    auth=self._authorization,
+                )
+
             return True
 
         _LOGGER.error(
-            "Response while getting token: status code: %s, content:\n%s",
+            "TionClient: response while getting token: status code: %s, content:\n%s",
             response.status_code,
             response.json(),
         )
@@ -227,7 +230,9 @@ class TionClient:
                 timeout=10,
             )
         except requests.exceptions.RequestException as e:
-            _LOGGER.error("Request exception while getting location data:\n%s", e)
+            _LOGGER.error(
+                "TionClient: request exception while getting location data:\n%s", e
+            )
             return False
 
         if response.status_code == 200:
@@ -236,14 +241,14 @@ class TionClient:
             return True
 
         if response.status_code == 401:
-            _LOGGER.info("Need to get new authorization")
+            _LOGGER.info("TionClient: need to get new authorization")
             if self._get_authorization():
                 return self.get_location_data(force=True)
 
-            _LOGGER.error("Authorization failed!")
+            _LOGGER.error("TionClient: authorization failed!")
         else:
             _LOGGER.error(
-                "Response while getting location data: status code: %s, content:\n%s",
+                "TionClient: response while getting location data: status code: %s, content:\n%s",
                 response.status_code,
                 response.json(),
             )
@@ -301,6 +306,7 @@ class TionClient:
         gate: int | None = None,
     ):
         """Send new breezer data to API."""
+        url = f"{self._API_ENDPOINT}{self._DEVICE_URL}/{guid}/mode"
         data = {
             "is_on": is_on,
             "heater_enabled": heater_enabled,
@@ -312,53 +318,59 @@ class TionClient:
             "gate": gate,
         }
 
-        url = f"https://api2.magicair.tion.ru/device/{guid}/mode"
-        try:
-            response = requests.post(url, json=data, headers=self.headers, timeout=10)
-        except requests.exceptions.RequestException as e:
-            _LOGGER.error("Exception while sending new breezer data!:\n%s", e)
-            return False
-        response = response.json()
-        status = response["status"]
-        if status != "queued":
-            _LOGGER.error(
-                "TionApi parameters set %s: %s", status, response["description"]
-            )
-            return False
-
-        return self._wait_for_task(response["task_id"])
+        return self._send(url, data)
 
     def send_zone(self, guid: str, mode: str, co2: int):
         """Send new zone data to API."""
+        url = f"{self._API_ENDPOINT}{self._ZONE_URL}/{guid}/mode"
         data = {
             "mode": mode,
             "co2": co2,
         }
 
-        url = f"https://api2.magicair.tion.ru/zone/{guid}/mode"
+        return self._send(url, data)
+
+    def _send(self, url: str, data: dict[str, Any]):
         try:
-            response = requests.post(url, json=data, headers=self.headers, timeout=10)
+            response = requests.post(
+                url=url,
+                json=data,
+                headers=self.headers,
+                timeout=10,
+            )
         except requests.exceptions.RequestException as e:
-            _LOGGER.error("Exception while sending new zone data!:\n%s", e)
+            _LOGGER.error(
+                "TionClient: request exception while sending new data:\n%s", e
+            )
             return False
+
         response = response.json()
-        status = response["status"]
-        if status != "queued":
-            _LOGGER.info("TionApi auto set %s: %s", status, response["description"])
+        if response["status"] != "queued":
+            _LOGGER.error(
+                "TionClient: parameters set %s: %s",
+                response["status"],
+                response["description"],
+            )
             return False
 
         return self._wait_for_task(response["task_id"])
 
     def _wait_for_task(self, task_id: str, max_time: int = 5) -> bool:
         """Wait for task with defined task_id been completed."""
-        url = "https://api2.magicair.tion.ru/task/" + task_id
         DELAY = 0.5
         for _ in range(int(max_time / DELAY)):
             try:
-                response = requests.get(url, headers=self.headers, timeout=max_time)
+                response = requests.get(
+                    url=f"{self._API_ENDPOINT}{self._TASK_URL}/{task_id}",
+                    headers=self.headers,
+                    timeout=max_time,
+                )
             except requests.exceptions.RequestException as e:
-                _LOGGER.error("Exception in wait_for_task:\n%s", e)
+                _LOGGER.error(
+                    "TionClient: request exception while waiting for a task:\n%s", e
+                )
                 return False
+
             if response.status_code == 200:
                 if response.json()["status"] == "completed":
                     self.get_location_data(force=True)
@@ -367,12 +379,14 @@ class TionClient:
                 sleep(DELAY)
             else:
                 _LOGGER.warning(
-                    "Bad response code %s in wait_for_task, content:\n%s",
+                    "TionClient: иad response code %s while waiting for a task, content:\n%s",
                     response.status_code,
                     response.text,
                 )
                 return False
+
         _LOGGER.warning(
-            "Couldn't get completed status for %s sec in wait_for_task", response.text
+            "TionClient: сouldn't get completed status for %s sec while waiting for a task",
+            response.text,
         )
         return False

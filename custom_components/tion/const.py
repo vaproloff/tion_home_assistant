@@ -8,6 +8,7 @@ from homeassistant.const import Platform
 DOMAIN = "tion"
 DEFAULT_AUTH_FILENAME = "tion_auth"
 DEFAULT_SCAN_INTERVAL = timedelta(minutes=1)
+AUTH_DATA = "auth"
 MANUFACTURER = "Tion"
 PLATFORMS = [Platform.CLIMATE, Platform.SENSOR]
 
