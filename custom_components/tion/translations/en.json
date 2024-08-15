@@ -24,8 +24,9 @@
                 "state_attributes": {
                     "swing_mode": {
                         "state": {
-                            "Outside": "Outside",
-                            "Inside": "Inside"
+                            "outside": "Outside",
+                            "inside": "Inside",
+                            "mixed": "Mixed"
                         }
                     }
                 }

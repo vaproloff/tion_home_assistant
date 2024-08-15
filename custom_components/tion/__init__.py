@@ -16,16 +16,16 @@ from homeassistant.helpers import device_registry as dr
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 
+from .client import TionClient
 from .const import (
-    BREEZER_DEVICE,
+    AUTH_DATA,
     DEFAULT_AUTH_FILENAME,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
-    MAGICAIR_DEVICE,
-    MODELS,
+    MANUFACTURER,
+    MODELS_SUPPORTED,
     PLATFORMS,
 )
-from .tion_api import Breezer, MagicAir, TionApi
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,15 +46,13 @@ CONFIG_SCHEMA = vol.Schema(
 )
 
 
-def create_api(user, password, interval, auth_fname):
+def create_api(user, password, interval, auth_data):
     """Return Tion Api."""
-    return TionApi(
-        user, password, min_update_interval_sec=interval, auth_fname=auth_fname
-    )
+    return TionClient(user, password, min_update_interval_sec=interval, auth=auth_data)
 
 
 async def async_setup(hass: HomeAssistant, config: Config):
-    """Set up integration with the YAML. Not supported."""
+    """Set up integration with the YAML. Deprecated."""
     if config.get(DOMAIN):
         tion_entries: list[ConfigEntry] = hass.config_entries.async_entries(DOMAIN)
         for entry in tion_entries:
@@ -71,7 +69,7 @@ async def async_setup(hass: HomeAssistant, config: Config):
                     translation_key="deprecated_yaml",
                     translation_placeholders={
                         "domain": DOMAIN,
-                        "integration_title": "Tion",
+                        "integration_title": MANUFACTURER,
                     },
                 )
                 return True
@@ -94,7 +92,7 @@ async def async_setup(hass: HomeAssistant, config: Config):
             translation_key="deprecated_yaml",
             translation_placeholders={
                 "domain": DOMAIN,
-                "integration_title": "Tion",
+                "integration_title": MANUFACTURER,
             },
         )
 
@@ -106,44 +104,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     if hass.data.get(DOMAIN) is None:
         hass.data.setdefault(DOMAIN, {})
 
-    tion_api = await hass.async_add_executor_job(
+    async def update_auth_data(**kwargs):
+        hass.config_entries.async_update_entry(entry, data=kwargs)
+
+    client = await hass.async_add_executor_job(
         create_api,
         entry.data.get(CONF_USERNAME),
         entry.data.get(CONF_PASSWORD),
         entry.data.get(CONF_SCAN_INTERVAL),
-        entry.data.get(CONF_FILE_PATH),
+        entry.data.get(AUTH_DATA),
     )
 
-    assert tion_api.authorization, "Couldn't get authorisation data!"
-    _LOGGER.info("Api initialized with authorization %s", tion_api.authorization)
+    client.add_entry_data_updater(update_auth_data)
 
-    hass.data[DOMAIN][entry.entry_id] = tion_api
+    assert client.authorization, "Couldn't get authorisation data!"
+    _LOGGER.info("Api initialized with authorization %s", client.authorization)
+
+    hass.data[DOMAIN][entry.entry_id] = client
 
     device_registry = dr.async_get(hass)
 
-    devices: list[MagicAir | Breezer] = await hass.async_add_executor_job(
-        tion_api.get_devices
-    )
+    devices = await hass.async_add_executor_job(client.get_devices)
     for device in devices:
         _LOGGER.info("Device type: %s", device.type)
         if device.valid:
-            device_type = (
-                BREEZER_DEVICE
-                if type(device) == Breezer
-                else (MAGICAIR_DEVICE if type(device) == MagicAir else None)
-            )
-            if device_type:
+            if device.type in MODELS_SUPPORTED:
                 device_registry.async_get_or_create(
                     config_entry_id=entry.entry_id,
+                    connections={(dr.CONNECTION_NETWORK_MAC, device.mac)},
                     identifiers={(DOMAIN, device.guid)},
-                    manufacturer="TION",
-                    model=MODELS.get(device.type, "Unknown device"),
+                    manufacturer=MANUFACTURER,
+                    model=MODELS_SUPPORTED.get(device.type),
+                    model_id=device.type,
                     name=device.name,
+                    sw_version=device.firmware,
+                    hw_version=device.hardware,
                 )
             else:
-                _LOGGER.info("Unused device: %s", device)
+                _LOGGER.info("Unsupported device type: %s", device.type)
         else:
-            _LOGGER.info("Skipped device %s, because of 'valid' property", device)
+            _LOGGER.info("Skipped device %s (not valid)", device.name)
 
     await hass.async_create_task(
         hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

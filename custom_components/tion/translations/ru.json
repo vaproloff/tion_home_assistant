@@ -24,8 +24,9 @@
                 "state_attributes": {
                     "swing_mode": {
                         "state": {
-                            "Outside": "С улицы",
-                            "Inside": "Из комнаты"
+                            "outside": "С улицы",
+                            "inside": "Из комнаты",
+                            "mixed": "Смешанный"
                         }
                     }
                 }

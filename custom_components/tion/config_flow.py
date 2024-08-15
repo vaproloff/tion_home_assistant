@@ -7,16 +7,11 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.const import (
-    CONF_FILE_PATH,
-    CONF_PASSWORD,
-    CONF_SCAN_INTERVAL,
-    CONF_USERNAME,
-)
+from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import DOMAIN
-from .tion_api import TionApi
+from .client import TionClient
+from .const import AUTH_DATA, DOMAIN
 
 DEFAULT_SCAN_INTERVAL = 60
 
@@ -28,12 +23,11 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    def _check_auth(self, user, password, interval, auth_fname) -> bool:
-        api = TionApi(
-            user, password, min_update_interval_sec=interval, auth_fname=auth_fname
+    def _check_auth(self, user, password, interval, auth_data=None) -> bool:
+        api = TionClient(
+            user, password, min_update_interval_sec=interval, auth=auth_data
         )
-
-        return api.get_data()
+        return api.authorization
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -47,8 +41,6 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             sha256_hash.update(user_input[CONF_USERNAME].encode())
             sha256_hex = sha256_hash.hexdigest()
 
-            auth_fname = f"tion_auth-{sha256_hex}"
-
             try:
                 interval = int(user_input.get(CONF_SCAN_INTERVAL))
             except ValueError:
@@ -56,15 +48,14 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             except TypeError:
                 interval = DEFAULT_SCAN_INTERVAL
 
-            auth = await self.hass.async_add_executor_job(
+            auth_data = await self.hass.async_add_executor_job(
                 self._check_auth,
                 user_input[CONF_USERNAME],
                 user_input[CONF_PASSWORD],
                 interval,
-                auth_fname,
             )
 
-            if auth is False:
+            if auth_data is None:
                 errors["base"] = "invalid_auth"
             else:
                 unique_id = f"{sha256_hex}"
@@ -79,7 +70,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_USERNAME: user_input[CONF_USERNAME],
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                         CONF_SCAN_INTERVAL: interval,
-                        CONF_FILE_PATH: auth_fname,
+                        AUTH_DATA: auth_data,
                     },
                 )
 
@@ -110,8 +101,6 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             sha256_hash.update(import_config[CONF_USERNAME].encode())
             sha256_hex = sha256_hash.hexdigest()
 
-            auth_fname = f"tion_auth-{sha256_hex}"
-
             try:
                 interval = int(import_config.get(CONF_SCAN_INTERVAL))
             except ValueError:
@@ -119,15 +108,14 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             except TypeError:
                 interval = DEFAULT_SCAN_INTERVAL
 
-            auth = await self.hass.async_add_executor_job(
+            auth_data = await self.hass.async_add_executor_job(
                 self._check_auth,
                 import_config[CONF_USERNAME],
                 import_config[CONF_PASSWORD],
                 interval,
-                auth_fname,
             )
 
-            if auth is False:
+            if auth_data is None:
                 errors["base"] = "invalid_auth"
             else:
                 unique_id = f"{sha256_hex}"
@@ -142,6 +130,6 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_USERNAME: import_config[CONF_USERNAME],
                         CONF_PASSWORD: import_config[CONF_PASSWORD],
                         CONF_SCAN_INTERVAL: interval,
-                        CONF_FILE_PATH: auth_fname,
+                        AUTH_DATA: auth_data,
                     },
                 )
