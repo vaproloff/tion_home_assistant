@@ -13,6 +13,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, Config, HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 
@@ -44,11 +45,6 @@ CONFIG_SCHEMA = vol.Schema(
     },
     extra=vol.ALLOW_EXTRA,
 )
-
-
-def create_api(user, password, interval, auth_data):
-    """Return Tion Api."""
-    return TionClient(user, password, min_update_interval_sec=interval, auth=auth_data)
 
 
 async def async_setup(hass: HomeAssistant, config: Config):
@@ -107,15 +103,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     async def update_auth_data(**kwargs):
         hass.config_entries.async_update_entry(entry, data=kwargs)
 
-    client = await hass.async_add_executor_job(
-        create_api,
-        entry.data.get(CONF_USERNAME),
-        entry.data.get(CONF_PASSWORD),
-        entry.data.get(CONF_SCAN_INTERVAL),
-        entry.data.get(AUTH_DATA),
+    session = async_create_clientsession(hass)
+    client = TionClient(
+        session,
+        username=entry.data.get(CONF_USERNAME),
+        password=entry.data.get(CONF_PASSWORD),
+        min_update_interval_sec=entry.data.get(CONF_SCAN_INTERVAL),
+        auth=entry.data.get(AUTH_DATA),
     )
-
-    client.add_entry_data_updater(update_auth_data)
+    client.add_update_listener(update_auth_data)
 
     assert client.authorization, "Couldn't get authorisation data!"
     _LOGGER.info("Api initialized with authorization %s", client.authorization)
@@ -124,7 +120,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     device_registry = dr.async_get(hass)
 
-    devices = await hass.async_add_executor_job(client.get_devices)
+    devices = await client.get_devices()
     for device in devices:
         _LOGGER.info("Device type: %s", device.type)
         if device.valid:

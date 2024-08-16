@@ -39,7 +39,7 @@ async def async_setup_entry(
     tion_api: TionClient = hass.data[DOMAIN][entry.entry_id]
 
     entities = []
-    devices = await hass.async_add_executor_job(tion_api.get_devices)
+    devices = await tion_api.get_devices()
     for device in devices:
         if device.valid and device.type in [
             TionDeviceType.BREEZER_3S,
@@ -113,10 +113,10 @@ class TionClimate(ClimateEntity):
         self._sound_is_on = breezer.data.sound_is_on
         self._filter_need_replace = breezer.data.filter_need_replace
 
+        self._zone_guid = None
         self._mode = None
         self._target_co2 = None
         self._zone_valid = None
-        self._load_zone()
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, breezer.guid)},
@@ -306,18 +306,22 @@ class TionClimate(ClimateEntity):
         """Return if filter need replace."""
         return self._filter_need_replace if self._breezer_valid else STATE_UNKNOWN
 
-    def turn_on(self) -> None:
+    async def async_added_to_hass(self):
+        """Run when entity about to be added."""
+        await self._load_zone()
+        await super().async_added_to_hass()
+
+    async def async_turn_on(self) -> None:
         """Turn breezer on."""
-        if self._heater_enabled:
-            self.set_hvac_mode(HVACMode.HEAT)
-        else:
-            self.set_hvac_mode(HVACMode.FAN_ONLY)
+        await self.async_set_hvac_mode(
+            HVACMode.HEAT if self._heater_enabled else HVACMode.FAN_ONLY
+        )
 
-    def turn_off(self) -> None:
+    async def async_turn_off(self) -> None:
         """Turn breezer off."""
-        self.set_hvac_mode(HVACMode.OFF)
+        await self.async_set_hvac_mode(HVACMode.OFF)
 
-    def set_hvac_mode(self, hvac_mode) -> None:
+    async def async_set_hvac_mode(self, hvac_mode) -> None:
         """Set new target operation mode."""
         if hvac_mode not in self._hvac_modes:
             _LOGGER.error("%s: unsupported hvac mode '%s'", self.name, hvac_mode)
@@ -345,9 +349,9 @@ class TionClimate(ClimateEntity):
             if self.hvac_mode == HVACMode.OFF:
                 self._is_on = True
 
-        self._send_breezer()
+        await self._send_breezer()
 
-    def set_temperature(self, **kwargs) -> None:
+    async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
         if self._attr_supported_features & ClimateEntityFeature.TARGET_TEMPERATURE:
             temperature = kwargs.get(ATTR_TEMPERATURE)
@@ -357,12 +361,12 @@ class TionClimate(ClimateEntity):
                 return
 
             self._t_set = int(temperature)
-            self._send_breezer()
+            await self._send_breezer()
 
         else:
             _LOGGER.warning("%s: service not supported", self.name)
 
-    def set_fan_mode(self, fan_mode) -> None:
+    async def async_set_fan_mode(self, fan_mode) -> None:
         """Set new target fan mode."""
         if fan_mode not in self._fan_modes:
             _LOGGER.error("%s: unsupported fan mode '%s'", self.name, fan_mode)
@@ -384,7 +388,7 @@ class TionClimate(ClimateEntity):
                 new_mode,
             )
             self._mode = new_mode
-            self._send_zone()
+            await self._send_zone()
 
         if new_mode == "manual" and new_speed is not None and self._speed != new_speed:
             _LOGGER.info(
@@ -394,9 +398,9 @@ class TionClimate(ClimateEntity):
                 new_speed,
             )
             self._speed = new_speed
-            self._send_breezer()
+            await self._send_breezer()
 
-    def set_swing_mode(self, swing_mode: str) -> None:
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set Tion breezer air gate."""
         new_gate = 1
         if swing_mode == SwingMode.SWING_OUTSIDE:
@@ -415,17 +419,17 @@ class TionClimate(ClimateEntity):
                 swing_mode,
             )
             self._gate = new_gate
-            self._send_breezer()
+            await self._send_breezer()
 
-    def update(self):
+    async def async_update(self):
         """Fetch new state data for the breezer.
 
         This is the only method that should fetch new data for Home Assistant.
         """
-        self._load_zone()
-        self._load_breezer()
+        await self._load_zone()
+        await self._load_breezer()
 
-    def set_zone_target_co2(self, **kwargs):
+    async def set_zone_target_co2(self, **kwargs):
         """Set zone new target co2 level."""
         new_target_co2 = kwargs.get("target_co2")
         if new_target_co2 is not None and self._target_co2 != new_target_co2:
@@ -436,9 +440,9 @@ class TionClimate(ClimateEntity):
                 new_target_co2,
             )
             self._target_co2 = new_target_co2
-            self._send_zone()
+            await self._send_zone()
 
-    def set_breezer_min_speed(self, **kwargs):
+    async def set_breezer_min_speed(self, **kwargs):
         """Set breezer new min speed."""
         new_min_speed = kwargs.get("min_speed")
 
@@ -450,9 +454,9 @@ class TionClimate(ClimateEntity):
                 new_min_speed,
             )
             self._speed_min_set = new_min_speed
-            self._send_breezer()
+            await self._send_breezer()
 
-    def set_breezer_max_speed(self, **kwargs):
+    async def set_breezer_max_speed(self, **kwargs):
         """Set breezer new min speed."""
         new_max_speed = kwargs.get("max_speed")
 
@@ -464,11 +468,13 @@ class TionClimate(ClimateEntity):
                 new_max_speed,
             )
             self._speed_max_set = new_max_speed
-            self._send_breezer()
+            await self._send_breezer()
 
-    def _load_breezer(self, force=False):
+    async def _load_breezer(self, force=False):
         """Update breezer data from API."""
-        if device_data := self._api.get_device(guid=self._breezer_guid, force=force):
+        if device_data := await self._api.get_device(
+            guid=self._breezer_guid, force=force
+        ):
             self._attr_name = device_data.name
             self._breezer_guid = device_data.guid
             self._breezer_valid = device_data.data.data_valid
@@ -489,12 +495,12 @@ class TionClimate(ClimateEntity):
 
         return self.available
 
-    def _send_breezer(self) -> bool:
+    async def _send_breezer(self) -> bool:
         """Send new breezer data to API."""
         if not self._breezer_valid:
             return False
 
-        return self._api.send_breezer(
+        return await self._api.send_breezer(
             guid=self._breezer_guid,
             is_on=self._is_on,
             t_set=self._t_set,
@@ -506,25 +512,23 @@ class TionClimate(ClimateEntity):
             gate=self._gate,
         )
 
-    def _load_zone(self, force=False) -> bool:
+    async def _load_zone(self, force=False) -> bool:
         """Update zone data from API."""
-        if zone_data := self._api.get_device_zone(guid=self._breezer_guid, force=force):
+        if zone_data := await self._api.get_device_zone(
+            guid=self._breezer_guid, force=force
+        ):
             self._mode = zone_data.mode.current
+            self._zone_guid = zone_data.guid
             self._target_co2 = zone_data.mode.auto_set.co2
             self._zone_valid = zone_data.valid
 
         return self.available
 
-    def _send_zone(self) -> bool:
+    async def _send_zone(self) -> bool:
         """Send new zone data to API."""
         if not self._zone_valid:
             return False
 
-        # data = {
-        #     "mode": self._mode if self._mode in ("auto", "manual") else "manual",
-        #     "co2": int(self._target_co2) if self._target_co2 is not None else 900,
-        # }
-
-        return self._api.send_zone(
+        return await self._api.send_zone(
             guid=self._zone_guid, mode=self._mode, co2=self._target_co2
         )
