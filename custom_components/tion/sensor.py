@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .client import TionClient, TionZoneDevice
-from .const import DOMAIN
+from .const import DOMAIN, TionDeviceType
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,10 +35,16 @@ async def async_setup_entry(
     devices = await client.get_devices()
     for device in devices:
         if device.valid:
-            if "breezer" in device.type:
+            if device.type in [
+                TionDeviceType.BREEZER_3S,
+                TionDeviceType.BREEZER_4S,
+            ]:
                 entities.append(TionTemperatureInSensor(client, device))
                 entities.append(TionTemperatureOutSensor(client, device))
-            elif "co2" in device.type:
+            elif device.type in [
+                TionDeviceType.MAGIC_AIR,
+                TionDeviceType.MODULE_CO2,
+            ]:
                 entities.append(TionTemperatureSensor(client, device))
                 entities.append(TionHumiditySensor(client, device))
                 entities.append(TionCO2Sensor(client, device))

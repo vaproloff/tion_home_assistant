@@ -7,6 +7,8 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession
 
+from .const import Heater, ZoneMode
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -150,8 +152,6 @@ class TionClient:
         self._auth_update_listeners = []
         self._last_update = 0
         self._temp_lock = asyncio.Lock()
-
-        # self.get_location_data()
 
     @property
     def _headers(self):
@@ -302,7 +302,7 @@ class TionClient:
         speed_min_set: int,
         speed_max_set: int,
         heater_enabled: bool | None = None,
-        heater_mode: str | None = None,
+        heater_mode: Heater | None = None,
         gate: int | None = None,
     ):
         """Send new breezer data to API."""
@@ -320,7 +320,7 @@ class TionClient:
 
         return await self._send(url, data)
 
-    async def send_zone(self, guid: str, mode: str, co2: int):
+    async def send_zone(self, guid: str, mode: ZoneMode, co2: int):
         """Send new zone data to API."""
         url = f"{self._API_ENDPOINT}{self._ZONE_URL}/{guid}/mode"
         data = {

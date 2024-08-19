@@ -12,6 +12,10 @@ AUTH_DATA = "auth"
 MANUFACTURER = "Tion"
 PLATFORMS = [Platform.CLIMATE, Platform.SENSOR]
 
+SRVC_CONF_TARGET_CO2 = "target_co2"
+SRVC_CONF_MIN_SPEED = "min_speed"
+SRVC_CONF_MAX_SPEED = "max_speed"
+
 
 class TionDeviceType(StrEnum):
     """Component supported device types."""
@@ -33,8 +37,22 @@ MODELS_SUPPORTED: dict[TionDeviceType, str] = {
 
 
 class SwingMode(StrEnum):
-    """Component supported device types."""
+    """Supported swing modes."""
 
     SWING_INSIDE = "inside"
     SWING_OUTSIDE = "outside"
     SWING_MIXED = "mixed"
+
+
+class ZoneMode(StrEnum):
+    """Supported zone modes."""
+
+    MANUAL = "manual"
+    AUTO = "auto"
+
+
+class Heater(StrEnum):
+    """Breezer 4S heater modes."""
+
+    OFF = "maintenance"
+    ON = "heat"
