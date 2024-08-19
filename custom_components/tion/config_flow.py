@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .client import TionClient
 from .const import AUTH_DATA, DOMAIN
@@ -24,8 +25,9 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def _check_auth(self, user, password, interval, auth_data=None) -> bool:
+        session = async_create_clientsession(self.hass)
         api = TionClient(
-            user, password, min_update_interval_sec=interval, auth=auth_data
+            session, user, password, min_update_interval_sec=interval, auth=auth_data
         )
         return api.authorization
 

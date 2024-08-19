@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .client import TionClient, TionZoneDevice
-from .const import DOMAIN
+from .const import DOMAIN, TionDeviceType
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,13 +32,19 @@ async def async_setup_entry(
     client: TionClient = hass.data[DOMAIN][entry.entry_id]
 
     entities = []
-    devices = await hass.async_add_executor_job(client.get_devices)
+    devices = await client.get_devices()
     for device in devices:
         if device.valid:
-            if "breezer" in device.type:
+            if device.type in [
+                TionDeviceType.BREEZER_3S,
+                TionDeviceType.BREEZER_4S,
+            ]:
                 entities.append(TionTemperatureInSensor(client, device))
                 entities.append(TionTemperatureOutSensor(client, device))
-            elif "co2" in device.type:
+            elif device.type in [
+                TionDeviceType.MAGIC_AIR,
+                TionDeviceType.MODULE_CO2,
+            ]:
                 entities.append(TionTemperatureSensor(client, device))
                 entities.append(TionHumiditySensor(client, device))
                 entities.append(TionCO2Sensor(client, device))
@@ -95,16 +101,16 @@ class TionSensor(SensorEntity, abc.ABC):
     def state(self):
         """Return the state of the sensor."""
 
-    def update(self):
+    async def async_update(self):
         """Fetch new state data for the sensor.
 
         This is the only method that should fetch new data for Home Assistant.
         """
-        self._load()
+        await self._load()
 
-    def _load(self, force=False):
+    async def _load(self, force=False):
         """Update device data from API."""
-        if self.__load(force=force):
+        if await self.__load(force=force):
             self._device_name = self._device_data.name
             self._device_guid = self._device_data.guid
             self._device_valid = self._device_data.valid
@@ -112,8 +118,10 @@ class TionSensor(SensorEntity, abc.ABC):
 
         return False
 
-    def __load(self, force=False) -> bool:
-        if device_data := self._api.get_device(guid=self._device_guid, force=force):
+    async def __load(self, force=False) -> bool:
+        if device_data := await self._api.get_device(
+            guid=self._device_guid, force=force
+        ):
             self._device_data = device_data
             return True
 
@@ -152,9 +160,9 @@ class TionTemperatureSensor(TionSensor):
         """Return the state of the sensor."""
         return self._temperature if self.available else STATE_UNKNOWN
 
-    def _load(self, force=False):
+    async def _load(self, force=False):
         """Update device data from API."""
-        if super()._load(force=force):
+        if await super()._load(force=force):
             self._temperature = self._device_data.data.temperature
 
         return self.available
@@ -192,9 +200,9 @@ class TionHumiditySensor(TionSensor):
         """Return the state of the sensor."""
         return self._humidity if self.available else STATE_UNKNOWN
 
-    def _load(self, force=False):
+    async def _load(self, force=False):
         """Update device data from API."""
-        if super()._load(force=force):
+        if await super()._load(force=force):
             self._humidity = self._device_data.data.humidity
 
         return self.available
@@ -232,9 +240,9 @@ class TionCO2Sensor(TionSensor):
         """Return the state of the sensor."""
         return self._co2 if self.available else STATE_UNKNOWN
 
-    def _load(self, force=False):
+    async def _load(self, force=False):
         """Update device data from API."""
-        if super()._load(force=force):
+        if await super()._load(force=force):
             self._co2 = self._device_data.data.co2
 
         return self.available
@@ -272,9 +280,9 @@ class TionPM25Sensor(TionSensor):
         """Return the state of the sensor."""
         return self._pm25 if self.available else STATE_UNKNOWN
 
-    def _load(self, force=False):
+    async def _load(self, force=False):
         """Update device data from API."""
-        if super()._load(force=force):
+        if await super()._load(force=force):
             self._pm25 = self._device_data.data.pm25
 
         return self.available
@@ -312,9 +320,9 @@ class TionTemperatureInSensor(TionSensor):
         """Return the state of the sensor."""
         return self._temperature if self.available else STATE_UNKNOWN
 
-    def _load(self, force=False):
+    async def _load(self, force=False):
         """Update device data from API."""
-        if super()._load(force=force):
+        if await super()._load(force=force):
             self._temperature = self._device_data.data.t_in
 
         return self.available
@@ -352,9 +360,9 @@ class TionTemperatureOutSensor(TionSensor):
         """Return the state of the sensor."""
         return self._temperature if self.available else STATE_UNKNOWN
 
-    def _load(self, force=False):
+    async def _load(self, force=False):
         """Update device data from API."""
-        if super()._load(force=force):
+        if await super()._load(force=force):
             self._temperature = self._device_data.data.t_out
 
         return self.available
