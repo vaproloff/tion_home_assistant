@@ -38,13 +38,13 @@
 ### climate.set_temperature
 Используйте для задачи целевой температуры нагревателя
 
-### climate.set_zone_target_co2
+### tion.set_zone_target_co2
 Используйте для задачи целевого уровня CO2 для (в Авто режиме бризера)
 
-### climate.set_breezer_min_speed
+### tion.set_breezer_min_speed
 Используйте для задачи минимальной скорости (в Авто режиме бризера)
 
-### climate.set_breezer_max_speed
+### tion.set_breezer_max_speed
 Используйте для задачи максимальной скорости (в Авто режиме бризера)
 
 ## Если что-то не работает
