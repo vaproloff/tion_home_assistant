@@ -119,12 +119,11 @@ class TionClimate(ClimateEntity):
         self._speed_min_set = breezer.data.speed_min_set
         self._speed_max_set = breezer.data.speed_max_set
         self._gate = breezer.data.gate
-        self._backlight = breezer.data.backlight
-        self._sound_is_on = breezer.data.sound_is_on
         self._filter_time_seconds = breezer.data.filter_time_seconds
         self._filter_need_replace = breezer.data.filter_need_replace
 
         self._zone_guid = None
+        self._zone_name = None
         self._mode = None
         self._target_co2 = None
         self._zone_valid = None
@@ -184,9 +183,8 @@ class TionClimate(ClimateEntity):
             "speed": self.speed,
             "speed_min_set": self.speed_min_set,
             "speed_max_set": self.speed_max_set,
-            "filter_left": self.filter_days_left,
+            "filter_days_left": self.filter_days_left,
             "filter_need_replace": self.filter_need_replace,
-            "backlight": self._backlight,
         }
 
         if self._heater_power is not None:
@@ -422,6 +420,14 @@ class TionClimate(ClimateEntity):
                 _LOGGER.warning("%s: undefined target temperature", self.name)
                 return
 
+            if temperature == self.target_temperature:
+                _LOGGER.info(
+                    "%s: no need to change target temperature: %s already set",
+                    self.name,
+                    temperature,
+                )
+                return
+
             self._t_set = int(temperature)
             await self._send_breezer()
 
@@ -563,10 +569,27 @@ class TionClimate(ClimateEntity):
             self._gate = device_data.data.gate
             self._t_in = device_data.data.t_in
             self._t_out = device_data.data.t_out
-            self._backlight = device_data.data.backlight
-            self._sound_is_on = device_data.data.sound_is_on
             self._filter_time_seconds = device_data.data.filter_time_seconds
             self._filter_need_replace = device_data.data.filter_need_replace
+
+        _LOGGER.debug(
+            "%s: fetching breezer data: valid=%s, is_on=%s, t_set=%s, t_in: %s, t_out: %s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, heater_power: %s, gate=%s, filter_time_seconds=%s, filter_need_replace: %s",
+            self.name,
+            self._breezer_valid,
+            self._is_on,
+            self._t_set,
+            self._t_in,
+            self._t_out,
+            self._speed,
+            self._speed_min_set,
+            self._speed_max_set,
+            self._heater_enabled,
+            self._heater_mode,
+            self._heater_power,
+            self._gate,
+            self._filter_time_seconds,
+            self._filter_need_replace,
+        )
 
         return self.available
 
@@ -576,8 +599,8 @@ class TionClimate(ClimateEntity):
             return False
 
         _LOGGER.debug(
-            "Sendind new breezer data: guid=%s, is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
-            self._breezer_guid,
+            "%s: pushing new breezer data: is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
+            self.name,
             self._is_on,
             self._t_set,
             self.speed,
@@ -607,6 +630,7 @@ class TionClimate(ClimateEntity):
         ):
             self._mode = zone_data.mode.current
             self._zone_guid = zone_data.guid
+            self._zone_name = zone_data.name
             self._zone_valid = zone_data.valid
 
             try:
@@ -619,6 +643,15 @@ class TionClimate(ClimateEntity):
                     e,
                 )
 
+            _LOGGER.debug(
+                "%s: fetching zone data: name: %s, valid: %s, mode=%s, target_co2=%s",
+                self.name,
+                self._zone_name,
+                self._zone_valid,
+                self._mode,
+                self._target_co2,
+            )
+
         return self.available
 
     async def _send_zone(self) -> bool:
@@ -627,8 +660,8 @@ class TionClimate(ClimateEntity):
             return False
 
         _LOGGER.debug(
-            "Sendind new zone data: guid=%s, mode=%s, target_co2=%s",
-            self._zone_guid,
+            "%s: pushing new zone data: mode=%s, target_co2=%s",
+            self.name,
             self._mode,
             self._target_co2,
         )

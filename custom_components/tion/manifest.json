@@ -1,6 +1,11 @@
 {
   "domain": "tion",
   "name": "Tion",
+  "after_dependencies": [
+    "climate",
+    "sensor",
+    "switch"
+  ],
   "codeowners": [
     "@vaproloff"
   ],
