@@ -28,7 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> bool:
-    """Set up climate Tion entities."""
+    """Set up sensor Tion entities."""
     client: TionClient = hass.data[DOMAIN][entry.entry_id]
 
     entities = []
@@ -165,6 +165,12 @@ class TionTemperatureSensor(TionSensor):
         if await super()._load(force=force):
             self._temperature = self._device_data.data.temperature
 
+            _LOGGER.debug(
+                "%s: fetched data: temperature=%s",
+                self.name,
+                self._temperature,
+            )
+
         return self.available
 
 
@@ -204,6 +210,12 @@ class TionHumiditySensor(TionSensor):
         """Update device data from API."""
         if await super()._load(force=force):
             self._humidity = self._device_data.data.humidity
+
+            _LOGGER.debug(
+                "%s: fetched data: humidity=%s",
+                self.name,
+                self._humidity,
+            )
 
         return self.available
 
@@ -245,6 +257,12 @@ class TionCO2Sensor(TionSensor):
         if await super()._load(force=force):
             self._co2 = self._device_data.data.co2
 
+            _LOGGER.debug(
+                "%s: fetched data: co2=%s",
+                self.name,
+                self._co2,
+            )
+
         return self.available
 
 
@@ -284,6 +302,12 @@ class TionPM25Sensor(TionSensor):
         """Update device data from API."""
         if await super()._load(force=force):
             self._pm25 = self._device_data.data.pm25
+
+            _LOGGER.debug(
+                "%s: fetched data: pm25=%s",
+                self.name,
+                self._pm25,
+            )
 
         return self.available
 
@@ -325,6 +349,12 @@ class TionTemperatureInSensor(TionSensor):
         if await super()._load(force=force):
             self._temperature = self._device_data.data.t_in
 
+            _LOGGER.debug(
+                "%s: fetched data: temperature_in=%s",
+                self.name,
+                self._temperature,
+            )
+
         return self.available
 
 
@@ -364,5 +394,11 @@ class TionTemperatureOutSensor(TionSensor):
         """Update device data from API."""
         if await super()._load(force=force):
             self._temperature = self._device_data.data.t_out
+
+            _LOGGER.debug(
+                "%s: fetched data: temperature_out=%s",
+                self.name,
+                self._temperature,
+            )
 
         return self.available
