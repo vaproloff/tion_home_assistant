@@ -18,11 +18,6 @@ class TionZoneModeAutoSet:
     def __init__(self, data: dict[str, Any]) -> None:
         """Tion zone mode auto set initialization."""
         self.co2 = data.get("co2")
-        # self.temperature = data.get("temperature")
-        # self.humidity = data.get("humidity")
-        # self.noise = data.get("noise")
-        # self.pm25 = data.get("pm25")
-        # self.pm10 = data.get("pm10")
 
 
 class TionZoneMode:
@@ -43,8 +38,6 @@ class TionZoneDeviceData:
         self.temperature = data.get("temperature")
         self.humidity = data.get("humidity")
         self.pm25 = data.get("pm25")
-        # self.pm10 = data.get("pm10")
-        # self.pm1 = data.get("pm1")
         self.backlight = data.get("backlight")
         self.sound_is_on = data.get("sound_is_on")
         self.is_on = data.get("is_on")
@@ -75,7 +68,6 @@ class TionZoneDevice:
         self.name = data.get("name")
         self.type = data.get("type")
         self.mac = data.get("mac")
-        # self.is_online = data.get("is_online")
         self.data = TionZoneDeviceData(data.get("data", {}))
         self.firmware = data.get("firmware")
         self.hardware = data.get("hardware")
@@ -117,7 +109,6 @@ class TionLocation:
         """Tion location data initialization."""
         self.guid = data.get("guid")
         self.name = data.get("name")
-        # self.unique_key = data.get("unique_key")
         self.zones = [TionZone(zone) for zone in data.get("zones", [])]
 
 
@@ -154,13 +145,13 @@ class TionClient:
         self._temp_lock = asyncio.Lock()
 
     @property
-    def _headers(self):
+    async def _headers(self):
         """Return headers for API request."""
         return {
             "Accept": "application/json, text/plain, */*",
             "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "ru-RU",
-            "Authorization": self._authorization,
+            "Authorization": await self.authorization,
             "Connection": "Keep-Alive",
             "Content-Type": "application/json",
             "Host": "api2.magicair.tion.ru",
@@ -170,8 +161,14 @@ class TionClient:
         }
 
     @property
-    def authorization(self) -> str:
+    async def authorization(self) -> str:
         """Return authorization data."""
+        if self._authorization is None:
+            if await self._get_authorization():
+                return self._authorization
+
+            return None
+
         return self._authorization
 
     def add_update_listener(self, coro):
@@ -225,7 +222,7 @@ class TionClient:
 
             response = await self._session.get(
                 url=f"{self._API_ENDPOINT}{self._LOCATION_URL}",
-                headers=self._headers,
+                headers=await self._headers,
                 timeout=10,
             )
 
@@ -340,7 +337,7 @@ class TionClient:
         response = await self._session.post(
             url=url,
             json=data,
-            headers=self._headers,
+            headers=await self._headers,
             timeout=10,
         )
 
@@ -371,7 +368,7 @@ class TionClient:
 
                 response = await self._session.get(
                     url=f"{self._API_ENDPOINT}{self._TASK_URL}/{task_id}",
-                    headers=self._headers,
+                    headers=await self._headers,
                     timeout=10,
                 )
 

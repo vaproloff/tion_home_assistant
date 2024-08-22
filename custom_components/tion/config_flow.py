@@ -24,21 +24,24 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    def _check_auth(self, user, password, interval, auth_data=None) -> bool:
+    async def _get_auth_data(
+        self, user, password, interval, auth_data=None
+    ) -> str | None:
         session = async_create_clientsession(self.hass)
         api = TionClient(
             session, user, password, min_update_interval_sec=interval, auth=auth_data
         )
-        return api.authorization
+        return await api.authorization
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Step user."""
-        self._async_abort_entries_match({CONF_USERNAME: user_input[CONF_USERNAME]})
 
         errors: dict[str, str] = {}
         if user_input is not None:
+            self._async_abort_entries_match({CONF_USERNAME: user_input[CONF_USERNAME]})
+
             sha256_hash = hashlib.new("sha256")
             sha256_hash.update(user_input[CONF_USERNAME].encode())
             sha256_hex = sha256_hash.hexdigest()
@@ -50,8 +53,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             except TypeError:
                 interval = DEFAULT_SCAN_INTERVAL
 
-            auth_data = await self.hass.async_add_executor_job(
-                self._check_auth,
+            auth_data = await self._get_auth_data(
                 user_input[CONF_USERNAME],
                 user_input[CONF_PASSWORD],
                 interval,
@@ -110,8 +112,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             except TypeError:
                 interval = DEFAULT_SCAN_INTERVAL
 
-            auth_data = await self.hass.async_add_executor_job(
-                self._check_auth,
+            auth_data = await self._get_auth_data(
                 import_config[CONF_USERNAME],
                 import_config[CONF_PASSWORD],
                 interval,
