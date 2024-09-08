@@ -195,7 +195,7 @@ class TionClient:
             _LOGGER.info("TionClient: got new authorization token")
 
             for coro in self._auth_update_listeners:
-                coro(
+                await coro(
                     username=self._username,
                     password=self._password,
                     scan_interval=self._min_update_interval,
@@ -213,13 +213,8 @@ class TionClient:
 
     async def get_location_data(self, force=False) -> bool:
         """Get locations data from Tion API."""
-        async with self._temp_lock:
-            if not force and (time() - self._last_update) < self._min_update_interval:
-                _LOGGER.debug(
-                    "TionClient: location data already updated recently. Skipping request"
-                )
-                return self._locations is not None
 
+        async def get_data():
             response = await self._session.get(
                 url=f"{self._API_ENDPOINT}{self._LOCATION_URL}",
                 headers=await self._headers,
@@ -240,7 +235,7 @@ class TionClient:
             if response.status == 401:
                 _LOGGER.info("TionClient: need to get new authorization")
                 if await self._get_authorization():
-                    return await self.get_location_data(force=True)
+                    return await get_data()
 
                 _LOGGER.error("TionClient: authorization failed!")
             else:
@@ -251,6 +246,15 @@ class TionClient:
                 )
 
             return False
+
+        async with self._temp_lock:
+            if not force and (time() - self._last_update) < self._min_update_interval:
+                _LOGGER.debug(
+                    "TionClient: location data already updated recently. Skipping request"
+                )
+                return self._locations is not None
+
+            return await get_data()
 
     async def get_zone(self, guid: str, force=False) -> TionZone | None:
         """Get zone data by guid from Tion API."""

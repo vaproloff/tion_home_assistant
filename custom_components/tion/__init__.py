@@ -113,8 +113,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     )
     client.add_update_listener(update_auth_data)
 
-    assert client.authorization, "Couldn't get authorisation data!"
-    _LOGGER.info("Api initialized with authorization %s", client.authorization)
+    assert await client.authorization, "Couldn't get authorisation data!"
+    _LOGGER.info("Api initialized with authorization %s", await client.authorization)
 
     hass.data[DOMAIN][entry.entry_id] = client
 
