@@ -34,26 +34,22 @@ async def async_setup_entry(
     entities = []
     devices = await client.get_devices()
     for device in devices:
-        if device.valid:
-            if device.type in [
-                TionDeviceType.BREEZER_3S,
-                TionDeviceType.BREEZER_4S,
-            ]:
-                entities.append(TionTemperatureInSensor(client, device))
-                entities.append(TionTemperatureOutSensor(client, device))
-            elif device.type in [
-                TionDeviceType.MAGIC_AIR,
-                TionDeviceType.MODULE_CO2,
-            ]:
-                entities.append(TionTemperatureSensor(client, device))
-                entities.append(TionHumiditySensor(client, device))
-                entities.append(TionCO2Sensor(client, device))
+        if device.type in [
+            TionDeviceType.BREEZER_3S,
+            TionDeviceType.BREEZER_4S,
+        ]:
+            entities.append(TionTemperatureInSensor(client, device))
+            entities.append(TionTemperatureOutSensor(client, device))
+        elif device.type in [
+            TionDeviceType.MAGIC_AIR,
+            TionDeviceType.MODULE_CO2,
+        ]:
+            entities.append(TionTemperatureSensor(client, device))
+            entities.append(TionHumiditySensor(client, device))
+            entities.append(TionCO2Sensor(client, device))
 
-                if device.data.pm25 != "NaN":
-                    entities.append(TionPM25Sensor(client, device))
-
-        else:
-            _LOGGER.info("Skipped device %s (not valid)", device.name)
+            if device.data.pm25 != "NaN":
+                entities.append(TionPM25Sensor(client, device))
 
     async_add_entities(entities)
     return True
@@ -74,6 +70,7 @@ class TionSensor(SensorEntity, abc.ABC):
         self._device_guid = self._device_data.guid
         self._device_name = self._device_data.name
         self._device_valid = self._device_data.valid
+        self._device_online = self._device_data.is_online
 
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -84,7 +81,7 @@ class TionSensor(SensorEntity, abc.ABC):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._device_valid
+        return self._device_online and self._device_valid
 
     @property
     @abc.abstractmethod
@@ -114,6 +111,7 @@ class TionSensor(SensorEntity, abc.ABC):
             self._device_name = self._device_data.name
             self._device_guid = self._device_data.guid
             self._device_valid = self._device_data.valid
+            self._device_online = self._device_data.is_online
             return True
 
         return False

@@ -122,24 +122,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     devices = await client.get_devices()
     for device in devices:
-        _LOGGER.info("Device type: %s", device.type)
-        if device.valid:
-            if device.type in MODELS_SUPPORTED:
-                device_registry.async_get_or_create(
-                    config_entry_id=entry.entry_id,
-                    connections={(dr.CONNECTION_NETWORK_MAC, device.mac)},
-                    identifiers={(DOMAIN, device.guid)},
-                    manufacturer=MANUFACTURER,
-                    model=MODELS_SUPPORTED.get(device.type),
-                    model_id=device.type,
-                    name=device.name,
-                    sw_version=device.firmware,
-                    hw_version=device.hardware,
-                )
-            else:
-                _LOGGER.info("Unsupported device type: %s", device.type)
+        _LOGGER.info(
+            "Adding device: type - %s, device name - %s", device.type, device.name
+        )
+        if device.type in MODELS_SUPPORTED:
+            device_registry.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                connections={(dr.CONNECTION_NETWORK_MAC, device.mac)},
+                identifiers={(DOMAIN, device.guid)},
+                manufacturer=MANUFACTURER,
+                model=MODELS_SUPPORTED.get(device.type),
+                model_id=device.type,
+                name=device.name,
+                sw_version=device.firmware,
+                hw_version=device.hardware,
+            )
         else:
-            _LOGGER.info("Skipped device %s (not valid)", device.name)
+            _LOGGER.info("Unsupported device type: %s", device.type)
 
     await hass.async_create_task(
         hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

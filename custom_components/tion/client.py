@@ -74,14 +74,15 @@ class TionZoneDevice:
         self.max_speed = data.get("max_speed")
         self.t_max = data.get("t_max")
         self.t_min = data.get("t_min")
+        self.is_online = data.get("is_online")
 
     @property
     def valid(self) -> bool:
         """Return if device data valid."""
-        if self.data.data_valid is None:
-            return self.guid is not None
+        if self.data.data_valid is not None:
+            return self.data.data_valid
 
-        return self.guid is not None and self.data.data_valid
+        return self.guid is not None
 
 
 class TionZone:
@@ -91,9 +92,7 @@ class TionZone:
         """Tion zone data initialization."""
         self.guid = data.get("guid")
         self.name = data.get("name")
-        # self.is_virtual = data.get("is_virtual")
         self.mode = TionZoneMode(data.get("mode", {}))
-        # self.hw_id = data.get("hw_id")
         self.devices = [TionZoneDevice(device) for device in data.get("devices", [])]
 
     @property
@@ -109,7 +108,11 @@ class TionLocation:
         """Tion location data initialization."""
         self.guid = data.get("guid")
         self.name = data.get("name")
-        self.zones = [TionZone(zone) for zone in data.get("zones", [])]
+        self.zones = [
+            TionZone(zone)
+            for zone in data.get("zones", [])
+            if not zone.get("is_virtual")
+        ]
 
 
 class TionClient:
@@ -264,6 +267,8 @@ class TionClient:
                     if zone_data.guid == guid:
                         return zone_data
 
+        return None
+
     async def get_device(self, guid: str, force=False) -> TionZoneDevice | None:
         """Get device data by guid from Tion API."""
         if await self.get_location_data(force=force):
@@ -273,6 +278,8 @@ class TionClient:
                         if device.guid == guid:
                             return device
 
+        return None
+
     async def get_device_zone(self, guid: str, force=False) -> TionZone | None:
         """Get device zone data by device guid from Tion API."""
         if await self.get_location_data(force=force):
@@ -281,6 +288,8 @@ class TionClient:
                     for device in zone.devices:
                         if device.guid == guid:
                             return zone
+
+        return None
 
     async def get_devices(self, force=False) -> list[TionZoneDevice]:
         """Get all devices data from Tion API."""
