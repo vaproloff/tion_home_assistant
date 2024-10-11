@@ -96,11 +96,13 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         self, import_config: dict[str, Any]
     ) -> ConfigFlowResult:
         """Attempt to import the existing configuration."""
-        self._async_abort_entries_match({CONF_USERNAME: import_config[CONF_USERNAME]})
 
         # return await self.async_step_user(import_config)
         errors: dict[str, str] = {}
         if import_config is not None:
+            self._async_abort_entries_match(
+                {CONF_USERNAME: import_config[CONF_USERNAME]}
+            )
             sha256_hash = hashlib.new("sha256")
             sha256_hash.update(import_config[CONF_USERNAME].encode())
             sha256_hex = sha256_hash.hexdigest()

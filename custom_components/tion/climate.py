@@ -48,17 +48,12 @@ async def async_setup_entry(
     """Set up climate Tion entities."""
     tion_api: TionClient = hass.data[DOMAIN][entry.entry_id]
 
-    entities = []
     devices = await tion_api.get_devices()
-    for device in devices:
-        if device.valid and device.type in [
-            TionDeviceType.BREEZER_3S,
-            TionDeviceType.BREEZER_4S,
-        ]:
-            entities.append(TionClimate(tion_api, device))
-
-        else:
-            _LOGGER.info("Skipped device %s (not valid)", device.name)
+    entities = [
+        TionClimate(tion_api, device)
+        for device in devices
+        if device.type in (TionDeviceType.BREEZER_3S, TionDeviceType.BREEZER_4S)
+    ]
 
     async_add_entities(entities)
 
@@ -108,6 +103,7 @@ class TionClimate(ClimateEntity):
         self._attr_max_temp = breezer.t_max
         self._attr_min_temp = breezer.t_min
         self._breezer_valid = breezer.valid
+        self._is_online = breezer.is_online
         self._is_on = breezer.data.is_on
         self._t_in = breezer.data.t_in
         self._t_out = breezer.data.t_out
@@ -157,7 +153,7 @@ class TionClimate(ClimateEntity):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._breezer_valid and self._zone_valid
+        return self._is_online and self._breezer_valid and self._zone_valid
 
     @property
     def name(self) -> str:
@@ -571,9 +567,10 @@ class TionClimate(ClimateEntity):
             self._t_out = device_data.data.t_out
             self._filter_time_seconds = device_data.data.filter_time_seconds
             self._filter_need_replace = device_data.data.filter_need_replace
+            self._is_online = device_data.is_online
 
         _LOGGER.debug(
-            "%s: fetching breezer data: valid=%s, is_on=%s, t_set=%s, t_in: %s, t_out: %s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, heater_power: %s, gate=%s, filter_time_seconds=%s, filter_need_replace: %s",
+            "%s: fetching breezer data: valid=%s, is_on=%s, t_set=%s, t_in: %s, t_out: %s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, heater_power: %s, gate=%s, filter_time_seconds=%s, filter_need_replace: %s, is_online: %s",
             self.name,
             self._breezer_valid,
             self._is_on,
@@ -589,6 +586,7 @@ class TionClimate(ClimateEntity):
             self._gate,
             self._filter_time_seconds,
             self._filter_need_replace,
+            self._is_online,
         )
 
         return self.available

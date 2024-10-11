@@ -23,18 +23,14 @@ async def async_setup_entry(
     entities = []
     devices = await client.get_devices()
     for device in devices:
-        if device.valid:
-            if device.type in [
-                TionDeviceType.BREEZER_3S,
-                TionDeviceType.BREEZER_4S,
-            ]:
-                entities.append(TionBacklightSwitch(client, device))
-                entities.append(TionBreezerSoundSwitch(client, device))
-            elif device.type == TionDeviceType.MAGIC_AIR:
-                entities.append(TionBacklightSwitch(client, device))
-
-        else:
-            _LOGGER.info("Skipped device %s (not valid)", device.name)
+        if device.type in [
+            TionDeviceType.BREEZER_3S,
+            TionDeviceType.BREEZER_4S,
+        ]:
+            entities.append(TionBacklightSwitch(client, device))
+            entities.append(TionBreezerSoundSwitch(client, device))
+        elif device.type == TionDeviceType.MAGIC_AIR:
+            entities.append(TionBacklightSwitch(client, device))
 
     async_add_entities(entities)
     return True
@@ -55,6 +51,7 @@ class TionSwitch(SwitchEntity, abc.ABC):
         self._device_guid = self._device_data.guid
         self._device_name = self._device_data.name
         self._device_valid = self._device_data.valid
+        self._device_online = self._device_data.is_online
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device_guid)},
@@ -65,7 +62,7 @@ class TionSwitch(SwitchEntity, abc.ABC):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._device_valid
+        return self._device_online and self._device_valid
 
     @property
     @abc.abstractmethod
@@ -105,6 +102,7 @@ class TionSwitch(SwitchEntity, abc.ABC):
             self._device_name = self._device_data.name
             self._device_guid = self._device_data.guid
             self._device_valid = self._device_data.valid
+            self._device_online = self._device_data.is_online
             return True
 
         return False
