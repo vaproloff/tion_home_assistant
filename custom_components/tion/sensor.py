@@ -335,7 +335,7 @@ class TionTemperatureInSensor(TionSensor):
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device_name} Inside Air Flow Temperature"
+        return f"{self._device_name} Inlet Air Flow Temperature"
 
     @property
     def state(self):
@@ -381,7 +381,7 @@ class TionTemperatureOutSensor(TionSensor):
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device_name} Outside Air Flow Temperature"
+        return f"{self._device_name} Outflow Temperature"
 
     @property
     def state(self):
