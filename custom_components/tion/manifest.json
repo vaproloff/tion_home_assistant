@@ -3,6 +3,7 @@
   "name": "Tion",
   "after_dependencies": [
     "climate",
+    "number",
     "sensor",
     "switch"
   ],
