@@ -205,6 +205,8 @@ class TionMinSpeed(TionNumber):
         self._attr_native_max_value = 6
         self._attr_native_step = 1
 
+        self._breezer_min_speed: float = None
+
     @property
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
@@ -221,27 +223,18 @@ class TionMinSpeed(TionNumber):
         return "mdi:fan-chevron-down"
 
     @property
-    def native_value(self) -> int | None:
+    def native_value(self) -> float | None:
         """Return the value reported by the number."""
-        return self._device.data.speed_min_set if self._device.valid else STATE_UNKNOWN
+        return (
+            self._breezer_min_speed
+            if self._device.valid and self._breezer_min_speed is not None
+            else STATE_UNKNOWN
+        )
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
         await self._load()
-
-        _LOGGER.debug("ASYNC_SET_NATIVE_VALUE")
-
-        try:
-            self._device.data.speed_min_set = int(value)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer min speed set value to int: %s. Error: %s",
-                self.name,
-                value,
-                e,
-            )
-            return
-
+        self._breezer_min_speed = value
         await self._send()
 
     async def _send(self) -> None:
@@ -249,13 +242,46 @@ class TionMinSpeed(TionNumber):
         if not self.available:
             return
 
+        try:
+            breezer_min_speed = int(self._breezer_min_speed)
+        except ValueError as e:
+            _LOGGER.warning(
+                "%s: unable to convert breezer min speed set value to int: %s. Error: %s",
+                self.name,
+                self._breezer_min_speed,
+                e,
+            )
+            return
+
+        try:
+            breezer_t_set = int(self._device.data.t_set)
+        except ValueError as e:
+            _LOGGER.warning(
+                "%s: unable to convert breezer temperature set value to int: %s. Error: %s",
+                self.name,
+                self._device.data.t_set,
+                e,
+            )
+            return
+
+        try:
+            breezer_speed = int(self._device.data.speed)
+        except ValueError as e:
+            _LOGGER.warning(
+                "%s: unable to convert breezer speed value to int: %s. Error: %s",
+                self.name,
+                self._device.data.speed,
+                e,
+            )
+            return
+
         _LOGGER.debug(
             "%s: pushing new breezer data: is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
             self.name,
             self._device.data.is_on,
-            self._device.data.t_set,
-            self._device.data.speed,
-            self._device.data.speed_min_set,
+            breezer_t_set,
+            breezer_speed,
+            breezer_min_speed,
             self._device.data.speed_max_set,
             self._device.data.heater_enabled,
             self._device.data.heater_mode,
@@ -265,9 +291,9 @@ class TionMinSpeed(TionNumber):
         await self._api.send_breezer(
             guid=self._device.guid,
             is_on=self._device.data.is_on,
-            t_set=int(self._device.data.t_set),
-            speed=int(self._device.data.speed),
-            speed_min_set=self._device.data.speed_min_set,
+            t_set=breezer_t_set,
+            speed=breezer_speed,
+            speed_min_set=breezer_min_speed,
             speed_max_set=self._device.data.speed_max_set,
             heater_enabled=self._device.data.heater_enabled,
             heater_mode=self._device.data.heater_mode,
@@ -290,6 +316,8 @@ class TionMaxSpeed(TionNumber):
         self._attr_native_max_value = 6
         self._attr_native_step = 1
 
+        self._breezer_max_speed: float = None
+
     @property
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
@@ -308,25 +336,16 @@ class TionMaxSpeed(TionNumber):
     @property
     def native_value(self) -> int | None:
         """Return the value reported by the number."""
-        return self._device.data.speed_max_set if self._device.valid else STATE_UNKNOWN
+        return (
+            self._breezer_max_speed
+            if self._device.valid and self._breezer_max_speed is not None
+            else STATE_UNKNOWN
+        )
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
         await self._load()
-
-        _LOGGER.debug("ASYNC_SET_NATIVE_VALUE")
-
-        try:
-            self._device.data.speed_max_set = int(value)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer max speed set value to int: %s. Error: %s",
-                self.name,
-                value,
-                e,
-            )
-            return
-
+        self._breezer_max_speed = value
         await self._send()
 
     async def _send(self) -> None:
@@ -334,14 +353,47 @@ class TionMaxSpeed(TionNumber):
         if not self.available:
             return
 
+        try:
+            breezer_max_speed = int(self._breezer_max_speed)
+        except ValueError as e:
+            _LOGGER.warning(
+                "%s: unable to convert breezer max speed set value to int: %s. Error: %s",
+                self.name,
+                self._breezer_max_speed,
+                e,
+            )
+            return
+
+        try:
+            breezer_t_set = int(self._device.data.t_set)
+        except ValueError as e:
+            _LOGGER.warning(
+                "%s: unable to convert breezer temperature set value to int: %s. Error: %s",
+                self.name,
+                self._device.data.t_set,
+                e,
+            )
+            return
+
+        try:
+            breezer_speed = int(self._device.data.speed)
+        except ValueError as e:
+            _LOGGER.warning(
+                "%s: unable to convert breezer speed value to int: %s. Error: %s",
+                self.name,
+                self._device.data.speed,
+                e,
+            )
+            return
+
         _LOGGER.debug(
             "%s: pushing new breezer data: is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
             self.name,
             self._device.data.is_on,
-            self._device.data.t_set,
-            self._device.data.speed,
+            breezer_t_set,
+            breezer_speed,
             self._device.data.speed_min_set,
-            self._device.data.speed_max_set,
+            breezer_max_speed,
             self._device.data.heater_enabled,
             self._device.data.heater_mode,
             self._device.data.gate,
@@ -350,10 +402,10 @@ class TionMaxSpeed(TionNumber):
         await self._api.send_breezer(
             guid=self._device.guid,
             is_on=self._device.data.is_on,
-            t_set=int(self._device.data.t_set),
-            speed=int(self._device.data.speed),
+            t_set=breezer_t_set,
+            speed=breezer_speed,
             speed_min_set=self._device.data.speed_min_set,
-            speed_max_set=self._device.data.speed_max_set,
+            speed_max_set=breezer_max_speed,
             heater_enabled=self._device.data.heater_enabled,
             heater_mode=self._device.data.heater_mode,
             gate=self._device.data.gate,
