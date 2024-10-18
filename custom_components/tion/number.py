@@ -131,7 +131,7 @@ class TionTargetCO2(TionNumber):
         return f"{self._device.name} Target CO2"
 
     @property
-    def native_value(self) -> int | None:
+    def native_value(self) -> float | None:
         """Return the value reported by the number."""
         return (
             self._target_co2
@@ -139,26 +139,10 @@ class TionTargetCO2(TionNumber):
             else STATE_UNKNOWN
         )
 
-    async def async_added_to_hass(self):
-        """Run when entity about to be added."""
-        await self._load()
-        await super().async_added_to_hass()
-
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
         self._load()
-
-        try:
-            self._zone.mode.auto_set.co2 = int(value)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer target co2 value to int: %s. Error: %s",
-                self.name,
-                value,
-                e,
-            )
-            return
-
+        self._target_co2 = value
         self._send()
 
     async def _load(self, force=False) -> bool:
@@ -166,25 +150,43 @@ class TionTargetCO2(TionNumber):
             if zone_data := await self._api.get_device_zone(
                 guid=self._device.guid, force=force
             ):
-                self._zone = zone_data
-                return True
+                try:
+                    self._target_co2 = float(zone_data.mode.auto_set.co2)
+                except ValueError as e:
+                    _LOGGER.warning(
+                        "%s: unable to convert target CO2 value to float: %s. Error: %s",
+                        self.name,
+                        zone_data.mode.auto_set.co2,
+                        e,
+                    )
 
-        return False
+        return self.available
 
     async def _send(self) -> None:
         """Send new switch data to API."""
         if not self.available:
             return False
 
+        try:
+            target_co2 = int(self._target_co2)
+        except ValueError as e:
+            _LOGGER.warning(
+                "%s: unable to convert target CO2 value to int: %s. Error: %s",
+                self.name,
+                self._target_co2,
+                e,
+            )
+            return False
+
         _LOGGER.debug(
             "%s: pushing new zone data: mode=%s, target_co2=%s",
             self.name,
             self._zone.mode,
-            self._zone.mode.auto_set.co2,
+            target_co2,
         )
 
         return await self._api.send_zone(
-            guid=self._zone.guid, mode=self.mode, co2=self._target_co2
+            guid=self._zone.guid, mode=self.mode, co2=target_co2
         )
 
 
