@@ -397,6 +397,7 @@ class TionClimate(ClimateEntity):
         if hvac_mode == HVACMode.OFF:
             self._mode = ZoneMode.MANUAL
             self._is_on = False
+            await self._send_zone()
         else:
             if hvac_mode == HVACMode.HEAT:
                 self.heater_enabled = True
