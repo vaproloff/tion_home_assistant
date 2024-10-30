@@ -29,7 +29,10 @@ async def async_setup_entry(
         ]:
             entities.append(TionBacklightSwitch(client, device))
             entities.append(TionBreezerSoundSwitch(client, device))
-        elif device.type == TionDeviceType.MAGIC_AIR:
+        elif device.type in [
+            TionDeviceType.MAGIC_AIR,
+            TionDeviceType.MODULE_CO2,
+        ]:
             entities.append(TionBacklightSwitch(client, device))
 
     async_add_entities(entities)
