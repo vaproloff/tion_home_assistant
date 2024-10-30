@@ -31,7 +31,10 @@ async def async_setup_entry(
             ]:
                 entities.append(TionMinSpeed(client, device))
                 entities.append(TionMaxSpeed(client, device))
-            elif device.type == TionDeviceType.MAGIC_AIR:
+            elif device.type in [
+                TionDeviceType.MAGIC_AIR,
+                TionDeviceType.MODULE_CO2,
+            ]:
                 entities.append(TionTargetCO2(client, device))
 
         else:
