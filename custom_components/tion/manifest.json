@@ -2,6 +2,7 @@
   "domain": "tion",
   "name": "Tion",
   "after_dependencies": [
+    "binary_sensor",
     "climate",
     "number",
     "sensor",
