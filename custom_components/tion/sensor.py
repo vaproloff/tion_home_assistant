@@ -65,23 +65,19 @@ class TionSensor(SensorEntity, abc.ABC):
     ) -> None:
         """Initialize sensor device."""
         self._api = client
+        self._device = device
         self._device_data = device
-
-        self._device_guid = self._device_data.guid
-        self._device_name = self._device_data.name
-        self._device_valid = self._device_data.valid
-        self._device_online = self._device_data.is_online
 
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._device_guid)},
+            identifiers={(DOMAIN, self._device.guid)},
         )
 
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._device_online and self._device_valid
+        return self._device.is_online and self._device.valid
 
     @property
     @abc.abstractmethod
@@ -98,6 +94,11 @@ class TionSensor(SensorEntity, abc.ABC):
     def state(self):
         """Return the state of the sensor."""
 
+    async def async_added_to_hass(self):
+        """Run when entity about to be added."""
+        await self._load()
+        await super().async_added_to_hass()
+
     async def async_update(self):
         """Fetch new state data for the sensor.
 
@@ -105,22 +106,11 @@ class TionSensor(SensorEntity, abc.ABC):
         """
         await self._load()
 
-    async def _load(self, force=False):
-        """Update device data from API."""
-        if await self.__load(force=force):
-            self._device_name = self._device_data.name
-            self._device_guid = self._device_data.guid
-            self._device_valid = self._device_data.valid
-            self._device_online = self._device_data.is_online
-            return True
-
-        return False
-
-    async def __load(self, force=False) -> bool:
+    async def _load(self, force=False) -> bool:
         if device_data := await self._api.get_device(
-            guid=self._device_guid, force=force
+            guid=self._device.guid, force=force
         ):
-            self._device_data = device_data
+            self._device = device_data
             return True
 
         return False
@@ -137,8 +127,6 @@ class TionTemperatureSensor(TionSensor):
         """Initialize sensor device."""
         super().__init__(client, device)
 
-        self._temperature = device.data.temperature
-
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
         self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
         self._attr_suggested_display_precision = 1
@@ -146,27 +134,25 @@ class TionTemperatureSensor(TionSensor):
     @property
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return f"{self._device_guid}_temperature"
+        return f"{self._device.guid}_temperature"
 
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device_name} Temperature"
+        return f"{self._device.name} Temperature"
 
     @property
     def state(self):
         """Return the state of the sensor."""
-        return self._temperature if self.available else STATE_UNKNOWN
+        return self._device.data.temperature if self.available else STATE_UNKNOWN
 
     async def _load(self, force=False):
         """Update device data from API."""
         if await super()._load(force=force):
-            self._temperature = self._device_data.data.temperature
-
             _LOGGER.debug(
                 "%s: fetched data: temperature=%s",
                 self.name,
-                self._temperature,
+                self._device.data.temperature,
             )
 
         return self.available
@@ -183,8 +169,6 @@ class TionHumiditySensor(TionSensor):
         """Initialize sensor device."""
         super().__init__(client, device)
 
-        self._humidity = device.data.humidity
-
         self._attr_device_class = SensorDeviceClass.HUMIDITY
         self._attr_native_unit_of_measurement = PERCENTAGE
         self._attr_suggested_display_precision = 0
@@ -192,27 +176,25 @@ class TionHumiditySensor(TionSensor):
     @property
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return f"{self._device_guid}_humidity"
+        return f"{self._device.guid}_humidity"
 
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device_name} Humidity"
+        return f"{self._device.name} Humidity"
 
     @property
     def state(self):
         """Return the state of the sensor."""
-        return self._humidity if self.available else STATE_UNKNOWN
+        return self._device.data.humidity if self.available else STATE_UNKNOWN
 
     async def _load(self, force=False):
         """Update device data from API."""
         if await super()._load(force=force):
-            self._humidity = self._device_data.data.humidity
-
             _LOGGER.debug(
                 "%s: fetched data: humidity=%s",
                 self.name,
-                self._humidity,
+                self._device.data.humidity,
             )
 
         return self.available
@@ -229,8 +211,6 @@ class TionCO2Sensor(TionSensor):
         """Initialize sensor device."""
         super().__init__(client, device)
 
-        self._co2 = device.data.co2
-
         self._attr_device_class = SensorDeviceClass.CO2
         self._attr_native_unit_of_measurement = CONCENTRATION_PARTS_PER_MILLION
         self._attr_suggested_display_precision = 0
@@ -238,27 +218,25 @@ class TionCO2Sensor(TionSensor):
     @property
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return f"{self._device_guid}_co2"
+        return f"{self._device.guid}_co2"
 
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device_name} CO2"
+        return f"{self._device.name} CO2"
 
     @property
     def state(self):
         """Return the state of the sensor."""
-        return self._co2 if self.available else STATE_UNKNOWN
+        return self._device.data.co2 if self.available else STATE_UNKNOWN
 
     async def _load(self, force=False):
         """Update device data from API."""
         if await super()._load(force=force):
-            self._co2 = self._device_data.data.co2
-
             _LOGGER.debug(
                 "%s: fetched data: co2=%s",
                 self.name,
-                self._co2,
+                self._device.data.co2,
             )
 
         return self.available
@@ -275,8 +253,6 @@ class TionPM25Sensor(TionSensor):
         """Initialize sensor device."""
         super().__init__(client, device)
 
-        self._pm25 = device.data.pm25
-
         self._attr_device_class = SensorDeviceClass.PM25
         self._attr_native_unit_of_measurement = CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
         self._attr_suggested_display_precision = 0
@@ -284,27 +260,25 @@ class TionPM25Sensor(TionSensor):
     @property
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return f"{self._device_guid}_pm25"
+        return f"{self._device.guid}_pm25"
 
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device_name} PM25"
+        return f"{self._device.name} PM25"
 
     @property
     def state(self):
         """Return the state of the sensor."""
-        return self._pm25 if self.available else STATE_UNKNOWN
+        return self._device.data.pm25 if self.available else STATE_UNKNOWN
 
     async def _load(self, force=False):
         """Update device data from API."""
         if await super()._load(force=force):
-            self._pm25 = self._device_data.data.pm25
-
             _LOGGER.debug(
                 "%s: fetched data: pm25=%s",
                 self.name,
-                self._pm25,
+                self._device.data.pm25,
             )
 
         return self.available
@@ -321,8 +295,6 @@ class TionTemperatureInSensor(TionSensor):
         """Initialize sensor device."""
         super().__init__(client, device)
 
-        self._temperature = device.data.t_in
-
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
         self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
         self._attr_suggested_display_precision = 0
@@ -330,27 +302,25 @@ class TionTemperatureInSensor(TionSensor):
     @property
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return f"{self._device_guid}_temperature_in"
+        return f"{self._device.guid}_temperature_in"
 
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device_name} Inlet Air Flow Temperature"
+        return f"{self._device.name} Inflow Temperature"
 
     @property
     def state(self):
         """Return the state of the sensor."""
-        return self._temperature if self.available else STATE_UNKNOWN
+        return self._device.data.t_in if self.available else STATE_UNKNOWN
 
     async def _load(self, force=False):
         """Update device data from API."""
         if await super()._load(force=force):
-            self._temperature = self._device_data.data.t_in
-
             _LOGGER.debug(
                 "%s: fetched data: temperature_in=%s",
                 self.name,
-                self._temperature,
+                self._device.data.t_in,
             )
 
         return self.available
@@ -367,8 +337,6 @@ class TionTemperatureOutSensor(TionSensor):
         """Initialize sensor device."""
         super().__init__(client, device)
 
-        self._temperature = device.data.t_out
-
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
         self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
         self._attr_suggested_display_precision = 0
@@ -376,27 +344,25 @@ class TionTemperatureOutSensor(TionSensor):
     @property
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return f"{self._device_guid}_temperature_out"
+        return f"{self._device.guid}_temperature_out"
 
     @property
     def name(self):
         """Return the name of the sensor."""
-        return f"{self._device_name} Outflow Temperature"
+        return f"{self._device.name} Outflow Temperature"
 
     @property
     def state(self):
         """Return the state of the sensor."""
-        return self._temperature if self.available else STATE_UNKNOWN
+        return self._device.data.t_out if self.available else STATE_UNKNOWN
 
     async def _load(self, force=False):
         """Update device data from API."""
         if await super()._load(force=force):
-            self._temperature = self._device_data.data.t_out
-
             _LOGGER.debug(
                 "%s: fetched data: temperature_out=%s",
                 self.name,
-                self._temperature,
+                self._device.data.t_out,
             )
 
         return self.available
