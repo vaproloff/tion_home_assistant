@@ -18,6 +18,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.util import timedelta, utcnow
 
 from .client import TionClient, TionZoneDevice
 from .const import DOMAIN, TionDeviceType
@@ -40,6 +41,7 @@ async def async_setup_entry(
         ]:
             entities.append(TionTemperatureInSensor(client, device))
             entities.append(TionTemperatureOutSensor(client, device))
+            entities.append(TionFilterReplacementSensor(client, device))
         elif device.type in [
             TionDeviceType.MAGIC_AIR,
             TionDeviceType.MODULE_CO2,
@@ -66,7 +68,6 @@ class TionSensor(SensorEntity, abc.ABC):
         """Initialize sensor device."""
         self._api = client
         self._device = device
-        self._device_data = device
 
         self._attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -363,6 +364,50 @@ class TionTemperatureOutSensor(TionSensor):
                 "%s: fetched data: temperature_out=%s",
                 self.name,
                 self._device.data.t_out,
+            )
+
+        return self.available
+
+
+class TionFilterReplacementSensor(TionSensor):
+    """Tion Breezer filter replacement sensor."""
+
+    def __init__(
+        self,
+        client: TionClient,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize sensor device."""
+        super().__init__(client, device)
+
+        self._attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    @property
+    def unique_id(self):
+        """Return a unique id identifying the entity."""
+        return f"{self._device.guid}_filter_replacement_datetime"
+
+    @property
+    def name(self):
+        """Return the name of the sensor."""
+        return f"{self._device.name} Filter Replacement Datetime"
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return (
+            utcnow() + timedelta(seconds=self._device.data.filter_time_seconds)
+            if self.available
+            else STATE_UNKNOWN
+        )
+
+    async def _load(self, force=False):
+        """Update device data from API."""
+        if await super()._load(force=force):
+            _LOGGER.debug(
+                "%s: fetched data: filter_time_seconds=%s",
+                self.name,
+                self._device.data.filter_time_seconds,
             )
 
         return self.available
