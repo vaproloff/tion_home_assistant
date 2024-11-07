@@ -96,45 +96,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         self, import_config: dict[str, Any]
     ) -> ConfigFlowResult:
         """Attempt to import the existing configuration."""
-
-        # return await self.async_step_user(import_config)
-        errors: dict[str, str] = {}
-        if import_config is not None:
-            self._async_abort_entries_match(
-                {CONF_USERNAME: import_config[CONF_USERNAME]}
-            )
-            sha256_hash = hashlib.new("sha256")
-            sha256_hash.update(import_config[CONF_USERNAME].encode())
-            sha256_hex = sha256_hash.hexdigest()
-
-            try:
-                interval = int(import_config.get(CONF_SCAN_INTERVAL))
-            except ValueError:
-                interval = DEFAULT_SCAN_INTERVAL
-            except TypeError:
-                interval = DEFAULT_SCAN_INTERVAL
-
-            auth_data = await self._get_auth_data(
-                import_config[CONF_USERNAME],
-                import_config[CONF_PASSWORD],
-                interval,
-            )
-
-            if auth_data is None:
-                errors["base"] = "invalid_auth"
-            else:
-                unique_id = f"{sha256_hex}"
-
-                # Checks that the device is actually unique, otherwise abort
-                await self.async_set_unique_id(unique_id)
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title=import_config[CONF_USERNAME],
-                    data={
-                        CONF_USERNAME: import_config[CONF_USERNAME],
-                        CONF_PASSWORD: import_config[CONF_PASSWORD],
-                        CONF_SCAN_INTERVAL: interval,
-                        AUTH_DATA: auth_data,
-                    },
-                )
+        self._async_abort_entries_match(
+            {CONF_USERNAME: import_config.get(CONF_USERNAME)}
+        )
+        return await self.async_step_user(import_config)
