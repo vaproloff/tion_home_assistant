@@ -84,6 +84,12 @@ async def async_setup_entry(
         "set_breezer_max_speed",
     )
 
+    platform.async_register_entity_service(
+        name="reset_filters",
+        schema=None,
+        func="async_reset_filters",
+    )
+
     return True
 
 
@@ -560,6 +566,13 @@ class TionClimate(ClimateEntity):
             )
             self._speed_max_set = new_max_speed
             await self._send_breezer()
+
+    async def async_reset_filters(self, **kwargs):
+        """Reset breezer filter replacement."""
+        _ = kwargs
+        await self._api.send_settings(
+            self._breezer_guid, data={"reset_filter_timer": True}
+        )
 
     async def _load_breezer(self, force=False):
         """Update breezer data from API."""
