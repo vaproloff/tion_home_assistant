@@ -60,3 +60,11 @@ set_breezer_max_speed:
           max: 6
           step: 1
           mode: slider
+
+reset_filters:
+  name: Reset Filters
+  description: Resets breezer filter replacement period. Require some time for replacement period to be updated - please, be patient after service activation.
+  target:
+    entity:
+      integration: tion
+      domain: climate

@@ -1,4 +1,4 @@
-"""Platform for sensor integration."""
+"""Platform for binary sensor integration."""
 
 import abc
 import logging

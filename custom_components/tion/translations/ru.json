@@ -1,36 +1,46 @@
 {
-    "config": {
-        "abort": {
-            "already_configured": "Устройство уже было добавлено"
+  "config": {
+    "step": {
+      "user": {
+        "title": "Новая конфигурация Tion",
+        "description": "Введите данные учётной записи Tion",
+        "data": {
+          "username": "Логин",
+          "password": "Пароль",
+          "scan_interval": "Интервал обновления"
         },
-        "error": {
-            "invalid_auth": "Ошибка аутентификации",
-            "unknown": "Непредвиденная ошибка"
-        },
-        "step": {
-            "user": {
-                "description": "Введите данные учётной записи Tion:",
-                "data": {
-                    "username": "Логин",
-                    "password": "Пароль",
-                    "scan_interval": "Интервал обновления"
-                }
-            }
+        "data_description": {
+          "scan_interval": "Минимальный период обновления данных устройств Tion от API."
         }
+      }
     },
-    "entity": {
-        "climate": {
-            "tion_breezer": {
-                "state_attributes": {
-                    "swing_mode": {
-                        "state": {
-                            "outside": "С улицы",
-                            "inside": "Из комнаты",
-                            "mixed": "Смешанный"
-                        }
-                    }
-                }
-            }
-        }
+    "abort": {
+      "already_configured": "Учётная запись уже была добавлена"
+    },
+    "error": {
+      "invalid_auth": "Ошибка аутентификации",
+      "unknown": "Неизвестная ошибка"
     }
+  },
+  "entity": {
+    "climate": {
+      "tion_breezer": {
+        "state_attributes": {
+          "swing_mode": {
+            "state": {
+              "outside": "С улицы",
+              "inside": "Из комнаты",
+              "mixed": "Смешанный"
+            }
+          }
+        }
+      }
+    }
+  },
+  "services": {
+    "reset_filters": {
+      "name": "Сбросить фильтры",
+      "description": "Сбрасывает период замены фильтров бризера. Обновление периода замены может занять некоторое время - после запуска службы, пожалуйста, ожидайте."
+    }
+  }
 }

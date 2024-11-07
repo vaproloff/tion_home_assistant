@@ -1,0 +1,42 @@
+{
+  "title": "Tion",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add new Tion configuration",
+        "description": "Please enter your Tion account credentials",
+        "data": {
+          "name": "[%key:common::config_flow::data::name%]",
+          "username": "Username",
+          "password": "Password",
+          "scan_interval": "API poll interval"
+        },
+        "data_description": {
+          "scan_interval": "Tion devices data minimum update period."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Account is already configured"
+    },
+    "error": {
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error"
+    }
+  },
+  "entity": {
+    "climate": {
+      "tion_breezer": {
+        "state_attributes": {
+          "swing_mode": {
+            "state": {
+              "outside": "Outside",
+              "inside": "Inside",
+              "mixed": "Mixed"
+            }
+          }
+        }
+      }
+    }
+  }
+}
