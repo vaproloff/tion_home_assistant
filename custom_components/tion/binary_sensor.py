@@ -3,6 +3,7 @@
 import abc
 import logging
 
+from homeassistant.components import persistent_notification
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -98,7 +99,15 @@ class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
         super().__init__(client, device)
 
         self._attr_device_class = BinarySensorDeviceClass.PROBLEM
-        self._attr_is_on = bool(self._device.data.filter_need_replace)
+
+        if new_state := bool(self._device.data.filter_need_replace):
+            persistent_notification.async_create(
+                self.hass,
+                f"{self._device.name}' needs filters replacement.",
+                title="Tion",
+                notification_id="filter_need_replacement",
+            )
+        self._attr_is_on = new_state
 
     @property
     def unique_id(self):
@@ -113,10 +122,26 @@ class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
     async def _load(self, force=False):
         """Update device data from API."""
         if await super()._load(force=force):
-            self._attr_is_on = bool(self._device.data.filter_need_replace)
+            if (
+                new_state := bool(self._device.data.filter_need_replace)
+                and not self._attr_is_on
+            ):
+                persistent_notification.async_create(
+                    self.hass,
+                    f"{self._device.name}' needs filters replacement.",
+                    title="Tion",
+                    notification_id="filter_need_replacement",
+                )
+            else:
+                persistent_notification.async_dismiss(
+                    self.hass,
+                    notification_id="filter_need_replacement",
+                )
+
+            self._attr_is_on = new_state
 
             _LOGGER.debug(
-                "%s: fetched data: temperature=%s",
+                "%s: fetched data: filter_need_replace=%s",
                 self.name,
                 self._device.data.filter_need_replace,
             )
