@@ -24,6 +24,19 @@
       "unknown": "Unexpected error"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "password": "Password",
+          "scan_interval": "API poll interval"
+        },
+        "data_description": {
+          "scan_interval": "Tion devices data minimum update period."
+        }
+      }
+    }
+  },
   "entity": {
     "climate": {
       "tion_breezer": {

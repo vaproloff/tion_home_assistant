@@ -98,8 +98,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up this integration using UI."""
+
     if hass.data.get(DOMAIN) is None:
         hass.data.setdefault(DOMAIN, {})
+
+    if entry.options:
+        entry_data = dict(entry.data)
+        entry_data.update(entry.options)
+        hass.config_entries.async_update_entry(entry, data=entry_data, options={})
 
     async def update_auth_data(**kwargs):
         hass.config_entries.async_update_entry(entry, data=kwargs)
@@ -141,11 +147,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         else:
             _LOGGER.info("Unsupported device type: %s", device.type)
 
-    await hass.async_create_task(
-        hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    )
+    if not entry.update_listeners:
+        entry.add_update_listener(async_update_options)
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
+    """Handle updating entry options."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
