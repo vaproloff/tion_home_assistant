@@ -15,7 +15,6 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .client import TionClient
@@ -70,25 +69,24 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if auth_data is None:
                 errors["base"] = "invalid_auth"
-                raise ConfigEntryAuthFailed
+            else:
+                sha256_hash = hashlib.new("sha256")
+                sha256_hash.update(user_input[CONF_USERNAME].encode())
+                unique_id = f"{sha256_hash.hexdigest()}"
 
-            sha256_hash = hashlib.new("sha256")
-            sha256_hash.update(user_input[CONF_USERNAME].encode())
-            unique_id = f"{sha256_hash.hexdigest()}"
+                # Checks that the device is actually unique, otherwise abort
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
 
-            # Checks that the device is actually unique, otherwise abort
-            await self.async_set_unique_id(unique_id)
-            self._abort_if_unique_id_configured()
-
-            return self.async_create_entry(
-                title=user_input[CONF_USERNAME],
-                data={
-                    CONF_USERNAME: user_input[CONF_USERNAME],
-                    CONF_PASSWORD: user_input[CONF_PASSWORD],
-                    CONF_SCAN_INTERVAL: interval,
-                    AUTH_DATA: auth_data,
-                },
-            )
+                return self.async_create_entry(
+                    title=user_input[CONF_USERNAME],
+                    data={
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        CONF_SCAN_INTERVAL: interval,
+                        AUTH_DATA: auth_data,
+                    },
+                )
 
         return self.async_show_form(
             step_id="user",
