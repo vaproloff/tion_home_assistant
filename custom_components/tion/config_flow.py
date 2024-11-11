@@ -6,9 +6,16 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .client import TionClient
@@ -33,6 +40,12 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         return await api.authorization
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        """Create the options flow."""
+        return TionOptionsFlow(config_entry)
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -41,10 +54,6 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             self._async_abort_entries_match({CONF_USERNAME: user_input[CONF_USERNAME]})
-
-            sha256_hash = hashlib.new("sha256")
-            sha256_hash.update(user_input[CONF_USERNAME].encode())
-            sha256_hex = sha256_hash.hexdigest()
 
             try:
                 interval = int(user_input.get(CONF_SCAN_INTERVAL))
@@ -61,22 +70,25 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if auth_data is None:
                 errors["base"] = "invalid_auth"
-            else:
-                unique_id = f"{sha256_hex}"
+                raise ConfigEntryAuthFailed
 
-                # Checks that the device is actually unique, otherwise abort
-                await self.async_set_unique_id(unique_id)
-                self._abort_if_unique_id_configured()
+            sha256_hash = hashlib.new("sha256")
+            sha256_hash.update(user_input[CONF_USERNAME].encode())
+            unique_id = f"{sha256_hash.hexdigest()}"
 
-                return self.async_create_entry(
-                    title=user_input[CONF_USERNAME],
-                    data={
-                        CONF_USERNAME: user_input[CONF_USERNAME],
-                        CONF_PASSWORD: user_input[CONF_PASSWORD],
-                        CONF_SCAN_INTERVAL: interval,
-                        AUTH_DATA: auth_data,
-                    },
-                )
+            # Checks that the device is actually unique, otherwise abort
+            await self.async_set_unique_id(unique_id)
+            self._abort_if_unique_id_configured()
+
+            return self.async_create_entry(
+                title=user_input[CONF_USERNAME],
+                data={
+                    CONF_USERNAME: user_input[CONF_USERNAME],
+                    CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    CONF_SCAN_INTERVAL: interval,
+                    AUTH_DATA: auth_data,
+                },
+            )
 
         return self.async_show_form(
             step_id="user",
@@ -85,8 +97,8 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_USERNAME, default=""): str,
                     vol.Required(CONF_PASSWORD, default=""): str,
                     vol.Required(
-                        CONF_SCAN_INTERVAL, default=f"{DEFAULT_SCAN_INTERVAL}"
-                    ): str,
+                        CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
+                    ): vol.Coerce(int),
                 }
             ),
             errors=errors,
@@ -96,45 +108,37 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         self, import_config: dict[str, Any]
     ) -> ConfigFlowResult:
         """Attempt to import the existing configuration."""
+        self._async_abort_entries_match(
+            {CONF_USERNAME: import_config.get(CONF_USERNAME)}
+        )
+        return await self.async_step_user(import_config)
 
-        # return await self.async_step_user(import_config)
-        errors: dict[str, str] = {}
-        if import_config is not None:
-            self._async_abort_entries_match(
-                {CONF_USERNAME: import_config[CONF_USERNAME]}
-            )
-            sha256_hash = hashlib.new("sha256")
-            sha256_hash.update(import_config[CONF_USERNAME].encode())
-            sha256_hex = sha256_hash.hexdigest()
 
-            try:
-                interval = int(import_config.get(CONF_SCAN_INTERVAL))
-            except ValueError:
-                interval = DEFAULT_SCAN_INTERVAL
-            except TypeError:
-                interval = DEFAULT_SCAN_INTERVAL
+class TionOptionsFlow(OptionsFlow):
+    """Tion options flow handler."""
 
-            auth_data = await self._get_auth_data(
-                import_config[CONF_USERNAME],
-                import_config[CONF_PASSWORD],
-                interval,
-            )
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        """Initialize Tion options flow."""
+        self._entry_data = dict(config_entry.data)
 
-            if auth_data is None:
-                errors["base"] = "invalid_auth"
-            else:
-                unique_id = f"{sha256_hex}"
+    async def async_step_init(self, user_input=None):
+        """Manage the options."""
 
-                # Checks that the device is actually unique, otherwise abort
-                await self.async_set_unique_id(unique_id)
-                self._abort_if_unique_id_configured()
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
 
-                return self.async_create_entry(
-                    title=import_config[CONF_USERNAME],
-                    data={
-                        CONF_USERNAME: import_config[CONF_USERNAME],
-                        CONF_PASSWORD: import_config[CONF_PASSWORD],
-                        CONF_SCAN_INTERVAL: interval,
-                        AUTH_DATA: auth_data,
-                    },
-                )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PASSWORD,
+                        default=self.config_entry.data.get(CONF_PASSWORD),
+                    ): str,
+                    vol.Required(
+                        CONF_SCAN_INTERVAL,
+                        default=self.config_entry.data.get(CONF_SCAN_INTERVAL),
+                    ): vol.Coerce(int),
+                }
+            ),
+        )

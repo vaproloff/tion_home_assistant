@@ -22,6 +22,19 @@
       "unknown": "Неизвестная ошибка"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "password": "Пароль",
+          "scan_interval": "Интервал обновления"
+        },
+        "data_description": {
+          "scan_interval": "Минимальный период обновления данных устройств Tion от API."
+        }
+      }
+    }
+  },
   "entity": {
     "climate": {
       "tion_breezer": {
