@@ -12,12 +12,6 @@
         }
       }
     },
-    "reauth_confirm": {
-      "data": {
-        "username": "Username",
-        "password": "Password"
-      }
-    },
     "abort": {
       "already_configured": "Account is already configured"
     },

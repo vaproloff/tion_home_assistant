@@ -10,12 +10,6 @@
         }
       }
     },
-    "reauth_confirm": {
-      "data": {
-        "username": "Логин",
-        "password": "Пароль"
-      }
-    },
     "abort": {
       "already_configured": "Учётная запись уже была добавлена"
     },
