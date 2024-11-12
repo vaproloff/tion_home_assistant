@@ -1,13 +1,12 @@
 """Constant variables used by integration."""
 
-from datetime import timedelta
 from enum import StrEnum
 
 from homeassistant.const import Platform
 
 DOMAIN = "tion"
 DEFAULT_AUTH_FILENAME = "tion_auth"
-DEFAULT_SCAN_INTERVAL = timedelta(minutes=1)
+DEFAULT_SCAN_INTERVAL = 60
 AUTH_DATA = "auth"
 MANUFACTURER = "Tion"
 PLATFORMS = [
