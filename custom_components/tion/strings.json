@@ -16,6 +16,15 @@
         }
       }
     },
+    "reauth_confirm": {
+      "title": "Reauthentification required",
+      "description": "Please re-enter your Tion account credentials",
+      "data": {
+        "name": "[%key:common::config_flow::data::name%]",
+        "username": "Username",
+        "password": "Password"
+      }
+    },
     "abort": {
       "already_configured": "Account is already configured"
     },

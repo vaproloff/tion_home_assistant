@@ -154,7 +154,7 @@ class TionClient:
             "Accept": "application/json, text/plain, */*",
             "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "ru-RU",
-            "Authorization": await self.authorization,
+            "Authorization": self._authorization,
             "Connection": "Keep-Alive",
             "Content-Type": "application/json",
             "Host": "api2.magicair.tion.ru",
@@ -170,9 +170,10 @@ class TionClient:
             if await self._get_authorization():
                 return self._authorization
 
-            return None
+        elif await self._get_data():
+            return self._authorization
 
-        return self._authorization
+        return None
 
     def add_update_listener(self, coro):
         """Add entry data update listener function."""
@@ -214,42 +215,41 @@ class TionClient:
         )
         return False
 
-    async def get_location_data(self, force=False) -> bool:
-        """Get locations data from Tion API."""
+    async def _get_data(self):
+        response = await self._session.get(
+            url=f"{self._API_ENDPOINT}{self._LOCATION_URL}",
+            headers=await self._headers,
+            timeout=10,
+        )
 
-        async def get_data():
-            response = await self._session.get(
-                url=f"{self._API_ENDPOINT}{self._LOCATION_URL}",
-                headers=await self._headers,
-                timeout=10,
+        if response.status == 200:
+            self._locations = [
+                TionLocation(location) for location in await response.json()
+            ]
+            self._last_update = time()
+
+            _LOGGER.debug(
+                "TionClient: location data has been updated (%s)", self._last_update
+            )
+            return True
+
+        if response.status == 401:
+            _LOGGER.info("TionClient: need to get new authorization")
+            if await self._get_authorization():
+                return await self._get_data()
+
+            _LOGGER.error("TionClient: authorization failed!")
+        else:
+            _LOGGER.error(
+                "TionClient: response while getting location data: status code: %s, content:\n%s",
+                response.status,
+                await response.json(),
             )
 
-            if response.status == 200:
-                self._locations = [
-                    TionLocation(location) for location in await response.json()
-                ]
-                self._last_update = time()
+        return False
 
-                _LOGGER.debug(
-                    "TionClient: location data has been updated (%s)", self._last_update
-                )
-                return True
-
-            if response.status == 401:
-                _LOGGER.info("TionClient: need to get new authorization")
-                if await self._get_authorization():
-                    return await get_data()
-
-                _LOGGER.error("TionClient: authorization failed!")
-            else:
-                _LOGGER.error(
-                    "TionClient: response while getting location data: status code: %s, content:\n%s",
-                    response.status,
-                    await response.json(),
-                )
-
-            return False
-
+    async def get_location_data(self, force=False) -> bool:
+        """Get locations data from Tion API."""
         async with self._temp_lock:
             if not force and (time() - self._last_update) < self._min_update_interval:
                 _LOGGER.debug(
@@ -257,7 +257,7 @@ class TionClient:
                 )
                 return self._locations is not None
 
-            return await get_data()
+            return await self._get_data()
 
     async def get_zone(self, guid: str, force=False) -> TionZone | None:
         """Get zone data by guid from Tion API."""
