@@ -13,7 +13,6 @@
       }
     },
     "reauth_confirm": {
-      "description": "Please re-enter your Tion account credentials",
       "data": {
         "username": "Username",
         "password": "Password"
