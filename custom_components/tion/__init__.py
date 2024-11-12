@@ -12,6 +12,7 @@ from homeassistant.const import (
     CONF_USERNAME,
 )
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 import homeassistant.helpers.config_validation as cv
@@ -39,7 +40,7 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Required(CONF_PASSWORD): cv.string,
                 vol.Optional(
                     CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
-                ): cv.time_period,
+                ): cv.positive_timedelta,
                 vol.Optional(CONF_FILE_PATH, default=DEFAULT_AUTH_FILENAME): cv.string,
             }
         )
@@ -102,11 +103,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     if hass.data.get(DOMAIN) is None:
         hass.data.setdefault(DOMAIN, {})
 
-    if entry.options:
-        entry_data = dict(entry.data)
-        entry_data.update(entry.options)
-        hass.config_entries.async_update_entry(entry, data=entry_data, options={})
-
     async def update_auth_data(**kwargs):
         hass.config_entries.async_update_entry(entry, data=kwargs)
 
@@ -115,13 +111,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         session,
         username=entry.data.get(CONF_USERNAME),
         password=entry.data.get(CONF_PASSWORD),
-        min_update_interval_sec=entry.data.get(CONF_SCAN_INTERVAL),
+        min_update_interval_sec=entry.options.get(
+            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+        ),
         auth=entry.data.get(AUTH_DATA),
     )
     client.add_update_listener(update_auth_data)
 
-    assert await client.authorization, "Couldn't get authorisation data!"
-    _LOGGER.info("Api initialized with authorization %s", await client.authorization)
+    auth_data = await client.authorization
+    if not auth_data:
+        raise ConfigEntryAuthFailed("Couldn't get authorisation data.")
+
+    _LOGGER.info("Api initialized with authorization %s", auth_data)
 
     hass.data[DOMAIN][entry.entry_id] = client
 

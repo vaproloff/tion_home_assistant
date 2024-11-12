@@ -6,11 +6,7 @@
         "description": "Введите данные учётной записи Tion",
         "data": {
           "username": "Логин",
-          "password": "Пароль",
-          "scan_interval": "Интервал обновления"
-        },
-        "data_description": {
-          "scan_interval": "Минимальный период обновления данных устройств Tion от API."
+          "password": "Пароль"
         }
       }
     },
@@ -26,7 +22,6 @@
     "step": {
       "init": {
         "data": {
-          "password": "Пароль",
           "scan_interval": "Интервал обновления"
         },
         "data_description": {

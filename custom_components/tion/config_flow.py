@@ -1,5 +1,6 @@
 """Adds config flow (UI flow) for Tion component."""
 
+from collections.abc import Mapping
 import hashlib
 import logging
 from typing import Any
@@ -54,17 +55,10 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._async_abort_entries_match({CONF_USERNAME: user_input[CONF_USERNAME]})
 
-            try:
-                interval = int(user_input.get(CONF_SCAN_INTERVAL))
-            except ValueError:
-                interval = DEFAULT_SCAN_INTERVAL
-            except TypeError:
-                interval = DEFAULT_SCAN_INTERVAL
-
             auth_data = await self._get_auth_data(
                 user_input[CONF_USERNAME],
                 user_input[CONF_PASSWORD],
-                interval,
+                DEFAULT_SCAN_INTERVAL,
             )
 
             if auth_data is None:
@@ -74,7 +68,6 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
                 sha256_hash.update(user_input[CONF_USERNAME].encode())
                 unique_id = f"{sha256_hash.hexdigest()}"
 
-                # Checks that the device is actually unique, otherwise abort
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
@@ -83,7 +76,6 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_USERNAME: user_input[CONF_USERNAME],
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
-                        CONF_SCAN_INTERVAL: interval,
                         AUTH_DATA: auth_data,
                     },
                 )
@@ -94,9 +86,6 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_USERNAME, default=""): str,
                     vol.Required(CONF_PASSWORD, default=""): str,
-                    vol.Required(
-                        CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
-                    ): vol.Coerce(int),
                 }
             ),
             errors=errors,
@@ -110,6 +99,47 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             {CONF_USERNAME: import_config.get(CONF_USERNAME)}
         )
         return await self.async_step_user(import_config)
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Perform reauth upon an API authentication error."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Dialog that informs the user that reauth is required."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            auth_data = await self._get_auth_data(
+                user_input[CONF_USERNAME],
+                user_input[CONF_PASSWORD],
+                DEFAULT_SCAN_INTERVAL,
+            )
+
+            if auth_data is None:
+                errors["base"] = "invalid_auth"
+            else:
+                return self.async_create_entry(
+                    title=user_input[CONF_USERNAME],
+                    data={
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        AUTH_DATA: auth_data,
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_USERNAME, default=""): str,
+                    vol.Required(CONF_PASSWORD, default=""): str,
+                }
+            ),
+            errors=errors,
+        )
 
 
 class TionOptionsFlow(OptionsFlow):
@@ -130,12 +160,8 @@ class TionOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_PASSWORD,
-                        default=self.config_entry.data.get(CONF_PASSWORD),
-                    ): str,
-                    vol.Required(
                         CONF_SCAN_INTERVAL,
-                        default=self.config_entry.data.get(CONF_SCAN_INTERVAL),
+                        default=self.config_entry.options.get(CONF_SCAN_INTERVAL),
                     ): vol.Coerce(int),
                 }
             ),

@@ -8,11 +8,7 @@
         "data": {
           "name": "[%key:common::config_flow::data::name%]",
           "username": "Username",
-          "password": "Password",
-          "scan_interval": "API poll interval"
-        },
-        "data_description": {
-          "scan_interval": "Tion devices data minimum update period."
+          "password": "Password"
         }
       }
     },
@@ -28,7 +24,6 @@
     "step": {
       "init": {
         "data": {
-          "password": "Password",
           "scan_interval": "API poll interval"
         },
         "data_description": {
