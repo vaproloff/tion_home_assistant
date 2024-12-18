@@ -25,7 +25,7 @@ async def async_setup_entry(
     client: TionClient = hass.data[DOMAIN][entry.entry_id]
 
     entities = [
-        TionFilterNeedReplacementBinarySensor(client, device)
+        TionFilterNeedReplacementBinarySensor(hass, client, device)
         for device in await client.get_devices()
         if device.type in [TionDeviceType.BREEZER_3S, TionDeviceType.BREEZER_4S]
     ]
@@ -39,10 +39,12 @@ class TionBinarySensor(BinarySensorEntity, abc.ABC):
 
     def __init__(
         self,
+        hass: HomeAssistant | None,
         client: TionClient,
         device: TionZoneDevice,
     ) -> None:
         """Initialize binary sensor device."""
+        self.hass = hass
         self._api = client
         self._device = device
 
@@ -92,22 +94,26 @@ class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
 
     def __init__(
         self,
+        hass: HomeAssistant | None,
         client: TionClient,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(client, device)
+        super().__init__(hass, client, device)
 
         self._attr_device_class = BinarySensorDeviceClass.PROBLEM
 
-        if new_state := bool(self._device.data.filter_need_replace):
+        _LOGGER.debug("hass: %s", self.hass)
+
+        state = bool(self._device.data.filter_need_replace)
+        if state:
             persistent_notification.async_create(
                 self.hass,
                 f"{self._device.name}' needs filters replacement.",
                 title="Tion",
                 notification_id="filter_need_replacement",
             )
-        self._attr_is_on = new_state
+        self._attr_is_on = state
 
     @property
     def unique_id(self):
@@ -122,10 +128,9 @@ class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
     async def _load(self, force=False):
         """Update device data from API."""
         if await super()._load(force=force):
-            if (
-                new_state := bool(self._device.data.filter_need_replace)
-                and not self._attr_is_on
-            ):
+            new_state = bool(self._device.data.filter_need_replace)
+
+            if new_state and not self._attr_is_on:
                 persistent_notification.async_create(
                     self.hass,
                     f"{self._device.name}' needs filters replacement.",
