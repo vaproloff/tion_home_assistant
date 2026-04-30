@@ -5,7 +5,6 @@ from enum import StrEnum
 from homeassistant.const import Platform
 
 DOMAIN = "tion"
-DEFAULT_AUTH_FILENAME = "tion_auth"
 DEFAULT_SCAN_INTERVAL = 60
 AUTH_DATA = "auth"
 MANUFACTURER = "Tion"
@@ -16,11 +15,6 @@ PLATFORMS = [
     Platform.SENSOR,
     Platform.SWITCH,
 ]
-
-SRVC_CONF_TARGET_CO2 = "target_co2"
-SRVC_CONF_MIN_SPEED = "min_speed"
-SRVC_CONF_MAX_SPEED = "max_speed"
-
 
 class TionDeviceType(StrEnum):
     """Component supported device types."""

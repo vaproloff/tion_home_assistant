@@ -9,11 +9,13 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import TionClient, TionZoneDevice
+from .client import TionZoneDevice
 from .const import DOMAIN, TionDeviceType
+from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,30 +24,33 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> bool:
     """Set up sensor Tion entities."""
-    client: TionClient = hass.data[DOMAIN][entry.entry_id]
+    coordinator: TionDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     entities = [
-        TionFilterNeedReplacementBinarySensor(hass, client, device)
-        for device in await client.get_devices()
-        if device.type in [TionDeviceType.BREEZER_3S, TionDeviceType.BREEZER_4S]
+        TionFilterNeedReplacementBinarySensor(hass, coordinator, device)
+        for device in coordinator.get_devices()
+        if device.guid
+        and device.type in [TionDeviceType.BREEZER_3S, TionDeviceType.BREEZER_4S]
     ]
 
     async_add_entities(entities)
     return True
 
 
-class TionBinarySensor(BinarySensorEntity, abc.ABC):
+class TionBinarySensor(
+    CoordinatorEntity[TionDataUpdateCoordinator], BinarySensorEntity, abc.ABC
+):
     """Abstract Tion binary sensor."""
 
     def __init__(
         self,
         hass: HomeAssistant | None,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize binary sensor device."""
+        super().__init__(coordinator)
         self.hass = hass
-        self._api = client
         self._device = device
 
         self._attr_device_info = DeviceInfo(
@@ -55,7 +60,12 @@ class TionBinarySensor(BinarySensorEntity, abc.ABC):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._device.is_online and self._device.valid
+        return (
+            super().available
+            and self._device is not None
+            and self._device.is_online
+            and self._device.valid
+        )
 
     @property
     @abc.abstractmethod
@@ -67,22 +77,20 @@ class TionBinarySensor(BinarySensorEntity, abc.ABC):
     def name(self):
         """Return the name of the binary sensor."""
 
-    async def async_added_to_hass(self):
-        """Run when entity about to be added."""
-        await self._load()
-        await super().async_added_to_hass()
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated device data."""
 
-    async def async_update(self):
-        """Fetch new state data for the binary sensor.
-
-        This is the only method that should fetch new data for Home Assistant.
-        """
-        await self._load()
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if device_data := self.coordinator.get_device(self._device.guid):
+            self._device = device_data
+        self._handle_device_update()
+        super()._handle_coordinator_update()
 
     async def _load(self, force=False) -> bool:
-        if device_data := await self._api.get_device(
-            guid=self._device.guid, force=force
-        ):
+        if device_data := self.coordinator.get_device(self._device.guid):
             self._device = device_data
             return True
 
@@ -95,25 +103,20 @@ class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
     def __init__(
         self,
         hass: HomeAssistant | None,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(hass, client, device)
+        super().__init__(hass, coordinator, device)
 
         self._attr_device_class = BinarySensorDeviceClass.PROBLEM
+        self._attr_is_on = bool(self._device.data.filter_need_replace)
+        self._notification_id = f"tion_filter_need_replacement_{self._device.guid}"
 
-        _LOGGER.debug("hass: %s", self.hass)
-
-        state = bool(self._device.data.filter_need_replace)
-        if state:
-            persistent_notification.async_create(
-                self.hass,
-                f"{self._device.name}' needs filters replacement.",
-                title="Tion",
-                notification_id="filter_need_replacement",
-            )
-        self._attr_is_on = state
+    async def async_added_to_hass(self):
+        """Run when entity about to be added."""
+        await super().async_added_to_hass()
+        self._sync_filter_notification(None, self._attr_is_on)
 
     @property
     def unique_id(self):
@@ -125,30 +128,34 @@ class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
         """Return the name of the binary sensor."""
         return f"{self._device.name} Filter Need Replacement"
 
-    async def _load(self, force=False):
-        """Update device data from API."""
-        if await super()._load(force=force):
-            new_state = bool(self._device.data.filter_need_replace)
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated filter replacement state."""
+        old_state = self._attr_is_on
+        new_state = bool(self._device.data.filter_need_replace)
+        self._sync_filter_notification(old_state, new_state)
+        self._attr_is_on = new_state
 
-            if new_state and not self._attr_is_on:
-                persistent_notification.async_create(
-                    self.hass,
-                    f"{self._device.name}' needs filters replacement.",
-                    title="Tion",
-                    notification_id="filter_need_replacement",
-                )
-            else:
-                persistent_notification.async_dismiss(
-                    self.hass,
-                    notification_id="filter_need_replacement",
-                )
+        _LOGGER.debug(
+            "%s: fetched data: filter_need_replace=%s",
+            self.name,
+            self._device.data.filter_need_replace,
+        )
 
-            self._attr_is_on = new_state
-
-            _LOGGER.debug(
-                "%s: fetched data: filter_need_replace=%s",
-                self.name,
-                self._device.data.filter_need_replace,
+    @callback
+    def _sync_filter_notification(
+        self, old_state: bool | None, new_state: bool | None
+    ) -> None:
+        """Create or dismiss the filter replacement notification."""
+        if new_state and old_state is not True:
+            persistent_notification.async_create(
+                self.hass,
+                f"{self._device.name} needs filters replacement.",
+                title="Tion",
+                notification_id=self._notification_id,
             )
-
-        return self.available
+        elif old_state is True and not new_state:
+            persistent_notification.async_dismiss(
+                self.hass,
+                notification_id=self._notification_id,
+            )

@@ -2,14 +2,18 @@
 
 import abc
 import logging
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import TionClient, TionZoneDevice
+from .client import TionError, TionZoneDevice
 from .const import DOMAIN, Heater, TionDeviceType
+from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -18,39 +22,42 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> bool:
     """Set up switch Tion entities."""
-    client: TionClient = hass.data[DOMAIN][entry.entry_id]
+    coordinator: TionDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     entities = []
-    devices = await client.get_devices()
+    devices = coordinator.get_devices()
     for device in devices:
+        if not device.guid:
+            continue
+
         if device.type in [
             TionDeviceType.BREEZER_3S,
             TionDeviceType.BREEZER_4S,
         ]:
-            entities.append(TionBacklightSwitch(client, device))
-            entities.append(TionBreezerSoundSwitch(client, device))
+            entities.append(TionBacklightSwitch(coordinator, device))
+            entities.append(TionBreezerSoundSwitch(coordinator, device))
             if device.data.heater_installed or device.data.heater_type is not None:
-                entities.append(TionBreezerHeaterSwitch(client, device))
+                entities.append(TionBreezerHeaterSwitch(coordinator, device))
         elif device.type in [
             TionDeviceType.MAGIC_AIR,
             TionDeviceType.MODULE_CO2,
         ]:
-            entities.append(TionBacklightSwitch(client, device))
+            entities.append(TionBacklightSwitch(coordinator, device))
 
     async_add_entities(entities)
     return True
 
 
-class TionSwitch(SwitchEntity, abc.ABC):
+class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc.ABC):
     """Abstract Tion switch."""
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize switch device."""
-        self._api = client
+        super().__init__(coordinator)
         self._device = device
 
         self._attr_device_info = DeviceInfo(
@@ -62,7 +69,12 @@ class TionSwitch(SwitchEntity, abc.ABC):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._device.is_online and self._device.valid
+        return (
+            super().available
+            and self._device is not None
+            and self._device.is_online
+            and self._device.valid
+        )
 
     @property
     @abc.abstractmethod
@@ -79,18 +91,6 @@ class TionSwitch(SwitchEntity, abc.ABC):
         """Return True if entity is on."""
         return self._is_on
 
-    async def async_added_to_hass(self):
-        """Run when entity about to be added."""
-        await self._load()
-        await super().async_added_to_hass()
-
-    async def async_update(self) -> None:
-        """Fetch new state data for the sensor.
-
-        This is the only method that should fetch new data for Home Assistant.
-        """
-        await self._load()
-
     async def async_turn_on(self) -> None:
         """Turn on Tion switch."""
         await self._load()
@@ -104,13 +104,45 @@ class TionSwitch(SwitchEntity, abc.ABC):
         await self._send()
 
     async def _load(self, force=False) -> bool:
-        if device_data := await self._api.get_device(
-            guid=self._device.guid, force=force
-        ):
+        if device_data := self.coordinator.get_device(self._device.guid):
             self._device = device_data
             return True
 
         return False
+
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated device data."""
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if device_data := self.coordinator.get_device(self._device.guid):
+            self._device = device_data
+        self._handle_device_update()
+        super()._handle_coordinator_update()
+
+    async def _async_send_settings(self, data: dict[str, Any]) -> None:
+        """Send settings and refresh coordinator data."""
+        try:
+            await self.coordinator.client.send_settings(
+                guid=self._device.guid, data=data
+            )
+        except TionError as err:
+            raise HomeAssistantError(
+                f"Unable to update {self.name} settings: {err}"
+            ) from err
+
+        await self.coordinator.async_request_refresh()
+
+    async def _async_send_breezer(self, **kwargs) -> None:
+        """Send breezer data and refresh coordinator data."""
+        try:
+            await self.coordinator.client.send_breezer(**kwargs)
+        except TionError as err:
+            raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
+
+        await self.coordinator.async_request_refresh()
 
     @abc.abstractmethod
     async def _send(self) -> None:
@@ -122,11 +154,11 @@ class TionBacklightSwitch(TionSwitch):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize switch device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._is_on = bool(device.data.backlight)
 
@@ -148,15 +180,19 @@ class TionBacklightSwitch(TionSwitch):
     async def _load(self, force=False) -> bool:
         """Update device data from API."""
         if await super()._load(force=force):
-            self._is_on = bool(self._device.data.backlight)
-
-            _LOGGER.debug(
-                "%s: fetched settings data: backlight=%s",
-                self.name,
-                self.is_on,
-            )
+            self._handle_device_update()
 
         return self.available
+
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated backlight state."""
+        self._is_on = bool(self._device.data.backlight)
+        _LOGGER.debug(
+            "%s: fetched settings data: backlight=%s",
+            self.name,
+            self.is_on,
+        )
 
     async def _send(self) -> None:
         """Send new switch data to API."""
@@ -170,7 +206,7 @@ class TionBacklightSwitch(TionSwitch):
             self.name,
             self._is_on,
         )
-        await self._api.send_settings(guid=self._device.guid, data=data)
+        await self._async_send_settings(data)
 
 
 class TionBreezerSoundSwitch(TionSwitch):
@@ -178,11 +214,11 @@ class TionBreezerSoundSwitch(TionSwitch):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize switch device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._is_on = bool(device.data.sound_is_on)
 
@@ -204,15 +240,19 @@ class TionBreezerSoundSwitch(TionSwitch):
     async def _load(self, force=False) -> bool:
         """Update device data from API."""
         if await super()._load(force=force):
-            self._is_on = bool(self._device.data.sound_is_on)
-
-            _LOGGER.debug(
-                "%s: fetched settings data: sound=%s",
-                self.name,
-                self.is_on,
-            )
+            self._handle_device_update()
 
         return self.available
+
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated sound state."""
+        self._is_on = bool(self._device.data.sound_is_on)
+        _LOGGER.debug(
+            "%s: fetched settings data: sound=%s",
+            self.name,
+            self.is_on,
+        )
 
     async def _send(self) -> None:
         """Send new switch data to API."""
@@ -226,7 +266,7 @@ class TionBreezerSoundSwitch(TionSwitch):
             self.name,
             self._is_on,
         )
-        await self._api.send_settings(guid=self._device.guid, data=data)
+        await self._async_send_settings(data)
 
 
 class TionBreezerHeaterSwitch(TionSwitch):
@@ -234,11 +274,11 @@ class TionBreezerHeaterSwitch(TionSwitch):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize switch device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._is_on = self._heater_enabled
 
@@ -268,16 +308,20 @@ class TionBreezerHeaterSwitch(TionSwitch):
     async def _load(self, force=False) -> bool:
         """Update device data from API."""
         if await super()._load(force=force):
-            self._is_on = self._heater_enabled
-
-            _LOGGER.debug(
-                "%s: fetched settings data: heater_mode=%s, heater_enabled=%s",
-                self.name,
-                self._device.data.heater_mode,
-                self._device.data.heater_enabled,
-            )
+            self._handle_device_update()
 
         return self.available
+
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated heater state."""
+        self._is_on = self._heater_enabled
+        _LOGGER.debug(
+            "%s: fetched settings data: heater_mode=%s, heater_enabled=%s",
+            self.name,
+            self._device.data.heater_mode,
+            self._device.data.heater_enabled,
+        )
 
     async def _send(self) -> None:
         """Send new switch data to API."""
@@ -286,7 +330,7 @@ class TionBreezerHeaterSwitch(TionSwitch):
 
         try:
             breezer_t_set = int(self._device.data.t_set)
-        except ValueError as e:
+        except (TypeError, ValueError) as e:
             _LOGGER.warning(
                 "%s: unable to convert breezer temperature set value to int: %s. Error: %s",
                 self.name,
@@ -297,7 +341,7 @@ class TionBreezerHeaterSwitch(TionSwitch):
 
         try:
             breezer_speed = int(self._device.data.speed)
-        except ValueError as e:
+        except (TypeError, ValueError) as e:
             _LOGGER.warning(
                 "%s: unable to convert breezer speed value to int: %s. Error: %s",
                 self.name,
@@ -324,7 +368,7 @@ class TionBreezerHeaterSwitch(TionSwitch):
             self._device.data.gate,
         )
 
-        await self._api.send_breezer(
+        await self._async_send_breezer(
             guid=self._device.guid,
             is_on=self._device.data.is_on,
             t_set=breezer_t_set,

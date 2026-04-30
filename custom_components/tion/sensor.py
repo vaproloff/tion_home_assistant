@@ -13,15 +13,16 @@ from homeassistant.const import (
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     CONCENTRATION_PARTS_PER_MILLION,
     PERCENTAGE,
-    STATE_UNKNOWN,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import timedelta, utcnow
 
-from .client import TionClient, TionZoneDevice
+from .client import TionZoneDevice
 from .const import DOMAIN, TionDeviceType
+from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,46 +31,49 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> bool:
     """Set up sensor Tion entities."""
-    client: TionClient = hass.data[DOMAIN][entry.entry_id]
+    coordinator: TionDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     entities = []
-    devices = await client.get_devices()
+    devices = coordinator.get_devices()
     for device in devices:
+        if not device.guid:
+            continue
+
         if device.type in [
             TionDeviceType.BREEZER_3S,
             TionDeviceType.BREEZER_4S,
         ]:
-            entities.append(TionTemperatureInSensor(client, device))
-            entities.append(TionTemperatureOutSensor(client, device))
-            entities.append(TionFilterReplacementSensor(client, device))
+            entities.append(TionTemperatureInSensor(coordinator, device))
+            entities.append(TionTemperatureOutSensor(coordinator, device))
+            entities.append(TionFilterReplacementSensor(coordinator, device))
         elif device.type in [
             TionDeviceType.MAGIC_AIR,
             TionDeviceType.MODULE_CO2,
         ]:
-            entities.append(TionTemperatureSensor(client, device))
-            entities.append(TionHumiditySensor(client, device))
-            entities.append(TionCO2Sensor(client, device))
+            entities.append(TionTemperatureSensor(coordinator, device))
+            entities.append(TionHumiditySensor(coordinator, device))
+            entities.append(TionCO2Sensor(coordinator, device))
 
             if device.data.pm25 != "NaN":
-                entities.append(TionPM25Sensor(client, device))
+                entities.append(TionPM25Sensor(coordinator, device))
 
     async_add_entities(entities)
     return True
 
 
-class TionSensor(SensorEntity, abc.ABC):
+class TionSensor(
+    CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc.ABC
+):
     """Abstract Tion sensor."""
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        self._api = client
+        super().__init__(coordinator)
         self._device = device
-
-        self._attr_state_class = SensorStateClass.MEASUREMENT
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._device.guid)},
@@ -78,7 +82,12 @@ class TionSensor(SensorEntity, abc.ABC):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._device.is_online and self._device.valid
+        return (
+            super().available
+            and self._device is not None
+            and self._device.is_online
+            and self._device.valid
+        )
 
     @property
     @abc.abstractmethod
@@ -92,25 +101,18 @@ class TionSensor(SensorEntity, abc.ABC):
 
     @property
     @abc.abstractmethod
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
 
-    async def async_added_to_hass(self):
-        """Run when entity about to be added."""
-        await self._load()
-        await super().async_added_to_hass()
-
-    async def async_update(self):
-        """Fetch new state data for the sensor.
-
-        This is the only method that should fetch new data for Home Assistant.
-        """
-        await self._load()
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if device_data := self.coordinator.get_device(self._device.guid):
+            self._device = device_data
+        super()._handle_coordinator_update()
 
     async def _load(self, force=False) -> bool:
-        if device_data := await self._api.get_device(
-            guid=self._device.guid, force=force
-        ):
+        if device_data := self.coordinator.get_device(self._device.guid):
             self._device = device_data
             return True
 
@@ -122,13 +124,14 @@ class TionTemperatureSensor(TionSensor):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
         self._attr_suggested_display_precision = 1
 
@@ -143,9 +146,9 @@ class TionTemperatureSensor(TionSensor):
         return f"{self._device.name} Temperature"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
-        return self._device.data.temperature if self.available else STATE_UNKNOWN
+        return self._device.data.temperature if self.available else None
 
     async def _load(self, force=False):
         """Update device data from API."""
@@ -164,13 +167,14 @@ class TionHumiditySensor(TionSensor):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_device_class = SensorDeviceClass.HUMIDITY
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = PERCENTAGE
         self._attr_suggested_display_precision = 0
 
@@ -185,9 +189,9 @@ class TionHumiditySensor(TionSensor):
         return f"{self._device.name} Humidity"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
-        return self._device.data.humidity if self.available else STATE_UNKNOWN
+        return self._device.data.humidity if self.available else None
 
     async def _load(self, force=False):
         """Update device data from API."""
@@ -206,13 +210,14 @@ class TionCO2Sensor(TionSensor):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_device_class = SensorDeviceClass.CO2
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = CONCENTRATION_PARTS_PER_MILLION
         self._attr_suggested_display_precision = 0
 
@@ -227,9 +232,9 @@ class TionCO2Sensor(TionSensor):
         return f"{self._device.name} CO2"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
-        return self._device.data.co2 if self.available else STATE_UNKNOWN
+        return self._device.data.co2 if self.available else None
 
     async def _load(self, force=False):
         """Update device data from API."""
@@ -248,13 +253,14 @@ class TionPM25Sensor(TionSensor):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_device_class = SensorDeviceClass.PM25
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
         self._attr_suggested_display_precision = 0
 
@@ -269,9 +275,9 @@ class TionPM25Sensor(TionSensor):
         return f"{self._device.name} PM25"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
-        return self._device.data.pm25 if self.available else STATE_UNKNOWN
+        return self._device.data.pm25 if self.available else None
 
     async def _load(self, force=False):
         """Update device data from API."""
@@ -290,13 +296,14 @@ class TionTemperatureInSensor(TionSensor):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
         self._attr_suggested_display_precision = 0
 
@@ -311,9 +318,9 @@ class TionTemperatureInSensor(TionSensor):
         return f"{self._device.name} Inflow Temperature"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
-        return self._device.data.t_in if self.available else STATE_UNKNOWN
+        return self._device.data.t_in if self.available else None
 
     async def _load(self, force=False):
         """Update device data from API."""
@@ -332,13 +339,14 @@ class TionTemperatureOutSensor(TionSensor):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_device_class = SensorDeviceClass.TEMPERATURE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
         self._attr_suggested_display_precision = 0
 
@@ -353,9 +361,9 @@ class TionTemperatureOutSensor(TionSensor):
         return f"{self._device.name} Outflow Temperature"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
-        return self._device.data.t_out if self.available else STATE_UNKNOWN
+        return self._device.data.t_out if self.available else None
 
     async def _load(self, force=False):
         """Update device data from API."""
@@ -374,11 +382,11 @@ class TionFilterReplacementSensor(TionSensor):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize sensor device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_device_class = SensorDeviceClass.TIMESTAMP
 
@@ -393,12 +401,12 @@ class TionFilterReplacementSensor(TionSensor):
         return f"{self._device.name} Filter Replacement Datetime"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
         return (
             utcnow() + timedelta(seconds=self._device.data.filter_time_seconds)
             if self.available
-            else STATE_UNKNOWN
+            else None
         )
 
     async def _load(self, force=False):

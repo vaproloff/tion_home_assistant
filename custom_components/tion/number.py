@@ -2,15 +2,18 @@
 
 import abc
 import logging
+from typing import Any
 
 from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNKNOWN
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import TionClient, TionZone, TionZoneDevice
+from .client import TionError, TionZone, TionZoneDevice
 from .const import DOMAIN, TionDeviceType
+from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -19,23 +22,23 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> bool:
     """Set up switch Tion entities."""
-    client: TionClient = hass.data[DOMAIN][entry.entry_id]
+    coordinator: TionDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     entities = []
-    devices = await client.get_devices()
+    devices = coordinator.get_devices()
     for device in devices:
-        if device.valid:
+        if device.guid and device.valid:
             if device.type in [
                 TionDeviceType.BREEZER_3S,
                 TionDeviceType.BREEZER_4S,
             ]:
-                entities.append(TionMinSpeed(client, device))
-                entities.append(TionMaxSpeed(client, device))
+                entities.append(TionMinSpeed(coordinator, device))
+                entities.append(TionMaxSpeed(coordinator, device))
             elif device.type in [
                 TionDeviceType.MAGIC_AIR,
                 TionDeviceType.MODULE_CO2,
             ]:
-                entities.append(TionTargetCO2(client, device))
+                entities.append(TionTargetCO2(coordinator, device))
 
         else:
             _LOGGER.info("Skipped device %s (not valid)", device.name)
@@ -44,16 +47,16 @@ async def async_setup_entry(
     return True
 
 
-class TionNumber(NumberEntity, abc.ABC):
+class TionNumber(CoordinatorEntity[TionDataUpdateCoordinator], NumberEntity, abc.ABC):
     """Abstract Tion switch."""
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize switch device."""
-        self._api = client
+        super().__init__(coordinator)
         self._device = device
 
         self._attr_device_info = DeviceInfo(
@@ -65,7 +68,12 @@ class TionNumber(NumberEntity, abc.ABC):
     @property
     def available(self) -> bool:
         """Return True if entity is available."""
-        return self._device.is_online and self._device.valid
+        return (
+            super().available
+            and self._device is not None
+            and self._device.is_online
+            and self._device.valid
+        )
 
     @property
     @abc.abstractmethod
@@ -77,31 +85,56 @@ class TionNumber(NumberEntity, abc.ABC):
     def name(self) -> str:
         """Return the entity name."""
 
-    async def async_added_to_hass(self):
-        """Run when entity about to be added."""
-        await self._load()
-        await super().async_added_to_hass()
-
     @abc.abstractmethod
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
 
-    async def async_update(self) -> None:
-        """Fetch new state data for the sensor.
-
-        This is the only method that should fetch new data for Home Assistant.
-        """
-        await self._load()
-
     async def _load(self, force=False) -> bool:
         """Update device data from API."""
-        if device_data := await self._api.get_device(
-            guid=self._device.guid, force=force
-        ):
+        if device_data := self.coordinator.get_device(self._device.guid):
             self._device = device_data
             return True
 
         return False
+
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated device data."""
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if device_data := self.coordinator.get_device(self._device.guid):
+            self._device = device_data
+        self._handle_device_update()
+        super()._handle_coordinator_update()
+
+    def _int_or_raise(self, value: Any, description: str) -> int:
+        """Convert an API value to int or raise a service error."""
+        try:
+            return int(value)
+        except (TypeError, ValueError) as err:
+            raise HomeAssistantError(
+                f"Unable to convert {description} value for {self.name}: {value}"
+            ) from err
+
+    async def _async_send_zone(self, guid: str, mode, co2: int) -> None:
+        """Send zone data and refresh coordinator data."""
+        try:
+            await self.coordinator.client.send_zone(guid=guid, mode=mode, co2=co2)
+        except TionError as err:
+            raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
+
+        await self.coordinator.async_request_refresh()
+
+    async def _async_send_breezer(self, **kwargs) -> None:
+        """Send breezer data and refresh coordinator data."""
+        try:
+            await self.coordinator.client.send_breezer(**kwargs)
+        except TionError as err:
+            raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
+
+        await self.coordinator.async_request_refresh()
 
     @abc.abstractmethod
     async def _send(self) -> None:
@@ -113,20 +146,23 @@ class TionTargetCO2(TionNumber):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize switch device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
-        self._zone: TionZone | None = None
+        self._zone: TionZone | None = self.coordinator.get_device_zone(
+            self._device.guid
+        )
 
         self._attr_device_class = NumberDeviceClass.CO2
         self._attr_native_min_value = 550
         self._attr_native_max_value = 1500
         self._attr_native_step = 10
 
-        self._target_co2: float = None
+        self._target_co2: float | None = None
+        self._handle_device_update()
 
     @property
     def unique_id(self) -> str:
@@ -143,8 +179,8 @@ class TionTargetCO2(TionNumber):
         """Return the value reported by the number."""
         return (
             self._target_co2
-            if self._zone.valid and self._target_co2 is not None
-            else STATE_UNKNOWN
+            if self._zone is not None and self._zone.valid and self._target_co2 is not None
+            else None
         )
 
     async def async_set_native_value(self, value: float) -> None:
@@ -154,39 +190,36 @@ class TionTargetCO2(TionNumber):
         await self._send()
 
     async def _load(self, force=False) -> bool:
-        if await super()._load(force=force):
-            if zone_data := await self._api.get_device_zone(
-                guid=self._device.guid, force=force
-            ):
-                self._zone = zone_data
-
-                try:
-                    self._target_co2 = float(zone_data.mode.auto_set.co2)
-                except ValueError as e:
-                    _LOGGER.warning(
-                        "%s: unable to convert target CO2 value to float: %s. Error: %s",
-                        self.name,
-                        zone_data.mode.auto_set.co2,
-                        e,
-                    )
+        await super()._load(force=force)
+        self._handle_device_update()
 
         return self.available
 
-    async def _send(self) -> None:
-        """Send new switch data to API."""
-        if not self.available:
-            return False
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated target CO2 state."""
+        self._zone = self.coordinator.get_device_zone(self._device.guid)
+        if self._zone is None:
+            self._target_co2 = None
+            return
 
         try:
-            target_co2 = int(self._target_co2)
-        except ValueError as e:
+            self._target_co2 = float(self._zone.mode.auto_set.co2)
+        except (TypeError, ValueError) as e:
             _LOGGER.warning(
-                "%s: unable to convert target CO2 value to int: %s. Error: %s",
+                "%s: unable to convert target CO2 value to float: %s. Error: %s",
                 self.name,
-                self._target_co2,
+                self._zone.mode.auto_set.co2,
                 e,
             )
-            return False
+            self._target_co2 = None
+
+    async def _send(self) -> None:
+        """Send new switch data to API."""
+        if not self.available or self._zone is None:
+            raise HomeAssistantError(f"{self.name} is unavailable")
+
+        target_co2 = self._int_or_raise(self._target_co2, "target CO2")
 
         _LOGGER.debug(
             "%s: pushing new zone data: mode=%s, target_co2=%s",
@@ -195,7 +228,7 @@ class TionTargetCO2(TionNumber):
             target_co2,
         )
 
-        return await self._api.send_zone(
+        await self._async_send_zone(
             guid=self._zone.guid, mode=self._zone.mode.current, co2=target_co2
         )
 
@@ -205,17 +238,18 @@ class TionMinSpeed(TionNumber):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize switch device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_native_min_value = 0
         self._attr_native_max_value = 6
         self._attr_native_step = 1
 
-        self._breezer_min_speed: float = None
+        self._breezer_min_speed: float | None = None
+        self._handle_device_update()
 
     @property
     def unique_id(self) -> str:
@@ -238,7 +272,7 @@ class TionMinSpeed(TionNumber):
         return (
             self._breezer_min_speed
             if self._device.valid and self._breezer_min_speed is not None
-            else STATE_UNKNOWN
+            else None
         )
 
     async def async_set_native_value(self, value: float) -> None:
@@ -249,55 +283,32 @@ class TionMinSpeed(TionNumber):
 
     async def _load(self, force=False) -> bool:
         if await super()._load(force=force):
-            try:
-                self._breezer_min_speed = float(self._device.data.speed_min_set)
-            except ValueError as e:
-                _LOGGER.warning(
-                    "%s: unable to convert breezer min speed set value to float: %s. Error: %s",
-                    self.name,
-                    self._device.data.speed_min_set,
-                    e,
-                )
+            self._handle_device_update()
 
         return self.available
+
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated min speed state."""
+        try:
+            self._breezer_min_speed = float(self._device.data.speed_min_set)
+        except (TypeError, ValueError) as e:
+            _LOGGER.warning(
+                "%s: unable to convert breezer min speed set value to float: %s. Error: %s",
+                self.name,
+                self._device.data.speed_min_set,
+                e,
+            )
+            self._breezer_min_speed = None
 
     async def _send(self) -> None:
         """Send new switch data to API."""
         if not self.available:
-            return
+            raise HomeAssistantError(f"{self.name} is unavailable")
 
-        try:
-            breezer_min_speed = int(self._breezer_min_speed)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer min speed set value to int: %s. Error: %s",
-                self.name,
-                self._breezer_min_speed,
-                e,
-            )
-            return
-
-        try:
-            breezer_t_set = int(self._device.data.t_set)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer temperature set value to int: %s. Error: %s",
-                self.name,
-                self._device.data.t_set,
-                e,
-            )
-            return
-
-        try:
-            breezer_speed = int(self._device.data.speed)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer speed value to int: %s. Error: %s",
-                self.name,
-                self._device.data.speed,
-                e,
-            )
-            return
+        breezer_min_speed = self._int_or_raise(self._breezer_min_speed, "min speed")
+        breezer_t_set = self._int_or_raise(self._device.data.t_set, "target temperature")
+        breezer_speed = self._int_or_raise(self._device.data.speed, "speed")
 
         _LOGGER.debug(
             "%s: pushing new breezer data: is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
@@ -312,7 +323,7 @@ class TionMinSpeed(TionNumber):
             self._device.data.gate,
         )
 
-        await self._api.send_breezer(
+        await self._async_send_breezer(
             guid=self._device.guid,
             is_on=self._device.data.is_on,
             t_set=breezer_t_set,
@@ -330,17 +341,18 @@ class TionMaxSpeed(TionNumber):
 
     def __init__(
         self,
-        client: TionClient,
+        coordinator: TionDataUpdateCoordinator,
         device: TionZoneDevice,
     ) -> None:
         """Initialize switch device."""
-        super().__init__(client, device)
+        super().__init__(coordinator, device)
 
         self._attr_native_min_value = 0
         self._attr_native_max_value = 6
         self._attr_native_step = 1
 
-        self._breezer_max_speed: float = None
+        self._breezer_max_speed: float | None = None
+        self._handle_device_update()
 
     @property
     def unique_id(self) -> str:
@@ -363,7 +375,7 @@ class TionMaxSpeed(TionNumber):
         return (
             self._breezer_max_speed
             if self._device.valid and self._breezer_max_speed is not None
-            else STATE_UNKNOWN
+            else None
         )
 
     async def async_set_native_value(self, value: float) -> None:
@@ -374,55 +386,32 @@ class TionMaxSpeed(TionNumber):
 
     async def _load(self, force=False) -> bool:
         if await super()._load(force=force):
-            try:
-                self._breezer_max_speed = float(self._device.data.speed_max_set)
-            except ValueError as e:
-                _LOGGER.warning(
-                    "%s: unable to convert breezer max speed set value to float: %s. Error: %s",
-                    self.name,
-                    self._device.data.speed_min_set,
-                    e,
-                )
+            self._handle_device_update()
 
         return self.available
+
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated max speed state."""
+        try:
+            self._breezer_max_speed = float(self._device.data.speed_max_set)
+        except (TypeError, ValueError) as e:
+            _LOGGER.warning(
+                "%s: unable to convert breezer max speed set value to float: %s. Error: %s",
+                self.name,
+                self._device.data.speed_max_set,
+                e,
+            )
+            self._breezer_max_speed = None
 
     async def _send(self) -> None:
         """Send new switch data to API."""
         if not self.available:
-            return
+            raise HomeAssistantError(f"{self.name} is unavailable")
 
-        try:
-            breezer_max_speed = int(self._breezer_max_speed)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer max speed set value to int: %s. Error: %s",
-                self.name,
-                self._breezer_max_speed,
-                e,
-            )
-            return
-
-        try:
-            breezer_t_set = int(self._device.data.t_set)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer temperature set value to int: %s. Error: %s",
-                self.name,
-                self._device.data.t_set,
-                e,
-            )
-            return
-
-        try:
-            breezer_speed = int(self._device.data.speed)
-        except ValueError as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer speed value to int: %s. Error: %s",
-                self.name,
-                self._device.data.speed,
-                e,
-            )
-            return
+        breezer_max_speed = self._int_or_raise(self._breezer_max_speed, "max speed")
+        breezer_t_set = self._int_or_raise(self._device.data.t_set, "target temperature")
+        breezer_speed = self._int_or_raise(self._device.data.speed, "speed")
 
         _LOGGER.debug(
             "%s: pushing new breezer data: is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
@@ -437,7 +426,7 @@ class TionMaxSpeed(TionNumber):
             self._device.data.gate,
         )
 
-        await self._api.send_breezer(
+        await self._async_send_breezer(
             guid=self._device.guid,
             is_on=self._device.data.is_on,
             t_set=breezer_t_set,

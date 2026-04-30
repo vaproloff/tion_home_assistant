@@ -1,15 +1,32 @@
 """The Tion API interaction module."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from json import JSONDecodeError
 import logging
-from time import time
 from typing import Any
 
-from aiohttp import ClientError, ClientSession
+from aiohttp import ClientError, ClientSession, ContentTypeError
 
 from .const import Heater, ZoneMode
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class TionError(Exception):
+    """Base Tion client error."""
+
+
+class TionAuthError(TionError):
+    """Tion authentication error."""
+
+
+class TionConnectionError(TionError):
+    """Tion connection error."""
+
+
+class TionApiError(TionError):
+    """Unexpected Tion API error."""
 
 
 class TionZoneModeAutoSet:
@@ -143,18 +160,20 @@ class TionClient:
         self._authorization = auth
 
         self._locations: list[TionLocation] = []
-        self._auth_update_listeners = []
-        self._last_update = 0
-        self._temp_lock = asyncio.Lock()
+        self._auth_update_listeners: list[Callable[[str], Awaitable[None]]] = []
 
     @property
-    async def _headers(self):
+    def authorization(self) -> str | None:
+        """Return authorization data."""
+        return self._authorization
+
+    def _headers(self) -> dict[str, str]:
         """Return headers for API request."""
         return {
             "Accept": "application/json, text/plain, */*",
             "Accept-Encoding": "gzip, deflate",
             "Accept-Language": "ru-RU",
-            "Authorization": self._authorization,
+            "Authorization": self._authorization or "",
             "Connection": "Keep-Alive",
             "Content-Type": "application/json",
             "Host": "api2.magicair.tion.ru",
@@ -163,23 +182,22 @@ class TionClient:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2486.0 Safari/537.36 Edge/13.10586",
         }
 
-    @property
-    async def authorization(self) -> str:
-        """Return authorization data."""
-        if self._authorization is None:
-            if await self._get_authorization():
-                return self._authorization
-
-        elif await self._get_data():
-            return self._authorization
-
-        return None
-
-    def add_update_listener(self, coro):
+    def add_update_listener(self, coro: Callable[[str], Awaitable[None]]) -> None:
         """Add entry data update listener function."""
         self._auth_update_listeners.append(coro)
 
-    async def _get_authorization(self):
+    async def async_validate_auth(self) -> str:
+        """Validate credentials and return authorization data."""
+        await self.async_get_authorization()
+        await self.get_locations()
+
+        if self._authorization is None:
+            raise TionAuthError("Tion authorization failed")
+
+        return self._authorization
+
+    async def async_get_authorization(self) -> str:
+        """Get a new authorization token."""
         data = {
             "username": self._username,
             "password": self._password,
@@ -188,120 +206,138 @@ class TionClient:
             "grant_type": "password",
         }
 
-        response = await self._session.post(
-            url=f"{self._API_ENDPOINT}{self._AUTH_URL}", data=data, timeout=10
+        response = await self._request(
+            "post",
+            self._AUTH_URL,
+            data=data,
+            auth_required=False,
+            auth_request=True,
         )
 
-        if response.status == 200:
-            response = await response.json()
+        try:
             self._authorization = f"{response['token_type']} {response['access_token']}"
+        except KeyError as err:
+            raise TionApiError("Tion API response did not contain an access token") from err
 
-            _LOGGER.info("TionClient: got new authorization token")
+        _LOGGER.info("TionClient: got new authorization token")
 
-            for coro in self._auth_update_listeners:
-                await coro(
-                    username=self._username,
-                    password=self._password,
-                    scan_interval=self._min_update_interval,
-                    auth=self._authorization,
+        for coro in self._auth_update_listeners:
+            await coro(self._authorization)
+
+        return self._authorization
+
+    async def _request(
+        self,
+        method: str,
+        url_path: str,
+        *,
+        auth_required: bool = True,
+        auth_request: bool = False,
+        retry_auth: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Make a request to the Tion API."""
+        if auth_required and self._authorization is None:
+            await self.async_get_authorization()
+
+        try:
+            async with self._session.request(
+                method,
+                url=f"{self._API_ENDPOINT}{url_path}",
+                headers=self._headers() if auth_required else None,
+                timeout=10,
+                **kwargs,
+            ) as response:
+                status = response.status
+                try:
+                    data = await response.json(content_type=None)
+                except (ContentTypeError, JSONDecodeError, ValueError) as err:
+                    if status >= 400:
+                        data = {}
+                    else:
+                        raise TionApiError(
+                            f"Tion API returned a non-JSON response with status {status}"
+                        ) from err
+        except (ClientError, TimeoutError) as err:
+            raise TionConnectionError("Error communicating with Tion API") from err
+
+        if status == 401 and auth_required:
+            if retry_auth:
+                _LOGGER.info("TionClient: need to get new authorization")
+                await self.async_get_authorization()
+                return await self._request(
+                    method,
+                    url_path,
+                    auth_required=auth_required,
+                    auth_request=auth_request,
+                    retry_auth=False,
+                    **kwargs,
                 )
 
-            return True
+            raise TionAuthError("Tion authorization failed")
 
-        _LOGGER.error(
-            "TionClient: response while getting token: status code: %s, content:\n%s",
-            response.status,
-            await response.json(),
-        )
-        return False
+        if auth_request and status in (400, 401, 403):
+            raise TionAuthError("Invalid Tion credentials")
 
-    async def _get_data(self):
-        response = await self._session.get(
-            url=f"{self._API_ENDPOINT}{self._LOCATION_URL}",
-            headers=await self._headers,
-            timeout=10,
-        )
+        if status >= 500:
+            raise TionConnectionError(f"Tion API returned status {status}")
 
-        if response.status == 200:
-            self._locations = [
-                TionLocation(location) for location in await response.json()
-            ]
-            self._last_update = time()
+        if status >= 400:
+            raise TionApiError(f"Tion API returned status {status}")
 
-            _LOGGER.debug(
-                "TionClient: location data has been updated (%s)", self._last_update
-            )
-            return True
+        return data
 
-        if response.status == 401:
-            _LOGGER.info("TionClient: need to get new authorization")
-            if await self._get_authorization():
-                return await self._get_data()
-
-            _LOGGER.error("TionClient: authorization failed!")
-        else:
-            _LOGGER.error(
-                "TionClient: response while getting location data: status code: %s, content:\n%s",
-                response.status,
-                await response.json(),
-            )
-
-        return False
-
-    async def get_location_data(self, force=False) -> bool:
+    async def get_locations(self) -> list[TionLocation]:
         """Get locations data from Tion API."""
-        async with self._temp_lock:
-            if not force and (time() - self._last_update) < self._min_update_interval:
-                _LOGGER.debug(
-                    "TionClient: location data already updated recently. Skipping request"
-                )
-                return self._locations is not None
+        response = await self._request("get", self._LOCATION_URL)
+        if not isinstance(response, list):
+            raise TionApiError("Tion API returned invalid location data")
 
-            return await self._get_data()
+        self._locations = [TionLocation(location) for location in response]
+        _LOGGER.debug("TionClient: location data has been updated")
+        return self._locations
 
-    async def get_zone(self, guid: str, force=False) -> TionZone | None:
+    async def get_zone(self, guid: str) -> TionZone | None:
         """Get zone data by guid from Tion API."""
-        if await self.get_location_data(force=force):
-            for location in self._locations:
-                for zone_data in location.zones:
-                    if zone_data.guid == guid:
-                        return zone_data
+        await self.get_locations()
+        for location in self._locations:
+            for zone_data in location.zones:
+                if zone_data.guid == guid:
+                    return zone_data
 
         return None
 
-    async def get_device(self, guid: str, force=False) -> TionZoneDevice | None:
+    async def get_device(self, guid: str) -> TionZoneDevice | None:
         """Get device data by guid from Tion API."""
-        if await self.get_location_data(force=force):
-            for location in self._locations:
-                for zone in location.zones:
-                    for device in zone.devices:
-                        if device.guid == guid:
-                            return device
+        await self.get_locations()
+        for location in self._locations:
+            for zone in location.zones:
+                for device in zone.devices:
+                    if device.guid == guid:
+                        return device
 
         return None
 
-    async def get_device_zone(self, guid: str, force=False) -> TionZone | None:
+    async def get_device_zone(self, guid: str) -> TionZone | None:
         """Get device zone data by device guid from Tion API."""
-        if await self.get_location_data(force=force):
-            for location in self._locations:
-                for zone in location.zones:
-                    for device in zone.devices:
-                        if device.guid == guid:
-                            return zone
+        await self.get_locations()
+        for location in self._locations:
+            for zone in location.zones:
+                for device in zone.devices:
+                    if device.guid == guid:
+                        return zone
 
         return None
 
-    async def get_devices(self, force=False) -> list[TionZoneDevice]:
+    async def get_devices(self) -> list[TionZoneDevice]:
         """Get all devices data from Tion API."""
-        if await self.get_location_data(force=force):
-            return [
-                device
-                for location in self._locations
-                for zone in location.zones
-                for device in zone.devices
-            ]
-
-        return []
+        await self.get_locations()
+        return [
+            device
+            for location in self._locations
+            for zone in location.zones
+            for device in zone.devices
+        ]
 
     async def send_breezer(
         self,
@@ -316,7 +352,6 @@ class TionClient:
         gate: int | None = None,
     ):
         """Send new breezer data to API."""
-        url = f"{self._API_ENDPOINT}{self._DEVICE_URL}/{guid}/mode"
         data = {
             "is_on": is_on,
             "heater_enabled": heater_enabled,
@@ -328,77 +363,54 @@ class TionClient:
             "gate": gate,
         }
 
-        return await self._send(url, data)
+        return await self._send(f"{self._DEVICE_URL}/{guid}/mode", data)
 
     async def send_zone(self, guid: str, mode: ZoneMode, co2: int):
         """Send new zone data to API."""
-        url = f"{self._API_ENDPOINT}{self._ZONE_URL}/{guid}/mode"
         data = {
             "mode": mode,
             "co2": co2,
         }
 
-        return await self._send(url, data)
+        return await self._send(f"{self._ZONE_URL}/{guid}/mode", data)
 
     async def send_settings(self, guid: str, data: dict[str, Any]):
-        """Send new zone data to API."""
-        url = f"{self._API_ENDPOINT}{self._DEVICE_URL}/{guid}/settings"
+        """Send new settings data to API."""
+        return await self._send(f"{self._DEVICE_URL}/{guid}/settings", data)
 
-        return await self._send(url, data)
-
-    async def _send(self, url: str, data: dict[str, Any]):
-        response = await self._session.post(
-            url=url,
-            json=data,
-            headers=await self._headers,
-            timeout=10,
-        )
-
-        response = await response.json()
-        if response["status"] != "queued":
-            _LOGGER.error(
-                "TionClient: parameters set %s: %s",
-                response["status"],
-                response["description"],
+    async def _send(self, url_path: str, data: dict[str, Any]) -> bool:
+        response = await self._request("post", url_path, json=data)
+        if response.get("status") != "queued":
+            raise TionApiError(
+                "Tion API did not queue the command: "
+                f"{response.get('status')} {response.get('description')}"
             )
-            return False
 
-        return await self._wait_for_task(response["task_id"])
+        try:
+            task_id = response["task_id"]
+        except KeyError as err:
+            raise TionApiError("Tion API response did not contain a task id") from err
+
+        return await self._wait_for_task(task_id)
 
     async def _wait_for_task(self, task_id: str, max_time: int = 5) -> bool:
         """Wait for task with defined task_id been completed."""
-        DELAY = 0.5
+        delay = 0.5
         start_time = asyncio.get_event_loop().time()
         while True:
-            try:
-                elapsed_time = asyncio.get_event_loop().time() - start_time
-                if elapsed_time >= max_time:
-                    _LOGGER.warning(
-                        "TionClient: timeout of %s seconds reached while waiting for a task",
-                        max_time,
-                    )
-                    return False
-
-                response = await self._session.get(
-                    url=f"{self._API_ENDPOINT}{self._TASK_URL}/{task_id}",
-                    headers=await self._headers,
-                    timeout=10,
+            elapsed_time = asyncio.get_event_loop().time() - start_time
+            if elapsed_time >= max_time:
+                raise TionApiError(
+                    f"Timed out after {max_time} seconds waiting for Tion task"
                 )
 
-                if response.status == 200:
-                    response = await response.json()
-                    if response["status"] == "completed":
-                        return await self.get_location_data(force=True)
+            response = await self._request("get", f"{self._TASK_URL}/{task_id}")
+            task_status = response.get("status")
+            if task_status in ("completed", "delivered"):
+                await self.get_locations()
+                return True
 
-                    await asyncio.sleep(DELAY)
-                else:
-                    _LOGGER.warning(
-                        "TionClient: bad response code %s while waiting for a task, content:\n%s",
-                        response.status,
-                        response.text(),
-                    )
-                    return False
+            if task_status not in ("queued", "processing", "in_progress"):
+                raise TionApiError(f"Tion task ended with status {task_status}")
 
-            except (ClientError, TimeoutError) as e:
-                _LOGGER.error("TionClient: exception in waiting for a task:\n%s", e)
-                await asyncio.sleep(DELAY)
+            await asyncio.sleep(delay)
