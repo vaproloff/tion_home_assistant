@@ -26,7 +26,12 @@ async def async_setup_entry(
         TionResetFiltersButton(coordinator, device)
         for device in coordinator.get_devices()
         if device.guid
-        and device.type in (TionDeviceType.BREEZER_3S, TionDeviceType.BREEZER_4S)
+        and device.type
+        in (
+            TionDeviceType.BREEZER_O2,
+            TionDeviceType.BREEZER_3S,
+            TionDeviceType.BREEZER_4S,
+        )
     ]
 
     async_add_entities(entities)
