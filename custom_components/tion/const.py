@@ -5,21 +5,17 @@ from enum import StrEnum
 from homeassistant.const import Platform
 
 DOMAIN = "tion"
-DEFAULT_AUTH_FILENAME = "tion_auth"
 DEFAULT_SCAN_INTERVAL = 60
 AUTH_DATA = "auth"
 MANUFACTURER = "Tion"
 PLATFORMS = [
     Platform.BINARY_SENSOR,
+    Platform.BUTTON,
     Platform.CLIMATE,
     Platform.NUMBER,
     Platform.SENSOR,
     Platform.SWITCH,
 ]
-
-SRVC_CONF_TARGET_CO2 = "target_co2"
-SRVC_CONF_MIN_SPEED = "min_speed"
-SRVC_CONF_MAX_SPEED = "max_speed"
 
 
 class TionDeviceType(StrEnum):
@@ -34,6 +30,7 @@ class TionDeviceType(StrEnum):
 
 
 MODELS_SUPPORTED: dict[TionDeviceType, str] = {
+    TionDeviceType.BREEZER_O2: "Breezer O2",
     TionDeviceType.BREEZER_3S: "Breezer 3S",
     TionDeviceType.BREEZER_4S: "Breezer 4S",
     TionDeviceType.MAGIC_AIR: "MagicAir",

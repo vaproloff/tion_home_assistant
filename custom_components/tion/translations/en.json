@@ -6,8 +6,13 @@
         "title": "Add new Tion configuration",
         "description": "Please enter your Tion account credentials",
         "data": {
-          "name": "[%key:common::config_flow::data::name%]",
           "username": "Username",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "description": "Please enter your Tion account password",
+        "data": {
           "password": "Password"
         }
       }
@@ -16,6 +21,7 @@
       "already_configured": "Account is already configured"
     },
     "error": {
+      "cannot_connect": "Failed to connect",
       "invalid_auth": "Invalid authentication",
       "unknown": "Unexpected error"
     }
@@ -33,6 +39,11 @@
     }
   },
   "entity": {
+    "button": {
+      "reset_filters": {
+        "name": "Reset filters"
+      }
+    },
     "climate": {
       "tion_breezer": {
         "state_attributes": {
