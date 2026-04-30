@@ -1,5 +1,7 @@
 """Platform for button integration."""
 
+import logging
+
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -10,6 +12,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .client import TionError, TionZoneDevice
 from .const import DOMAIN, TionDeviceType
 from .coordinator import TionDataUpdateCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -75,6 +79,7 @@ class TionResetFiltersButton(
 
     async def async_press(self) -> None:
         """Reset breezer filter replacement."""
+        _LOGGER.debug("%s: resetting filter replacement timer", self._device.name)
         try:
             await self.coordinator.client.send_settings(
                 self._device.guid, data={"reset_filter_timer": True}

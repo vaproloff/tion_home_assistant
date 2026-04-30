@@ -41,7 +41,7 @@ async def async_setup_entry(
                 entities.append(TionTargetCO2(coordinator, device))
 
         else:
-            _LOGGER.info("Skipped device %s (not valid)", device.name)
+            _LOGGER.debug("Skipped device %s (not valid)", device.name)
 
     async_add_entities(entities)
     return True

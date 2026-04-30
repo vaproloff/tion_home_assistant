@@ -24,6 +24,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up this integration using UI."""
+    _LOGGER.debug("Setting up %s config entry %s", DOMAIN, entry.entry_id)
 
     hass.data.setdefault(DOMAIN, {})
 
@@ -50,11 +51,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     device_registry = dr.async_get(hass)
 
     for device in coordinator.get_devices():
-        _LOGGER.info(
+        _LOGGER.debug(
             "Adding device: type - %s, device name - %s", device.type, device.name
         )
         if not device.guid:
-            _LOGGER.info("Skipped device %s without guid", device.name)
+            _LOGGER.debug("Skipped device %s without guid", device.name)
             continue
 
         if device.type in MODELS_SUPPORTED:
@@ -73,7 +74,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 hw_version=device.hardware,
             )
         else:
-            _LOGGER.info("Unsupported device type: %s", device.type)
+            _LOGGER.debug("Unsupported device type: %s", device.type)
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
@@ -84,11 +85,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
     """Handle updating entry options."""
+    _LOGGER.debug("Updating %s config entry options %s", DOMAIN, entry.entry_id)
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""
+    _LOGGER.debug("Unloading %s config entry %s", DOMAIN, entry.entry_id)
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
         hass.data[DOMAIN].pop(entry.entry_id, None)
@@ -98,5 +101,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
+    _LOGGER.debug("Reloading %s config entry %s", DOMAIN, entry.entry_id)
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)

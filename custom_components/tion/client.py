@@ -219,7 +219,7 @@ class TionClient:
         except KeyError as err:
             raise TionApiError("Tion API response did not contain an access token") from err
 
-        _LOGGER.info("TionClient: got new authorization token")
+        _LOGGER.debug("TionClient: got new authorization token")
 
         for coro in self._auth_update_listeners:
             await coro(self._authorization)
@@ -263,7 +263,7 @@ class TionClient:
 
         if status == 401 and auth_required:
             if retry_auth:
-                _LOGGER.info("TionClient: need to get new authorization")
+                _LOGGER.debug("TionClient: need to get new authorization")
                 await self.async_get_authorization()
                 return await self._request(
                     method,

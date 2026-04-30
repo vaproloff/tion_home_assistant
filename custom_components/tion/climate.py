@@ -324,18 +324,18 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
     async def async_set_hvac_mode(self, hvac_mode) -> None:
         """Set new target operation mode."""
         if hvac_mode not in self._hvac_modes:
-            _LOGGER.error("%s: unsupported hvac mode '%s'", self.name, hvac_mode)
+            _LOGGER.warning("%s: unsupported hvac mode '%s'", self.name, hvac_mode)
             return
 
         if hvac_mode == self.hvac_mode:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: no need to change HVAC mode: %s already set",
                 self.name,
                 hvac_mode,
             )
             return
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "%s: changing HVAC mode (%s -> %s)", self.name, self.hvac_mode, hvac_mode
         )
         if hvac_mode == HVACMode.OFF:
@@ -363,7 +363,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
                 return
 
             if temperature == self.target_temperature:
-                _LOGGER.info(
+                _LOGGER.debug(
                     "%s: no need to change target temperature: %s already set",
                     self.name,
                     temperature,
@@ -379,7 +379,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new target fan mode."""
         if fan_mode not in self._fan_modes:
-            _LOGGER.error("%s: unsupported fan mode '%s'", self.name, fan_mode)
+            _LOGGER.warning("%s: unsupported fan mode '%s'", self.name, fan_mode)
             return
 
         new_mode = ZoneMode.MANUAL
@@ -399,7 +399,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
                 )
 
         if self._mode != new_mode:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: changing zone mode (%s -> %s)",
                 self.name,
                 self._mode,
@@ -414,7 +414,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
             and new_speed is not None
             and self.speed != new_speed
         ):
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: changing breezer speed (%s -> %s)",
                 self.name,
                 self.speed,
@@ -426,7 +426,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set Tion breezer air gate."""
         if swing_mode not in self._swing_modes:
-            _LOGGER.info("%s: not supported swing mode %s", self.name, swing_mode)
+            _LOGGER.debug("%s: not supported swing mode %s", self.name, swing_mode)
             return
 
         new_gate = None
@@ -439,7 +439,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
                 new_gate = 1 if self._type == TionDeviceType.BREEZER_3S else None
 
         if new_gate is not None and self._gate != new_gate:
-            _LOGGER.info(
+            _LOGGER.debug(
                 "%s: changing gate (%s -> %s)",
                 self.name,
                 self.swing_mode,
