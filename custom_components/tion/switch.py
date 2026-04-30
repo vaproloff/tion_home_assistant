@@ -31,11 +31,13 @@ async def async_setup_entry(
             continue
 
         if device.type in [
+            TionDeviceType.BREEZER_O2,
             TionDeviceType.BREEZER_3S,
             TionDeviceType.BREEZER_4S,
         ]:
-            entities.append(TionBacklightSwitch(coordinator, device))
-            entities.append(TionBreezerSoundSwitch(coordinator, device))
+            if device.type in (TionDeviceType.BREEZER_3S, TionDeviceType.BREEZER_4S):
+                entities.append(TionBacklightSwitch(coordinator, device))
+                entities.append(TionBreezerSoundSwitch(coordinator, device))
             if device.data.heater_installed or device.data.heater_type is not None:
                 entities.append(TionBreezerHeaterSwitch(coordinator, device))
         elif device.type in [

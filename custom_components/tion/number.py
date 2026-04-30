@@ -29,6 +29,7 @@ async def async_setup_entry(
     for device in devices:
         if device.guid and device.valid:
             if device.type in [
+                TionDeviceType.BREEZER_O2,
                 TionDeviceType.BREEZER_3S,
                 TionDeviceType.BREEZER_4S,
             ]:
@@ -179,7 +180,9 @@ class TionTargetCO2(TionNumber):
         """Return the value reported by the number."""
         return (
             self._target_co2
-            if self._zone is not None and self._zone.valid and self._target_co2 is not None
+            if self._zone is not None
+            and self._zone.valid
+            and self._target_co2 is not None
             else None
         )
 
@@ -245,7 +248,7 @@ class TionMinSpeed(TionNumber):
         super().__init__(coordinator, device)
 
         self._attr_native_min_value = 0
-        self._attr_native_max_value = 6
+        self._attr_native_max_value = device.max_speed
         self._attr_native_step = 1
 
         self._breezer_min_speed: float | None = None
@@ -307,7 +310,9 @@ class TionMinSpeed(TionNumber):
             raise HomeAssistantError(f"{self.name} is unavailable")
 
         breezer_min_speed = self._int_or_raise(self._breezer_min_speed, "min speed")
-        breezer_t_set = self._int_or_raise(self._device.data.t_set, "target temperature")
+        breezer_t_set = self._int_or_raise(
+            self._device.data.t_set, "target temperature"
+        )
         breezer_speed = self._int_or_raise(self._device.data.speed, "speed")
 
         _LOGGER.debug(
@@ -348,7 +353,7 @@ class TionMaxSpeed(TionNumber):
         super().__init__(coordinator, device)
 
         self._attr_native_min_value = 0
-        self._attr_native_max_value = 6
+        self._attr_native_max_value = device.max_speed
         self._attr_native_step = 1
 
         self._breezer_max_speed: float | None = None
@@ -410,7 +415,9 @@ class TionMaxSpeed(TionNumber):
             raise HomeAssistantError(f"{self.name} is unavailable")
 
         breezer_max_speed = self._int_or_raise(self._breezer_max_speed, "max speed")
-        breezer_t_set = self._int_or_raise(self._device.data.t_set, "target temperature")
+        breezer_t_set = self._int_or_raise(
+            self._device.data.t_set, "target temperature"
+        )
         breezer_speed = self._int_or_raise(self._device.data.speed, "speed")
 
         _LOGGER.debug(

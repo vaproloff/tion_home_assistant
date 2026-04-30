@@ -41,7 +41,12 @@ async def async_setup_entry(
         TionClimate(coordinator, device)
         for device in devices
         if device.guid
-        and device.type in (TionDeviceType.BREEZER_3S, TionDeviceType.BREEZER_4S)
+        and device.type
+        in (
+            TionDeviceType.BREEZER_O2,
+            TionDeviceType.BREEZER_3S,
+            TionDeviceType.BREEZER_4S,
+        )
     ]
 
     async_add_entities(entities)
@@ -91,16 +96,18 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
             identifiers={(DOMAIN, breezer.guid)},
         )
         self._hvac_modes = [HVACMode.OFF, HVACMode.FAN_ONLY]
-        self._swing_modes = [SwingMode.SWING_OUTSIDE]
+        self._swing_modes = []
 
         self._fan_modes = [FAN_AUTO]
         self._fan_modes.extend(
             [str(speed) for speed in range(1, breezer.max_speed + 1)]
         )
 
-        self._attr_supported_features = (
-            ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.SWING_MODE
-        )
+        self._attr_supported_features = ClimateEntityFeature.FAN_MODE
+        if self._gate is not None:
+            self._attr_supported_features |= ClimateEntityFeature.SWING_MODE
+            self._swing_modes.append(SwingMode.SWING_OUTSIDE)
+
         if breezer.data.heater_installed or breezer.data.heater_type is not None:
             self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
             self._hvac_modes.append(HVACMode.HEAT)
@@ -207,7 +214,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
         if hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
 
-        if self._heater_power:
+        if self._heater_power or self._heater_enabled:
             return HVACAction.HEATING
 
         return HVACAction.FAN
@@ -239,7 +246,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
                     return SwingMode.SWING_OUTSIDE
                 case 1:
                     return SwingMode.SWING_INSIDE
-        else:
+        elif self._type == TionDeviceType.BREEZER_3S:
             match self._gate:
                 case 0:
                     return SwingMode.SWING_INSIDE
@@ -449,6 +456,10 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
             await self._send_breezer()
 
     def _set_swing_modes(self):
+        if self._gate is None:
+            self._swing_modes = []
+            return
+
         self._swing_modes = [SwingMode.SWING_OUTSIDE]
 
         if self._mode == ZoneMode.MANUAL:

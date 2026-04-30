@@ -217,7 +217,9 @@ class TionClient:
         try:
             self._authorization = f"{response['token_type']} {response['access_token']}"
         except KeyError as err:
-            raise TionApiError("Tion API response did not contain an access token") from err
+            raise TionApiError(
+                "Tion API response did not contain an access token"
+            ) from err
 
         _LOGGER.debug("TionClient: got new authorization token")
 
