@@ -39,6 +39,11 @@
     }
   },
   "entity": {
+    "button": {
+      "reset_filters": {
+        "name": "Reset filters"
+      }
+    },
     "climate": {
       "tion_breezer": {
         "state_attributes": {
@@ -51,12 +56,6 @@
           }
         }
       }
-    }
-  },
-  "services": {
-    "reset_filters": {
-      "name": "Reset filters",
-      "description": "Resets the Breezer filter replacement interval. Resetting the replacement interval may take some time—please wait after starting the service."
     }
   }
 }

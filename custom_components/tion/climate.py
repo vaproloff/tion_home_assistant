@@ -20,7 +20,6 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import entity_platform
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -46,16 +45,6 @@ async def async_setup_entry(
     ]
 
     async_add_entities(entities)
-
-    platform = entity_platform.current_platform.get()
-    assert platform
-
-    platform.async_register_entity_service(
-        name="reset_filters",
-        schema=None,
-        func="async_reset_filters",
-    )
-
     return True
 
 
@@ -470,20 +459,6 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
     async def async_update(self):
         """Fetch new state data for the breezer."""
         await super().async_update()
-
-    async def async_reset_filters(self, **kwargs):
-        """Reset breezer filter replacement."""
-        _ = kwargs
-        try:
-            await self.coordinator.client.send_settings(
-                self._breezer_guid, data={"reset_filter_timer": True}
-            )
-        except TionError as err:
-            raise HomeAssistantError(
-                f"Unable to reset filters for {self.name}: {err}"
-            ) from err
-
-        await self.coordinator.async_request_refresh()
 
     def _load_breezer(self, force=False):
         """Update breezer data from API."""

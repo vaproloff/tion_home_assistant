@@ -1,7 +1,0 @@
-reset_filters:
-  name: Reset Filters
-  description: Resets breezer filter replacement period. Require some time for replacement period to be updated - please, be patient after service activation.
-  target:
-    entity:
-      integration: tion
-      domain: climate
