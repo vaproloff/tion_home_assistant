@@ -145,10 +145,14 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Provides extra attributes."""
+        attrs = {
+            "mode": self.mode,
+            "speed": self.speed,
+        }
         if self._heater_power is not None:
-            return {"power": self._heater_power}
+            attrs.update({"power": self._heater_power})
 
-        return None
+        return attrs
 
     @property
     def precision(self) -> int:
