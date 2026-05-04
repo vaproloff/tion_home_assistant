@@ -44,6 +44,11 @@
         "name": "Reset filters"
       }
     },
+    "binary_sensor": {
+      "filter_need_replacement": {
+        "name": "Filter Need Replacement"
+      }
+    },
     "climate": {
       "tion_breezer": {
         "state_attributes": {
@@ -55,6 +60,51 @@
             }
           }
         }
+      }
+    },
+    "number": {
+      "target_co2": {
+        "name": "Target CO2"
+      },
+      "min_speed_set": {
+        "name": "Min Speed Set"
+      },
+      "max_speed_set": {
+        "name": "Max Speed Set"
+      }
+    },
+    "sensor": {
+      "temperature": {
+        "name": "Temperature"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "co2": {
+        "name": "CO2"
+      },
+      "pm25": {
+        "name": "PM25"
+      },
+      "temperature_in": {
+        "name": "Inflow Temperature"
+      },
+      "temperature_out": {
+        "name": "Outflow Temperature"
+      },
+      "filter_replacement_datetime": {
+        "name": "Filter Replacement Datetime"
+      }
+    },
+    "switch": {
+      "backlight": {
+        "name": "Backlight"
+      },
+      "sound": {
+        "name": "Sound"
+      },
+      "heater": {
+        "name": "Air Heater"
       }
     }
   }

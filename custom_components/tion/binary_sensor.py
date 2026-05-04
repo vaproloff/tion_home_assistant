@@ -42,6 +42,8 @@ class TionBinarySensor(
 ):
     """Abstract Tion binary sensor."""
 
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         hass: HomeAssistant | None,
@@ -72,11 +74,6 @@ class TionBinarySensor(
     def unique_id(self):
         """Return a unique id identifying the entity."""
 
-    @property
-    @abc.abstractmethod
-    def name(self):
-        """Return the name of the binary sensor."""
-
     @callback
     def _handle_device_update(self) -> None:
         """Handle updated device data."""
@@ -100,6 +97,8 @@ class TionBinarySensor(
 class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
     """Tion Breezer filter need replacement binary sensor."""
 
+    _attr_translation_key = "filter_need_replacement"
+
     def __init__(
         self,
         hass: HomeAssistant | None,
@@ -122,11 +121,6 @@ class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
     def unique_id(self):
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_filter_need_replacement"
-
-    @property
-    def name(self):
-        """Return the name of the binary sensor."""
-        return f"{self._device.name} Filter Need Replacement"
 
     @callback
     def _handle_device_update(self) -> None:
