@@ -86,12 +86,10 @@ class TionResetFiltersButton(
         """Reset breezer filter replacement."""
         _LOGGER.debug("%s: resetting filter replacement timer", self._device.name)
         try:
-            await self.coordinator.client.send_settings(
-                self._device.guid, data={"reset_filter_timer": True}
+            await self.coordinator.async_send_settings(
+                guid=self._device.guid, data={"reset_filter_timer": True}
             )
         except TionError as err:
             raise HomeAssistantError(
                 f"Unable to reset filters for {self._device.name}: {err}"
             ) from err
-
-        await self.coordinator.async_request_refresh()

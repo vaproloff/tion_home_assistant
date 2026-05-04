@@ -127,7 +127,7 @@ class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc
     async def _async_send_settings(self, data: dict[str, Any]) -> None:
         """Send settings and refresh coordinator data."""
         try:
-            await self.coordinator.client.send_settings(
+            await self.coordinator.async_send_settings(
                 guid=self._device.guid, data=data
             )
         except TionError as err:
@@ -135,16 +135,12 @@ class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc
                 f"Unable to update {self.name} settings: {err}"
             ) from err
 
-        await self.coordinator.async_request_refresh()
-
     async def _async_send_breezer(self, **kwargs) -> None:
         """Send breezer data and refresh coordinator data."""
         try:
-            await self.coordinator.client.send_breezer(**kwargs)
+            await self.coordinator.async_send_breezer(**kwargs)
         except TionError as err:
             raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
-
-        await self.coordinator.async_request_refresh()
 
     @abc.abstractmethod
     async def _send(self) -> None:

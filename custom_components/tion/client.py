@@ -408,11 +408,7 @@ class TionClient:
 
             response = await self._request("get", f"{self._TASK_URL}/{task_id}")
             task_status = response.get("status")
-            if task_status in ("completed", "delivered"):
-                await self.get_locations()
+            if task_status == "completed":
                 return True
-
-            if task_status not in ("queued", "processing", "in_progress"):
-                raise TionApiError(f"Tion task ended with status {task_status}")
 
             await asyncio.sleep(delay)

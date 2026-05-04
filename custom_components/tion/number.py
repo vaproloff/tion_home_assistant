@@ -122,20 +122,16 @@ class TionNumber(CoordinatorEntity[TionDataUpdateCoordinator], NumberEntity, abc
     async def _async_send_zone(self, guid: str, mode, co2: int) -> None:
         """Send zone data and refresh coordinator data."""
         try:
-            await self.coordinator.client.send_zone(guid=guid, mode=mode, co2=co2)
+            await self.coordinator.async_send_zone(guid=guid, mode=mode, co2=co2)
         except TionError as err:
             raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
-
-        await self.coordinator.async_request_refresh()
 
     async def _async_send_breezer(self, **kwargs) -> None:
         """Send breezer data and refresh coordinator data."""
         try:
-            await self.coordinator.client.send_breezer(**kwargs)
+            await self.coordinator.async_send_breezer(**kwargs)
         except TionError as err:
             raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
-
-        await self.coordinator.async_request_refresh()
 
     @abc.abstractmethod
     async def _send(self) -> None:
