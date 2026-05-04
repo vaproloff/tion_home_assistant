@@ -43,6 +43,11 @@
         "name": "Сбросить фильтры"
       }
     },
+    "binary_sensor": {
+      "filter_need_replacement": {
+        "name": "Фильтры требуют замены"
+      }
+    },
     "climate": {
       "tion_breezer": {
         "state_attributes": {
@@ -54,6 +59,45 @@
             }
           }
         }
+      }
+    },
+    "number": {
+      "target_co2": {
+        "name": "Целевой уровень CO2"
+      },
+      "min_speed_set": {
+        "name": "Минимальная скорость"
+      },
+      "max_speed_set": {
+        "name": "Максимальная скорость"
+      }
+    },
+    "sensor": {
+      "temperature": {
+        "name": "Температура"
+      },
+      "humidity": {
+        "name": "Влажность"
+      },
+      "temperature_in": {
+        "name": "Температура входящего потока"
+      },
+      "temperature_out": {
+        "name": "Температура исходящего потока"
+      },
+      "filter_replacement_datetime": {
+        "name": "Срок замены фильтров"
+      }
+    },
+    "switch": {
+      "backlight": {
+        "name": "Подсветка"
+      },
+      "sound": {
+        "name": "Звуковые сигналы"
+      },
+      "heater": {
+        "name": "Подогрев воздуха"
       }
     }
   }

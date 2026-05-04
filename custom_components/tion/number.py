@@ -51,6 +51,8 @@ async def async_setup_entry(
 class TionNumber(CoordinatorEntity[TionDataUpdateCoordinator], NumberEntity, abc.ABC):
     """Abstract Tion switch."""
 
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -80,11 +82,6 @@ class TionNumber(CoordinatorEntity[TionDataUpdateCoordinator], NumberEntity, abc
     @abc.abstractmethod
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
-
-    @property
-    @abc.abstractmethod
-    def name(self) -> str:
-        """Return the entity name."""
 
     @abc.abstractmethod
     async def async_set_native_value(self, value: float) -> None:
@@ -141,6 +138,9 @@ class TionNumber(CoordinatorEntity[TionDataUpdateCoordinator], NumberEntity, abc
 class TionTargetCO2(TionNumber):
     """Tion Target CO2 Level Number."""
 
+    _attr_icon = "mdi:molecule-co2"
+    _attr_translation_key = "target_co2"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -165,11 +165,6 @@ class TionTargetCO2(TionNumber):
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_target_co2"
-
-    @property
-    def name(self) -> str:
-        """Return the name of the switch."""
-        return f"{self._device.name} Target CO2"
 
     @property
     def native_value(self) -> float | None:
@@ -235,6 +230,9 @@ class TionTargetCO2(TionNumber):
 class TionMinSpeed(TionNumber):
     """Tion Minimum Speed Number for Breezer Auto Mode."""
 
+    _attr_icon = "mdi:fan-chevron-down"
+    _attr_translation_key = "min_speed_set"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -254,16 +252,6 @@ class TionMinSpeed(TionNumber):
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_min_speed_set"
-
-    @property
-    def name(self) -> str:
-        """Return the name of the switch."""
-        return f"{self._device.name} Min Speed Set"
-
-    @property
-    def icon(self) -> str:
-        """Return the MDI icon."""
-        return "mdi:fan-chevron-down"
 
     @property
     def native_value(self) -> float | None:
@@ -340,6 +328,9 @@ class TionMinSpeed(TionNumber):
 class TionMaxSpeed(TionNumber):
     """Tion Maximum Speed Number for Breezer Auto Mode."""
 
+    _attr_icon = "mdi:fan-chevron-up"
+    _attr_translation_key = "max_speed_set"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -359,16 +350,6 @@ class TionMaxSpeed(TionNumber):
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_max_speed_set"
-
-    @property
-    def name(self) -> str:
-        """Return the name of the switch."""
-        return f"{self._device.name} Max Speed Set"
-
-    @property
-    def icon(self) -> str:
-        """Return the MDI icon."""
-        return "mdi:fan-chevron-up"
 
     @property
     def native_value(self) -> int | None:

@@ -65,6 +65,8 @@ async def async_setup_entry(
 class TionSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc.ABC):
     """Abstract Tion sensor."""
 
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -95,11 +97,6 @@ class TionSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc
 
     @property
     @abc.abstractmethod
-    def name(self):
-        """Return the name of the sensor."""
-
-    @property
-    @abc.abstractmethod
     def native_value(self):
         """Return the state of the sensor."""
 
@@ -121,6 +118,8 @@ class TionSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc
 class TionTemperatureSensor(TionSensor):
     """Tion room temperature sensor."""
 
+    _attr_translation_key = "temperature"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -138,11 +137,6 @@ class TionTemperatureSensor(TionSensor):
     def unique_id(self):
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_temperature"
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{self._device.name} Temperature"
 
     @property
     def native_value(self):
@@ -164,6 +158,8 @@ class TionTemperatureSensor(TionSensor):
 class TionHumiditySensor(TionSensor):
     """Tion room humidity sensor."""
 
+    _attr_translation_key = "humidity"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -181,11 +177,6 @@ class TionHumiditySensor(TionSensor):
     def unique_id(self):
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_humidity"
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{self._device.name} Humidity"
 
     @property
     def native_value(self):
@@ -207,6 +198,8 @@ class TionHumiditySensor(TionSensor):
 class TionCO2Sensor(TionSensor):
     """Tion room CO2 sensor."""
 
+    _attr_translation_key = "co2"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -224,11 +217,6 @@ class TionCO2Sensor(TionSensor):
     def unique_id(self):
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_co2"
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{self._device.name} CO2"
 
     @property
     def native_value(self):
@@ -250,6 +238,8 @@ class TionCO2Sensor(TionSensor):
 class TionPM25Sensor(TionSensor):
     """Tion room PM25 sensor."""
 
+    _attr_translation_key = "pm25"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -267,11 +257,6 @@ class TionPM25Sensor(TionSensor):
     def unique_id(self):
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_pm25"
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{self._device.name} PM25"
 
     @property
     def native_value(self):
@@ -293,6 +278,8 @@ class TionPM25Sensor(TionSensor):
 class TionTemperatureInSensor(TionSensor):
     """Tion inside air flow temperature sensor."""
 
+    _attr_translation_key = "temperature_in"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -310,11 +297,6 @@ class TionTemperatureInSensor(TionSensor):
     def unique_id(self):
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_temperature_in"
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{self._device.name} Inflow Temperature"
 
     @property
     def native_value(self):
@@ -336,6 +318,8 @@ class TionTemperatureInSensor(TionSensor):
 class TionTemperatureOutSensor(TionSensor):
     """Tion outside air flow temperature sensor."""
 
+    _attr_translation_key = "temperature_out"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -353,11 +337,6 @@ class TionTemperatureOutSensor(TionSensor):
     def unique_id(self):
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_temperature_out"
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{self._device.name} Outflow Temperature"
 
     @property
     def native_value(self):
@@ -379,6 +358,8 @@ class TionTemperatureOutSensor(TionSensor):
 class TionFilterReplacementSensor(TionSensor):
     """Tion Breezer filter replacement sensor."""
 
+    _attr_translation_key = "filter_replacement_datetime"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -393,11 +374,6 @@ class TionFilterReplacementSensor(TionSensor):
     def unique_id(self):
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_filter_replacement_datetime"
-
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return f"{self._device.name} Filter Replacement Datetime"
 
     @property
     def native_value(self):

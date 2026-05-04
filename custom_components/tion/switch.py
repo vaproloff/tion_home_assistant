@@ -53,6 +53,8 @@ async def async_setup_entry(
 class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc.ABC):
     """Abstract Tion switch."""
 
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -82,11 +84,6 @@ class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc
     @abc.abstractmethod
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
-
-    @property
-    @abc.abstractmethod
-    def name(self) -> str:
-        """Return the name of the switch."""
 
     @property
     def is_on(self) -> bool | None:
@@ -150,6 +147,8 @@ class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc
 class TionBacklightSwitch(TionSwitch):
     """Tion backlight switch."""
 
+    _attr_translation_key = "backlight"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -164,11 +163,6 @@ class TionBacklightSwitch(TionSwitch):
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_backlight"
-
-    @property
-    def name(self) -> str:
-        """Return the name of the switch."""
-        return f"{self._device.name} Backlight"
 
     @property
     def icon(self) -> str:
@@ -210,6 +204,8 @@ class TionBacklightSwitch(TionSwitch):
 class TionBreezerSoundSwitch(TionSwitch):
     """Tion MagicAir backlight switch."""
 
+    _attr_translation_key = "sound"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -224,11 +220,6 @@ class TionBreezerSoundSwitch(TionSwitch):
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_sound"
-
-    @property
-    def name(self) -> str:
-        """Return the name of the switch."""
-        return f"{self._device.name} Sound"
 
     @property
     def icon(self) -> str:
@@ -270,6 +261,8 @@ class TionBreezerSoundSwitch(TionSwitch):
 class TionBreezerHeaterSwitch(TionSwitch):
     """Tion Breezer Heater switch."""
 
+    _attr_translation_key = "heater"
+
     def __init__(
         self,
         coordinator: TionDataUpdateCoordinator,
@@ -284,11 +277,6 @@ class TionBreezerHeaterSwitch(TionSwitch):
     def unique_id(self) -> str:
         """Return a unique id identifying the entity."""
         return f"{self._device.guid}_heater"
-
-    @property
-    def name(self) -> str:
-        """Return the name of the switch."""
-        return f"{self._device.name} Heater"
 
     @property
     def icon(self) -> str:
