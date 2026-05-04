@@ -352,7 +352,8 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
         if hvac_mode == HVACMode.OFF:
             self._mode = ZoneMode.MANUAL
             self._is_on = False
-            await self._send_zone()
+            self.async_write_ha_state()
+            await self._send_zone(request_refresh=False)
         else:
             if hvac_mode == HVACMode.HEAT:
                 self.heater_enabled = True
@@ -361,6 +362,8 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
 
             if self.hvac_mode == HVACMode.OFF:
                 self._is_on = True
+
+            self.async_write_ha_state()
 
         await self._send_breezer()
 
@@ -409,7 +412,17 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
                     e,
                 )
 
-        if self._mode != new_mode:
+        mode_changed = self._mode != new_mode
+        speed_changed = (
+            new_mode == ZoneMode.MANUAL
+            and new_speed is not None
+            and self.speed != new_speed
+        )
+
+        if not mode_changed and not speed_changed:
+            return
+
+        if mode_changed:
             _LOGGER.debug(
                 "%s: changing zone mode (%s -> %s)",
                 self.name,
@@ -418,13 +431,8 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
             )
             self._mode = new_mode
             self._set_swing_modes()
-            await self._send_zone()
 
-        if (
-            new_mode == ZoneMode.MANUAL
-            and new_speed is not None
-            and self.speed != new_speed
-        ):
+        if speed_changed:
             _LOGGER.debug(
                 "%s: changing breezer speed (%s -> %s)",
                 self.name,
@@ -432,6 +440,13 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
                 new_speed,
             )
             self.speed = new_speed
+
+        self.async_write_ha_state()
+
+        if mode_changed:
+            await self._send_zone(request_refresh=not speed_changed)
+
+        if speed_changed:
             await self._send_breezer()
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
@@ -457,6 +472,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
                 swing_mode,
             )
             self._gate = new_gate
+            self.async_write_ha_state()
             await self._send_breezer()
 
     def _set_swing_modes(self):
@@ -518,7 +534,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
 
         return self.available
 
-    async def _send_breezer(self) -> bool:
+    async def _send_breezer(self, *, request_refresh: bool = True) -> bool:
         """Send new breezer data to API."""
         if not self._breezer_valid:
             raise HomeAssistantError(f"{self.name} is unavailable")
@@ -541,7 +557,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
         )
 
         try:
-            await self.coordinator.client.send_breezer(
+            await self.coordinator.async_send_breezer(
                 guid=self._breezer_guid,
                 is_on=self._is_on,
                 t_set=self._t_set,
@@ -551,11 +567,11 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
                 heater_enabled=self._heater_enabled,
                 heater_mode=self._heater_mode,
                 gate=self._gate,
+                request_refresh=request_refresh,
             )
         except TionError as err:
             raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
 
-        await self.coordinator.async_request_refresh()
         return True
 
     def _load_zone(self, force=False) -> bool:
@@ -591,7 +607,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
 
         return self.available
 
-    async def _send_zone(self) -> bool:
+    async def _send_zone(self, *, request_refresh: bool = True) -> bool:
         """Send new zone data to API."""
         if not self._zone_valid:
             raise HomeAssistantError(f"{self.name} zone is unavailable")
@@ -607,11 +623,13 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
         )
 
         try:
-            await self.coordinator.client.send_zone(
-                guid=self._zone_guid, mode=self.mode, co2=self._target_co2
+            await self.coordinator.async_send_zone(
+                guid=self._zone_guid,
+                mode=self.mode,
+                co2=self._target_co2,
+                request_refresh=request_refresh,
             )
         except TionError as err:
             raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
 
-        await self.coordinator.async_request_refresh()
         return True

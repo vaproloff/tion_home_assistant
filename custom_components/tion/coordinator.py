@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -41,6 +43,8 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
     ) -> None:
         """Initialize the coordinator."""
         self.client = client
+        self._current_command_started_at: float | None = None
+        self._last_command_completed_at: float | None = None
 
         super().__init__(
             hass,
@@ -48,16 +52,72 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             config_entry=entry,
             name="Tion",
             update_interval=timedelta(seconds=scan_interval),
+            always_update=False,
         )
 
     async def _async_update_data(self) -> TionData:
         """Fetch data from Tion API."""
+        request_started_at = self.hass.loop.time()
         try:
-            return TionData(await self.client.get_locations())
+            locations = await self.client.get_locations()
         except TionAuthError as err:
             raise ConfigEntryAuthFailed from err
         except (TionApiError, TionConnectionError) as err:
             raise UpdateFailed(str(err)) from err
+
+        if self.data is not None and (
+            self._current_command_started_at is not None
+            or (
+                self._last_command_completed_at is not None
+                and request_started_at < self._last_command_completed_at
+            )
+        ):
+            _LOGGER.debug("Ignoring stale Tion location data")
+            return self.data
+
+        return TionData(locations)
+
+    async def _async_send_command(
+        self, command: Awaitable[bool], *, request_refresh: bool = True
+    ) -> bool:
+        """Send a command and refresh coordinator data after it succeeds."""
+        command_started_at = self.hass.loop.time()
+        self._current_command_started_at = command_started_at
+        try:
+            result = await command
+            self._last_command_completed_at = self.hass.loop.time()
+        finally:
+            if self._current_command_started_at == command_started_at:
+                self._current_command_started_at = None
+
+        if request_refresh:
+            await self.async_request_refresh()
+
+        return result
+
+    async def async_send_breezer(
+        self, *, request_refresh: bool = True, **kwargs: Any
+    ) -> bool:
+        """Send new breezer data to API."""
+        return await self._async_send_command(
+            self.client.send_breezer(**kwargs), request_refresh=request_refresh
+        )
+
+    async def async_send_zone(
+        self, *, request_refresh: bool = True, **kwargs: Any
+    ) -> bool:
+        """Send new zone data to API."""
+        return await self._async_send_command(
+            self.client.send_zone(**kwargs), request_refresh=request_refresh
+        )
+
+    async def async_send_settings(
+        self, *, request_refresh: bool = True, **kwargs: Any
+    ) -> bool:
+        """Send new settings data to API."""
+        return await self._async_send_command(
+            self.client.send_settings(**kwargs), request_refresh=request_refresh
+        )
 
     def get_devices(self):
         """Get all devices from coordinator data."""
