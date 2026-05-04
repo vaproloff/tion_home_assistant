@@ -40,7 +40,6 @@ async def async_setup_entry(
             continue
 
         if device.type in [
-            TionDeviceType.BREEZER_O2,
             TionDeviceType.BREEZER_3S,
             TionDeviceType.BREEZER_4S,
         ]:
@@ -62,7 +61,9 @@ async def async_setup_entry(
     return True
 
 
-class TionSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc.ABC):
+class TionSensor(
+    CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc.ABC
+):
     """Abstract Tion sensor."""
 
     def __init__(
