@@ -17,7 +17,6 @@ PLATFORMS = [
     Platform.SWITCH,
 ]
 
-
 class TionDeviceType(StrEnum):
     """Component supported device types."""
 
@@ -30,7 +29,6 @@ class TionDeviceType(StrEnum):
 
 
 MODELS_SUPPORTED: dict[TionDeviceType, str] = {
-    TionDeviceType.BREEZER_O2: "Breezer O2",
     TionDeviceType.BREEZER_3S: "Breezer 3S",
     TionDeviceType.BREEZER_4S: "Breezer 4S",
     TionDeviceType.MAGIC_AIR: "MagicAir",
