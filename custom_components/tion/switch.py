@@ -11,8 +11,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import TionError, TionZoneDevice
-from .const import DOMAIN, Heater, TionDeviceType
+from .client import TionError, TionZone, TionZoneDevice
+from .const import DOMAIN, Heater, TionDeviceType, ZoneMode
 from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,6 +45,8 @@ async def async_setup_entry(
             TionDeviceType.MODULE_CO2,
         ]:
             entities.append(TionBacklightSwitch(coordinator, device))
+            if device.type == TionDeviceType.MAGIC_AIR:
+                entities.append(TionAutoModeSwitch(coordinator, device))
 
     async_add_entities(entities)
     return True
@@ -139,6 +141,13 @@ class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc
         except TionError as err:
             raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
 
+    async def _async_send_zone(self, **kwargs) -> None:
+        """Send zone data and refresh coordinator data."""
+        try:
+            await self.coordinator.async_send_zone(**kwargs)
+        except TionError as err:
+            raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
+
     @abc.abstractmethod
     async def _send(self) -> None:
         """Send new switch device data to API."""
@@ -199,6 +208,93 @@ class TionBacklightSwitch(TionSwitch):
             self._is_on,
         )
         await self._async_send_settings(data)
+
+
+class TionAutoModeSwitch(TionSwitch):
+    """Tion MagicAir auto mode switch."""
+
+    _attr_translation_key = "auto_mode"
+
+    def __init__(
+        self,
+        coordinator: TionDataUpdateCoordinator,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize switch device."""
+        super().__init__(coordinator, device)
+
+        self._is_on = self._auto_enabled
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique id identifying the entity."""
+        return f"{self._device.guid}_auto_mode"
+
+    @property
+    def icon(self) -> str:
+        """Return the MDI icon."""
+        return "mdi:fan-auto" if self._is_on else "mdi:fan"
+
+    @property
+    def _auto_enabled(self) -> bool | None:
+        """Return if Auto mode enabled now."""
+        zone: TionZone | None = self.coordinator.get_device_zone(self._device.guid)
+        if zone is not None:
+            return zone.mode.current == ZoneMode.AUTO
+
+        return None
+
+    async def _load(self, force=False) -> bool:
+        """Update device and zone data from API."""
+        await super()._load(force=force)
+        self._handle_device_update()
+
+        return self.available
+
+    @callback
+    def _handle_device_update(self) -> None:
+        """Handle updated auto mode state."""
+        self._is_on = self._auto_enabled
+
+        if self._is_on is None:
+            _LOGGER.debug(
+                "%s: zone is unavailable",
+                self.name,
+            )
+
+        _LOGGER.debug(
+            "%s: fetched zone data: mode=%s",
+            self.name,
+            ZoneMode.AUTO if self._is_on else ZoneMode.MANUAL,
+        )
+
+    async def _send(self) -> None:
+        """Send new switch data to API."""
+        zone: TionZone | None = self.coordinator.get_device_zone(self._device.guid)
+
+        if not self.available or zone is None:
+            raise HomeAssistantError(f"{self.name} zone is unavailable")
+
+        mode = ZoneMode.AUTO if self._is_on else ZoneMode.MANUAL
+        try:
+            target_co2 = int(zone.mode.auto_set.co2)
+        except (TypeError, ValueError) as err:
+            raise HomeAssistantError(
+                f"Unable to read target CO2 for {self.name}"
+            ) from err
+
+        _LOGGER.debug(
+            "%s: pushing new zone data: mode=%s, target_co2=%s",
+            self.name,
+            mode,
+            target_co2,
+        )
+
+        await self._async_send_zone(
+            guid=zone.guid,
+            mode=mode,
+            co2=target_co2,
+        )
 
 
 class TionBreezerSoundSwitch(TionSwitch):

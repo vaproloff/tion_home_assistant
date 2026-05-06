@@ -3,7 +3,7 @@
 [![HACS validation](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml)
 [![Hassfest](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.1%2B-blue)
-![Version](https://img.shields.io/badge/version-2026.5.0-blue)
+![Version](https://img.shields.io/badge/version-2026.5.2-blue)
 ![HACS](https://img.shields.io/badge/HACS-Custom-orange)
 [![GitHub stars](https://img.shields.io/github/stars/vaproloff/tion_home_assistant?style=social)](https://github.com/vaproloff/tion_home_assistant/stargazers)
 
@@ -25,7 +25,7 @@ This is a custom HomeAssistant integration for Tion Breezer 3S/4S, MagicAir and 
 - Переключать забор воздуха с улицы, из комнаты или смешанный режим, если это поддерживает модель.
 - Показывать температуру входящего и исходящего потока воздуха.
 - Следить за CO2, влажностью, температурой и PM2.5 с MagicAir или Module CO2+.
-- Настраивать целевой CO2 и границы скорости для автоматического режима.
+- Настраивать целевой CO2, включать Авто-режим и задавать границы скорости.
 - Управлять подогревом, подсветкой и звуковыми сигналами устройств.
 - Напоминать о замене фильтров и сбрасывать счётчик после обслуживания (только для 3S/4S).
 
@@ -71,7 +71,7 @@ This is a custom HomeAssistant integration for Tion Breezer 3S/4S, MagicAir and 
 | Качество воздуха | `sensor` | Температура, влажность, CO2 и PM2.5 (если датчик доступен) |
 | Потоки воздуха | `sensor` | Температура входящего и исходящего потока бризера |
 | Обслуживание фильтров | `sensor`, `binary_sensor`, `button` | Дни до замены, сигнал о необходимости замены и сброс счётчика |
-| Настройки устройства | `switch`, `number` | Подогрев, подсветка, звук, целевой CO2 и пределы скорости Авто режима |
+| Настройки устройства | `switch`, `number` | Подогрев, подсветка, звук, Авто-режим, целевой CO2 и пределы скорости Авто режима |
 
 Интеграция использует стандартные действия HomeAssistant, поэтому её можно подключать к автоматизациям, скриптам, дашбордам и голосовым сценариям без отдельных custom-сервисов.
 
