@@ -28,7 +28,6 @@ async def async_setup_entry(
         if device.guid
         and device.type
         in (
-            TionDeviceType.BREEZER_O2,
             TionDeviceType.BREEZER_3S,
             TionDeviceType.BREEZER_4S,
         )
