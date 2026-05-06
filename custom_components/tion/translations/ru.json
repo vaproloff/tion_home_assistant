@@ -85,8 +85,8 @@
       "temperature_out": {
         "name": "Температура исходящего потока"
       },
-      "filter_replacement_datetime": {
-        "name": "Срок замены фильтров"
+      "filter_replacement_days": {
+        "name": "До замены фильтров"
       }
     },
     "switch": {

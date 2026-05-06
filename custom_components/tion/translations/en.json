@@ -92,8 +92,8 @@
       "temperature_out": {
         "name": "Outflow Temperature"
       },
-      "filter_replacement_datetime": {
-        "name": "Filter Replacement Datetime"
+      "filter_replacement_days": {
+        "name": "Days until filter replacement"
       }
     },
     "switch": {

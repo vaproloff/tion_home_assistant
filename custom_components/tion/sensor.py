@@ -2,6 +2,7 @@
 
 import abc
 import logging
+from math import ceil
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -14,11 +15,11 @@ from homeassistant.const import (
     CONCENTRATION_PARTS_PER_MILLION,
     PERCENTAGE,
     UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import timedelta, utcnow
 
 from .client import TionZoneDevice
 from .const import DOMAIN, TionDeviceType
@@ -358,7 +359,7 @@ class TionTemperatureOutSensor(TionSensor):
 class TionFilterReplacementSensor(TionSensor):
     """Tion Breezer filter replacement sensor."""
 
-    _attr_translation_key = "filter_replacement_datetime"
+    _attr_translation_key = "filter_replacement_days"
 
     def __init__(
         self,
@@ -368,18 +369,21 @@ class TionFilterReplacementSensor(TionSensor):
         """Initialize sensor device."""
         super().__init__(coordinator, device)
 
-        self._attr_device_class = SensorDeviceClass.TIMESTAMP
+        self._attr_device_class = SensorDeviceClass.DURATION
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_unit_of_measurement = UnitOfTime.DAYS
+        self._attr_suggested_display_precision = 0
 
     @property
     def unique_id(self):
         """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_filter_replacement_datetime"
+        return f"{self._device.guid}_filter_replacement_days"
 
     @property
     def native_value(self):
         """Return the state of the sensor."""
         return (
-            utcnow() + timedelta(seconds=self._device.data.filter_time_seconds)
+            max(0, ceil(self._device.data.filter_time_seconds / 86400))
             if self.available
             else None
         )
