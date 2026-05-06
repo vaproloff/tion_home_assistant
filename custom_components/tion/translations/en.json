@@ -103,6 +103,9 @@
       "sound": {
         "name": "Sound"
       },
+      "auto_mode": {
+        "name": "Auto Mode"
+      },
       "heater": {
         "name": "Air Heater"
       }
