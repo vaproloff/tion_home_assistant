@@ -6,7 +6,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -22,6 +22,9 @@ from .client import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from .pid_manager import TionPidManager
 
 
 @dataclass
@@ -43,6 +46,7 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
     ) -> None:
         """Initialize the coordinator."""
         self.client = client
+        self.pid_manager: TionPidManager
         self._current_command_started_at: float | None = None
         self._last_command_completed_at: float | None = None
 

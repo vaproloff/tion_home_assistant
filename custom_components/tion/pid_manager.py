@@ -1,0 +1,470 @@
+"""Runtime manager for local Tion CO2 PID control."""
+
+from __future__ import annotations
+
+from datetime import timedelta
+import logging
+from typing import Any
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
+
+from .client import TionError
+from .const import (
+    CONF_CO2_SENSOR_ENTITY_ID,
+    CONF_PID_BREEZERS,
+    CONF_PID_ENABLED,
+    CONF_PID_KD,
+    CONF_PID_KI,
+    CONF_PID_KP,
+    DEFAULT_PID_KD,
+    DEFAULT_PID_KI,
+    DEFAULT_PID_KP,
+    DEFAULT_TARGET_CO2,
+    ZoneMode,
+)
+from .coordinator import TionDataUpdateCoordinator
+from .pid import PidCoefficients, PidController, PidOutput
+
+_LOGGER = logging.getLogger(__name__)
+
+PID_STATUS_INACTIVE = "inactive"
+PID_STATUS_RUNNING = "running"
+PID_STATUS_NOT_CONFIGURED = "not_configured"
+PID_STATUS_PAUSED_SENSOR_UNAVAILABLE = "paused_sensor_unavailable"
+PID_STATUS_PAUSED_DEVICE_UNAVAILABLE = "paused_device_unavailable"
+PID_STATUS_PAUSED_INVALID_DEVICE_DATA = "paused_invalid_device_data"
+PID_STATUS_SEND_FAILED = "send_failed"
+
+
+def _int_or_default(value: Any, default: int | None) -> int | None:
+    """Convert an API value to int or return a default."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+class _TionBreezerPidController:
+    """Manage local PID runtime for one breezer."""
+
+    def __init__(self, manager: TionPidManager, breezer_guid: str) -> None:
+        """Initialize a breezer PID controller."""
+        self.manager = manager
+        self.hass = manager.hass
+        self.entry = manager.entry
+        self.coordinator = manager.coordinator
+        self.breezer_guid = breezer_guid
+
+        self.active = False
+        self.source_co2: float | None = None
+        self.error: float | None = None
+        self.output_speed: int | None = None
+        self.status = PID_STATUS_INACTIVE
+        self.last_update: str | None = None
+        self.target_co2 = DEFAULT_TARGET_CO2
+        self.controller = PidController(
+            PidCoefficients(
+                kp=DEFAULT_PID_KP,
+                ki=DEFAULT_PID_KI,
+                kd=DEFAULT_PID_KD,
+            )
+        )
+
+    def set_active(self, active: bool) -> bool:
+        """Arm or disarm this breezer PID controller."""
+        if self.active != active:
+            _LOGGER.debug(
+                "%s local PID for breezer %s",
+                "Arming" if active else "Disarming",
+                self.breezer_guid,
+            )
+
+        self.active = active
+        self._set_status(PID_STATUS_RUNNING if active else PID_STATUS_INACTIVE)
+        if not active:
+            self.controller.reset()
+        return active
+
+    def set_target_co2(self, target_co2: float) -> None:
+        """Set the local target CO2 for this breezer."""
+        _LOGGER.debug(
+            "Changing local PID target CO2 for breezer %s to %s",
+            self.breezer_guid,
+            target_co2,
+        )
+        self.target_co2 = target_co2
+        self.controller.reset()
+
+    def extra_state_attributes(self, source_entity_id: str | None) -> dict[str, Any]:
+        """Return PID attributes for a climate entity."""
+        return {
+            "pid_active": self.active,
+            "pid_source_entity_id": source_entity_id,
+            "pid_source_co2": self.source_co2,
+            "pid_error": self.error,
+            "pid_output_speed": self.output_speed,
+            "pid_status": self.status,
+            "pid_last_update": self.last_update,
+        }
+
+    async def async_evaluate(self) -> PidOutput | None:
+        """Evaluate this PID controller and send a command if needed."""
+        options = self.entry.options.get(CONF_PID_BREEZERS, {}).get(
+            self.breezer_guid, {}
+        )
+        if not self.active:
+            self._set_status(PID_STATUS_INACTIVE)
+            return None
+
+        if not self.manager.is_configured(self.breezer_guid):
+            self.active = False
+            self.controller.reset()
+            self._set_status(PID_STATUS_NOT_CONFIGURED)
+            return None
+
+        zone = self.coordinator.get_device_zone(self.breezer_guid)
+        if zone is None or not zone.valid:
+            self._pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
+            return None
+
+        if zone.mode.current == ZoneMode.AUTO:
+            target_co2 = _int_or_default(zone.mode.auto_set.co2, int(self.target_co2))
+            if target_co2 is None:
+                target_co2 = DEFAULT_TARGET_CO2
+
+            _LOGGER.debug(
+                "Returning Tion zone %s to manual mode for local PID control",
+                zone.name,
+            )
+            try:
+                await self.coordinator.async_send_zone(
+                    guid=zone.guid,
+                    mode=ZoneMode.MANUAL,
+                    co2=target_co2,
+                    request_refresh=False,
+                )
+            except TionError as err:
+                _LOGGER.warning(
+                    "Unable to disable MagicAir auto mode for local PID control: %s",
+                    err,
+                )
+                self._pause(PID_STATUS_SEND_FAILED)
+                return None
+
+        source_entity_id = options[CONF_CO2_SENSOR_ENTITY_ID]
+        co2_state = self.hass.states.get(source_entity_id)
+        if co2_state is None or co2_state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+            self.source_co2 = None
+            self._pause(PID_STATUS_PAUSED_SENSOR_UNAVAILABLE)
+            return None
+
+        try:
+            source_co2 = float(co2_state.state)
+        except (TypeError, ValueError):
+            self.source_co2 = None
+            self._pause(PID_STATUS_PAUSED_SENSOR_UNAVAILABLE)
+            return None
+
+        device = self.coordinator.get_device(self.breezer_guid)
+        self.source_co2 = source_co2
+        if device is None or not device.valid or not device.is_online:
+            self._pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
+            return None
+
+        device_max_speed = _int_or_default(device.max_speed, 0)
+        speed_min = _int_or_default(device.data.speed_min_set, 0)
+        speed_max = _int_or_default(device.data.speed_max_set, device_max_speed)
+        t_set = _int_or_default(device.data.t_set, None)
+        if (
+            device_max_speed is None
+            or device_max_speed <= 0
+            or speed_min is None
+            or speed_max is None
+            or t_set is None
+        ):
+            self._pause(PID_STATUS_PAUSED_INVALID_DEVICE_DATA)
+            return None
+
+        self.controller.coefficients = PidCoefficients(
+            kp=float(options.get(CONF_PID_KP, DEFAULT_PID_KP)),
+            ki=float(options.get(CONF_PID_KI, DEFAULT_PID_KI)),
+            kd=float(options.get(CONF_PID_KD, DEFAULT_PID_KD)),
+        )
+        output = self.controller.calculate(
+            source_co2=source_co2,
+            target_co2=self.target_co2,
+            speed_min=speed_min,
+            speed_max=speed_max,
+            device_max_speed=device_max_speed,
+            now=self.hass.loop.time(),
+        )
+
+        self.error = output.error
+        self.output_speed = output.speed
+        self._set_status(PID_STATUS_RUNNING)
+
+        try:
+            current_speed = int(device.data.speed)
+        except (TypeError, ValueError):
+            command_changed = True
+        else:
+            command_changed = (
+                current_speed != output.speed
+                or bool(device.data.is_on) != output.is_on
+            )
+
+        if not command_changed:
+            _LOGGER.debug(
+                "Skipping unchanged local PID command for %s: is_on=%s speed=%s",
+                device.name,
+                output.is_on,
+                output.speed,
+            )
+            return output
+
+        _LOGGER.debug(
+            "Sending local PID command for %s: co2=%s target=%s error=%s is_on=%s "
+            "speed=%s",
+            device.name,
+            source_co2,
+            self.target_co2,
+            output.error,
+            output.is_on,
+            output.speed,
+        )
+        try:
+            await self.coordinator.async_send_breezer(
+                guid=device.guid,
+                is_on=output.is_on,
+                t_set=t_set,
+                speed=output.speed,
+                speed_min_set=speed_min,
+                speed_max_set=speed_max,
+                heater_enabled=device.data.heater_enabled,
+                heater_mode=device.data.heater_mode,
+                gate=device.data.gate,
+                request_refresh=False,
+            )
+        except TionError as err:
+            _LOGGER.warning(
+                "Unable to send local PID command for %s: %s",
+                device.name,
+                err,
+            )
+            self._pause(PID_STATUS_SEND_FAILED)
+            return None
+
+        return output
+
+    def _pause(self, status: str) -> None:
+        """Pause updates without disarming PID."""
+        self.error = None
+        self.output_speed = None
+        self._set_status(status)
+
+    def _set_status(self, status: str) -> None:
+        """Update runtime status timestamp."""
+        if self.status != status:
+            _LOGGER.debug(
+                "Local PID status for breezer %s changed: %s -> %s",
+                self.breezer_guid,
+                self.status,
+                status,
+            )
+        self.status = status
+        self.last_update = dt_util.utcnow().isoformat()
+
+
+class TionPidManager:
+    """Manage local PID control for all breezers in one config entry."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        coordinator: TionDataUpdateCoordinator,
+        scan_interval: int,
+    ) -> None:
+        """Initialize the PID manager."""
+        self.hass = hass
+        self.entry = entry
+        self.coordinator = coordinator
+        self.scan_interval = scan_interval
+        self._controllers: dict[str, _TionBreezerPidController] = {}
+        self._unsub_interval: CALLBACK_TYPE | None = None
+
+    @callback
+    def async_start(self) -> CALLBACK_TYPE:
+        """Start periodic PID evaluation."""
+        if self.has_active_pid():
+            self._ensure_timer()
+        return self.async_stop
+
+    @callback
+    def _ensure_timer(self) -> None:
+        """Start the PID timer when at least one controller is active."""
+        if self._unsub_interval is None:
+            _LOGGER.debug(
+                "Starting local PID timer for config entry %s with interval %s seconds",
+                getattr(self.entry, "entry_id", "<unknown>"),
+                self.scan_interval,
+            )
+            self._unsub_interval = async_track_time_interval(
+                self.hass,
+                self._handle_interval,
+                timedelta(seconds=self.scan_interval),
+            )
+
+    @callback
+    def async_stop(self) -> None:
+        """Stop periodic PID evaluation."""
+        if self._unsub_interval is not None:
+            _LOGGER.debug(
+                "Stopping local PID timer for config entry %s",
+                getattr(self.entry, "entry_id", "<unknown>"),
+            )
+            self._unsub_interval()
+            self._unsub_interval = None
+
+    @callback
+    def _handle_interval(self, _now) -> None:
+        """Handle periodic PID evaluation."""
+        self.hass.async_create_task(self.async_evaluate_all())
+
+    def configured_breezers(self) -> set[str]:
+        """Return breezers that have local PID control enabled."""
+        return {
+            breezer_guid
+            for breezer_guid in self.entry.options.get(CONF_PID_BREEZERS, {})
+            if self.is_configured(breezer_guid)
+        }
+
+    def has_enabled_pid(self) -> bool:
+        """Return if at least one breezer has local PID control enabled."""
+        return bool(self.configured_breezers())
+
+    def has_active_pid(self) -> bool:
+        """Return if at least one breezer has active local PID control."""
+        return any(controller.active for controller in self._controllers.values())
+
+    @property
+    def running(self) -> bool:
+        """Return if the periodic PID evaluation timer is running."""
+        return self._unsub_interval is not None
+
+    def is_configured(self, breezer_guid: str) -> bool:
+        """Return if a breezer has enabled external CO2 PID settings."""
+        options = self._pid_options(breezer_guid)
+        return bool(
+            options.get(CONF_PID_ENABLED) and options.get(CONF_CO2_SENSOR_ENTITY_ID)
+        )
+
+    def is_active(self, breezer_guid: str) -> bool:
+        """Return if PID is currently armed for a breezer."""
+        controller = self._controllers.get(breezer_guid)
+        return bool(controller and controller.active and self.is_configured(breezer_guid))
+
+    @callback
+    def set_active(self, breezer_guid: str, active: bool) -> bool:
+        """Arm or disarm local PID control for a breezer."""
+        if active:
+            controller = self._controller(breezer_guid)
+            if controller is None:
+                _LOGGER.debug(
+                    "Cannot arm local PID for breezer %s: PID is not configured",
+                    breezer_guid,
+                )
+                return False
+            result = controller.set_active(True)
+            if result:
+                self._ensure_timer()
+            return result
+
+        controller = self._controllers.get(breezer_guid)
+        if controller is None:
+            return False
+        result = controller.set_active(False)
+        if not self.has_active_pid():
+            self.async_stop()
+        return result
+
+    def get_target_co2(self, breezer_guid: str) -> float:
+        """Return the local target CO2 for a breezer."""
+        controller = self._controller(breezer_guid)
+        return controller.target_co2 if controller is not None else DEFAULT_TARGET_CO2
+
+    @callback
+    def set_target_co2(self, breezer_guid: str, target_co2: float) -> None:
+        """Set the local target CO2 for a breezer."""
+        controller = self._controller(breezer_guid)
+        if controller is None:
+            _LOGGER.debug(
+                "Ignoring local PID target CO2 for breezer %s: PID is not configured",
+                breezer_guid,
+            )
+            return
+        controller.set_target_co2(target_co2)
+
+    def extra_state_attributes(self, breezer_guid: str) -> dict[str, Any]:
+        """Return PID attributes for a climate entity."""
+        options = self._pid_options(breezer_guid)
+        source_entity_id = options.get(CONF_CO2_SENSOR_ENTITY_ID)
+        controller = self._controllers.get(breezer_guid)
+        if controller is not None and self.is_configured(breezer_guid):
+            return controller.extra_state_attributes(source_entity_id)
+
+        return {
+            "pid_active": False,
+            "pid_source_entity_id": source_entity_id,
+            "pid_source_co2": None,
+            "pid_error": None,
+            "pid_output_speed": None,
+            "pid_status": PID_STATUS_INACTIVE,
+            "pid_last_update": None,
+        }
+
+    async def async_evaluate_all(self) -> None:
+        """Evaluate active PID controllers."""
+        breezer_guids = {
+            breezer_guid
+            for breezer_guid, controller in self._controllers.items()
+            if controller.active
+        }
+        if not breezer_guids:
+            self.async_stop()
+            return
+
+        for breezer_guid in breezer_guids:
+            await self.async_evaluate_breezer(breezer_guid)
+        self.coordinator.async_update_listeners()
+        if not self.has_active_pid():
+            self.async_stop()
+
+    async def async_evaluate_breezer(self, breezer_guid: str) -> PidOutput | None:
+        """Evaluate one PID controller and send a command if needed."""
+        controller = self._controllers.get(breezer_guid)
+        if controller is None:
+            controller = self._controller(breezer_guid)
+        if controller is None:
+            return None
+        return await controller.async_evaluate()
+
+    def _pid_options(self, breezer_guid: str) -> dict[str, Any]:
+        """Return stored PID options for a breezer."""
+        return self.entry.options.get(CONF_PID_BREEZERS, {}).get(breezer_guid, {})
+
+    def _controller(self, breezer_guid: str) -> _TionBreezerPidController | None:
+        """Return a configured PID controller for a breezer."""
+        if not self.is_configured(breezer_guid):
+            return None
+
+        controller = self._controllers.get(breezer_guid)
+        if controller is None:
+            _LOGGER.debug("Creating local PID controller for breezer %s", breezer_guid)
+            controller = _TionBreezerPidController(self, breezer_guid)
+            self._controllers[breezer_guid] = controller
+        return controller
