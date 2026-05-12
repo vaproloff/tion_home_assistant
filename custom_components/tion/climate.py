@@ -30,6 +30,12 @@ from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+BREEZER_TYPES = (
+    TionDeviceType.BREEZER_O2,
+    TionDeviceType.BREEZER_3S,
+    TionDeviceType.BREEZER_4S,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
@@ -41,13 +47,7 @@ async def async_setup_entry(
     entities = [
         TionClimate(coordinator, device)
         for device in devices
-        if device.guid
-        and device.type
-        in (
-            TionDeviceType.BREEZER_O2,
-            TionDeviceType.BREEZER_3S,
-            TionDeviceType.BREEZER_4S,
-        )
+        if device.guid and device.type in BREEZER_TYPES
     ]
 
     async_add_entities(entities)
@@ -101,10 +101,9 @@ class TionClimate(
         self._hvac_modes = [HVACMode.OFF, HVACMode.FAN_ONLY]
         self._swing_modes = []
 
-        self._fan_modes = [FAN_AUTO]
-        self._fan_modes.extend(
-            [str(speed) for speed in range(1, breezer.max_speed + 1)]
-        )
+        self._manual_fan_modes = [
+            str(speed) for speed in range(1, breezer.max_speed + 1)
+        ]
 
         self._attr_supported_features = ClimateEntityFeature.FAN_MODE
         if self._gate is not None:
@@ -235,7 +234,27 @@ class TionClimate(
     @property
     def fan_modes(self) -> list[str]:
         """Return the list of available fan modes."""
-        return self._fan_modes
+        if self._fan_auto_available():
+            return [FAN_AUTO, *self._manual_fan_modes]
+
+        return list(self._manual_fan_modes)
+
+    def _fan_auto_available(self) -> bool:
+        """Return if Fan Auto can be selected for this breezer."""
+        pid_manager = self.coordinator.pid_manager
+        if pid_manager.is_configured(self._breezer_guid):
+            return True
+
+        zone = self.coordinator.get_device_zone(self._breezer_guid)
+        if zone is None:
+            return True
+
+        return not any(
+            device.guid
+            and device.type in BREEZER_TYPES
+            and pid_manager.is_configured(device.guid)
+            for device in zone.devices
+        )
 
     @property
     def fan_mode(self) -> str | None:
@@ -418,7 +437,7 @@ class TionClimate(
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new target fan mode."""
-        if fan_mode not in self._fan_modes:
+        if fan_mode not in self.fan_modes:
             _LOGGER.warning("%s: unsupported fan mode '%s'", self.name, fan_mode)
             return
 
