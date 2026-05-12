@@ -30,12 +30,33 @@
     "step": {
       "init": {
         "data": {
-          "scan_interval": "API poll interval"
+          "scan_interval": "API poll interval",
+          "breezer_guid": "Breezer for external CO2 control"
         },
         "data_description": {
-          "scan_interval": "Tion devices data minimum update period."
+          "scan_interval": "Tion devices data minimum update period.",
+          "breezer_guid": "Select a breezer to configure or update its local PID controller."
+        }
+      },
+      "breezer": {
+        "data": {
+          "pid_enabled": "Enable local CO2 PID control",
+          "co2_sensor_entity_id": "External CO2 sensor",
+          "pid_kp": "PID proportional gain",
+          "pid_ki": "PID integral gain",
+          "pid_kd": "PID derivative gain"
+        },
+        "data_description": {
+          "pid_enabled": "When enabled, climate fan Auto uses the external CO2 sensor and keeps the Tion zone in manual mode.",
+          "co2_sensor_entity_id": "The sensor must expose a numeric CO2 value in ppm.",
+          "pid_kp": "Safe default: 0.01.",
+          "pid_ki": "Safe default: 0.0.",
+          "pid_kd": "Safe default: 0.0."
         }
       }
+    },
+    "error": {
+      "required": "Required"
     }
   },
   "entity": {
@@ -65,6 +86,9 @@
     "number": {
       "target_co2": {
         "name": "Target CO2"
+      },
+      "external_target_co2": {
+        "name": "External CO2 Target"
       },
       "min_speed_set": {
         "name": "Min Speed Set"

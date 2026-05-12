@@ -6,8 +6,19 @@ from homeassistant.const import Platform
 
 DOMAIN = "tion"
 DEFAULT_SCAN_INTERVAL = 60
+DEFAULT_TARGET_CO2 = 800
+DEFAULT_PID_KP = 0.01
+DEFAULT_PID_KI = 0.0
+DEFAULT_PID_KD = 0.0
 AUTH_DATA = "auth"
 MANUFACTURER = "Tion"
+CONF_BREEZER_GUID = "breezer_guid"
+CONF_CO2_SENSOR_ENTITY_ID = "co2_sensor_entity_id"
+CONF_PID_BREEZERS = "pid_breezers"
+CONF_PID_ENABLED = "pid_enabled"
+CONF_PID_KP = "pid_kp"
+CONF_PID_KI = "pid_ki"
+CONF_PID_KD = "pid_kd"
 PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,

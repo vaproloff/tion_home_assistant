@@ -7,18 +7,41 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
+from homeassistant.const import (
+    CONF_PASSWORD,
+    CONF_SCAN_INTERVAL,
+    CONF_USERNAME,
+    Platform,
+)
 from homeassistant.core import callback
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .client import TionApiError, TionAuthError, TionClient, TionConnectionError
-from .const import AUTH_DATA, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import (
+    AUTH_DATA,
+    CONF_BREEZER_GUID,
+    CONF_CO2_SENSOR_ENTITY_ID,
+    CONF_PID_BREEZERS,
+    CONF_PID_ENABLED,
+    CONF_PID_KD,
+    CONF_PID_KI,
+    CONF_PID_KP,
+    DEFAULT_PID_KD,
+    DEFAULT_PID_KI,
+    DEFAULT_PID_KP,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    TionDeviceType,
+)
+from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -157,12 +180,27 @@ class TionOptionsFlow(OptionsFlow):
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize Tion options flow."""
+        self._scan_interval: int | None = None
+        self._breezer_guid: str | None = None
 
-    async def async_step_init(self, user_input=None):
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Manage the options."""
 
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            self._scan_interval = user_input[CONF_SCAN_INTERVAL]
+            self._breezer_guid = user_input.get(CONF_BREEZER_GUID)
+            if self._breezer_guid is not None:
+                return await self.async_step_breezer()
+
+            return self.async_create_entry(
+                title="",
+                data={
+                    **self.config_entry.options,
+                    CONF_SCAN_INTERVAL: self._scan_interval,
+                },
+            )
 
         return self.async_show_form(
             step_id="init",
@@ -174,6 +212,135 @@ class TionOptionsFlow(OptionsFlow):
                             CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=10)),
+                    vol.Optional(
+                        CONF_BREEZER_GUID, default=None
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=self._breezer_options(),
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                 }
             ),
+        )
+
+    async def async_step_breezer(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage local PID options for a breezer."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None and self._breezer_guid is not None:
+            co2_sensor_entity_id = user_input.get(CONF_CO2_SENSOR_ENTITY_ID)
+            if user_input[CONF_PID_ENABLED] and not co2_sensor_entity_id:
+                errors[CONF_CO2_SENSOR_ENTITY_ID] = "required"
+            else:
+                options = dict(self.config_entry.options)
+                options[CONF_SCAN_INTERVAL] = (
+                    self._scan_interval
+                    if self._scan_interval is not None
+                    else self.config_entry.options.get(
+                        CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+                    )
+                )
+
+                pid_breezers = dict(options.get(CONF_PID_BREEZERS, {}))
+                pid_breezers[self._breezer_guid] = {
+                    CONF_PID_ENABLED: user_input[CONF_PID_ENABLED],
+                    CONF_CO2_SENSOR_ENTITY_ID: co2_sensor_entity_id,
+                    CONF_PID_KP: float(user_input[CONF_PID_KP]),
+                    CONF_PID_KI: float(user_input[CONF_PID_KI]),
+                    CONF_PID_KD: float(user_input[CONF_PID_KD]),
+                }
+                options[CONF_PID_BREEZERS] = pid_breezers
+
+                return self.async_create_entry(title="", data=options)
+
+        return self.async_show_form(
+            step_id="breezer",
+            data_schema=self._pid_schema(),
+            errors=errors,
+        )
+
+    def _breezer_options(self) -> list[dict[str, str]]:
+        """Return selectable breezers for the config entry."""
+        coordinator: TionDataUpdateCoordinator | None = self.hass.data.get(
+            DOMAIN, {}
+        ).get(self.config_entry.entry_id)
+        if coordinator is None or coordinator.data is None:
+            return []
+
+        return [
+            {"label": device.name or device.guid, "value": device.guid}
+            for device in coordinator.get_devices()
+            if device.guid
+            and device.type
+            in (
+                TionDeviceType.BREEZER_O2,
+                TionDeviceType.BREEZER_3S,
+                TionDeviceType.BREEZER_4S,
+            )
+        ]
+
+    def _pid_options(self, breezer_guid: str) -> dict[str, Any]:
+        """Return stored PID options for a breezer."""
+        return self.config_entry.options.get(CONF_PID_BREEZERS, {}).get(
+            breezer_guid, {}
+        )
+
+    def _pid_schema(self) -> vol.Schema:
+        """Return breezer PID options schema."""
+        pid_options = (
+            self._pid_options(self._breezer_guid) if self._breezer_guid else {}
+        )
+
+        co2_sensor_entity_id = pid_options.get(CONF_CO2_SENSOR_ENTITY_ID)
+        co2_sensor_key = (
+            vol.Optional(CONF_CO2_SENSOR_ENTITY_ID, default=co2_sensor_entity_id)
+            if co2_sensor_entity_id
+            else vol.Optional(CONF_CO2_SENSOR_ENTITY_ID)
+        )
+
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_PID_ENABLED,
+                    default=pid_options.get(
+                        CONF_PID_ENABLED, bool(co2_sensor_entity_id)
+                    ),
+                ): bool,
+                co2_sensor_key: selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain=Platform.SENSOR,
+                        device_class=SensorDeviceClass.CO2,
+                    )
+                ),
+                vol.Required(
+                    CONF_PID_KP, default=pid_options.get(CONF_PID_KP, DEFAULT_PID_KP)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        step=0.001,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Required(
+                    CONF_PID_KI, default=pid_options.get(CONF_PID_KI, DEFAULT_PID_KI)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        step=0.001,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Required(
+                    CONF_PID_KD, default=pid_options.get(CONF_PID_KD, DEFAULT_PID_KD)
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        step=0.001,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+            }
         )
