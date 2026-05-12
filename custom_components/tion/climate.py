@@ -18,9 +18,10 @@ from homeassistant.const import (
     PRECISION_WHOLE,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import TionError, TionZoneDevice
@@ -53,7 +54,9 @@ async def async_setup_entry(
     return True
 
 
-class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
+class TionClimate(
+    CoordinatorEntity[TionDataUpdateCoordinator], RestoreEntity, ClimateEntity
+):
     """Tion climate devices,include air conditioner,heater."""
 
     _attr_translation_key = "tion_breezer"
@@ -152,6 +155,12 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
         if self._heater_power is not None:
             attrs.update({"power": self._heater_power})
 
+        attrs.update(
+            self.coordinator.pid_manager.extra_state_attributes(
+                self._breezer_guid
+            )
+        )
+
         return attrs
 
     @property
@@ -231,6 +240,9 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
     @property
     def fan_mode(self) -> str | None:
         """Return the fan setting."""
+        if self.coordinator.pid_manager.is_active(self._breezer_guid):
+            return FAN_AUTO
+
         if self._mode == FAN_AUTO:
             return FAN_AUTO
 
@@ -314,6 +326,19 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
         self._load_breezer()
         self._set_swing_modes()
         await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            self._restore_local_pid(last_state)
+
+    @callback
+    def _restore_local_pid(self, last_state: State) -> None:
+        """Restore local PID active state after Home Assistant restart."""
+        pid_manager = self.coordinator.pid_manager
+        if (
+            last_state.attributes.get("pid_active") is True
+            and pid_manager.is_configured(self._breezer_guid)
+        ):
+            _LOGGER.debug("%s: restoring active local PID", self.name)
+            pid_manager.set_active(self._breezer_guid, True)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -350,6 +375,7 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
             "%s: changing HVAC mode (%s -> %s)", self.name, self.hvac_mode, hvac_mode
         )
         if hvac_mode == HVACMode.OFF:
+            self.coordinator.pid_manager.set_active(self._breezer_guid, False)
             self._mode = ZoneMode.MANUAL
             self._is_on = False
             self.async_write_ha_state()
@@ -395,6 +421,36 @@ class TionClimate(CoordinatorEntity[TionDataUpdateCoordinator], ClimateEntity):
         if fan_mode not in self._fan_modes:
             _LOGGER.warning("%s: unsupported fan mode '%s'", self.name, fan_mode)
             return
+
+        pid_manager = self.coordinator.pid_manager
+        if (
+            fan_mode == FAN_AUTO
+            and pid_manager.is_configured(self._breezer_guid)
+        ):
+            pid_active = pid_manager.is_active(self._breezer_guid)
+            mode_changed = self._mode != ZoneMode.MANUAL
+            if not pid_active:
+                pid_manager.set_active(self._breezer_guid, True)
+
+            if not mode_changed:
+                if not pid_active:
+                    self.async_write_ha_state()
+                return
+
+            _LOGGER.debug(
+                "%s: changing zone mode (%s -> %s) for local PID",
+                self.name,
+                self._mode,
+                ZoneMode.MANUAL,
+            )
+            self._mode = ZoneMode.MANUAL
+            self._set_swing_modes()
+            self.async_write_ha_state()
+            await self._send_zone()
+            return
+
+        if pid_manager.is_active(self._breezer_guid):
+            pid_manager.set_active(self._breezer_guid, False)
 
         new_mode = ZoneMode.MANUAL
         new_speed = None
