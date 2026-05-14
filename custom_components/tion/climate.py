@@ -25,16 +25,10 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import TionError, TionZoneDevice
-from .const import DOMAIN, Heater, SwingMode, TionDeviceType, ZoneMode
+from .const import BREEZER_TYPES, DOMAIN, Heater, SwingMode, TionDeviceType, ZoneMode
 from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-BREEZER_TYPES = (
-    TionDeviceType.BREEZER_O2,
-    TionDeviceType.BREEZER_3S,
-    TionDeviceType.BREEZER_4S,
-)
 
 
 async def async_setup_entry(
@@ -357,7 +351,7 @@ class TionClimate(
             and pid_manager.is_configured(self._breezer_guid)
         ):
             _LOGGER.debug("%s: restoring active local PID", self.name)
-            pid_manager.set_active(self._breezer_guid, True)
+            pid_manager.start_breezer_pid(self._breezer_guid)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -394,7 +388,7 @@ class TionClimate(
             "%s: changing HVAC mode (%s -> %s)", self.name, self.hvac_mode, hvac_mode
         )
         if hvac_mode == HVACMode.OFF:
-            self.coordinator.pid_manager.set_active(self._breezer_guid, False)
+            self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
             self._mode = ZoneMode.MANUAL
             self._is_on = False
             self.async_write_ha_state()
@@ -449,7 +443,7 @@ class TionClimate(
             pid_active = pid_manager.is_active(self._breezer_guid)
             mode_changed = self._mode != ZoneMode.MANUAL
             if not pid_active:
-                pid_manager.set_active(self._breezer_guid, True)
+                pid_manager.start_breezer_pid(self._breezer_guid)
 
             if not mode_changed:
                 if not pid_active:
@@ -469,7 +463,7 @@ class TionClimate(
             return
 
         if pid_manager.is_active(self._breezer_guid):
-            pid_manager.set_active(self._breezer_guid, False)
+            pid_manager.stop_breezer_pid(self._breezer_guid)
 
         new_mode = ZoneMode.MANUAL
         new_speed = None

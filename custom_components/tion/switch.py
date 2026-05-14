@@ -12,16 +12,10 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import TionError, TionZone, TionZoneDevice
-from .const import DOMAIN, Heater, TionDeviceType, ZoneMode
+from .const import BREEZER_TYPES, DOMAIN, Heater, TionDeviceType, ZoneMode
 from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-BREEZER_TYPES = (
-    TionDeviceType.BREEZER_O2,
-    TionDeviceType.BREEZER_3S,
-    TionDeviceType.BREEZER_4S,
-)
 
 
 def _zone_has_local_pid(

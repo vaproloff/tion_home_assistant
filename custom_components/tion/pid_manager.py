@@ -24,20 +24,19 @@ from .const import (
     DEFAULT_PID_KI,
     DEFAULT_PID_KP,
     DEFAULT_TARGET_CO2,
+    PID_STATUS_INACTIVE,
+    PID_STATUS_NOT_CONFIGURED,
+    PID_STATUS_PAUSED_DEVICE_UNAVAILABLE,
+    PID_STATUS_PAUSED_INVALID_DEVICE_DATA,
+    PID_STATUS_PAUSED_SENSOR_UNAVAILABLE,
+    PID_STATUS_RUNNING,
+    PID_STATUS_SEND_FAILED,
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
 from .pid import PidCoefficients, PidController, PidOutput
 
 _LOGGER = logging.getLogger(__name__)
-
-PID_STATUS_INACTIVE = "inactive"
-PID_STATUS_RUNNING = "running"
-PID_STATUS_NOT_CONFIGURED = "not_configured"
-PID_STATUS_PAUSED_SENSOR_UNAVAILABLE = "paused_sensor_unavailable"
-PID_STATUS_PAUSED_DEVICE_UNAVAILABLE = "paused_device_unavailable"
-PID_STATUS_PAUSED_INVALID_DEVICE_DATA = "paused_invalid_device_data"
-PID_STATUS_SEND_FAILED = "send_failed"
 
 
 def _int_or_default(value: Any, default: int | None) -> int | None:
@@ -66,28 +65,34 @@ class _TionBreezerPidController:
         self.status = PID_STATUS_INACTIVE
         self.last_update: str | None = None
         self.target_co2 = DEFAULT_TARGET_CO2
+
+        options = manager.entry.options.get(CONF_PID_BREEZERS, {}).get(
+            breezer_guid, {}
+        )
         self.controller = PidController(
             PidCoefficients(
-                kp=DEFAULT_PID_KP,
-                ki=DEFAULT_PID_KI,
-                kd=DEFAULT_PID_KD,
+                kp=float(options.get(CONF_PID_KP, DEFAULT_PID_KP)),
+                ki=float(options.get(CONF_PID_KI, DEFAULT_PID_KI)),
+                kd=float(options.get(CONF_PID_KD, DEFAULT_PID_KD)),
             )
         )
 
-    def set_active(self, active: bool) -> bool:
-        """Arm or disarm this breezer PID controller."""
-        if self.active != active:
-            _LOGGER.debug(
-                "%s local PID for breezer %s",
-                "Arming" if active else "Disarming",
-                self.breezer_guid,
-            )
+    def start(self) -> None:
+        """Arm this breezer PID controller."""
+        if not self.active:
+            _LOGGER.debug("Arming local PID for breezer %s", self.breezer_guid)
 
-        self.active = active
-        self._set_status(PID_STATUS_RUNNING if active else PID_STATUS_INACTIVE)
-        if not active:
-            self.controller.reset()
-        return active
+        self.active = True
+        self._set_status(PID_STATUS_RUNNING)
+
+    def stop(self, status: str = PID_STATUS_INACTIVE) -> None:
+        """Disarm this breezer PID controller."""
+        if self.active:
+            _LOGGER.debug("Disarming local PID for breezer %s", self.breezer_guid)
+
+        self.active = False
+        self.controller.reset()
+        self._set_status(status)
 
     def set_target_co2(self, target_co2: float) -> None:
         """Set the local target CO2 for this breezer."""
@@ -121,9 +126,7 @@ class _TionBreezerPidController:
             return None
 
         if not self.manager.is_configured(self.breezer_guid):
-            self.active = False
-            self.controller.reset()
-            self._set_status(PID_STATUS_NOT_CONFIGURED)
+            self.stop(PID_STATUS_NOT_CONFIGURED)
             return None
 
         zone = self.coordinator.get_device_zone(self.breezer_guid)
@@ -189,11 +192,6 @@ class _TionBreezerPidController:
             self._pause(PID_STATUS_PAUSED_INVALID_DEVICE_DATA)
             return None
 
-        self.controller.coefficients = PidCoefficients(
-            kp=float(options.get(CONF_PID_KP, DEFAULT_PID_KP)),
-            ki=float(options.get(CONF_PID_KI, DEFAULT_PID_KI)),
-            kd=float(options.get(CONF_PID_KD, DEFAULT_PID_KD)),
-        )
         output = self.controller.calculate(
             source_co2=source_co2,
             target_co2=self.target_co2,
@@ -369,28 +367,31 @@ class TionPidManager:
         return bool(controller and controller.active and self.is_configured(breezer_guid))
 
     @callback
-    def set_active(self, breezer_guid: str, active: bool) -> bool:
-        """Arm or disarm local PID control for a breezer."""
-        if active:
-            controller = self._controller(breezer_guid)
-            if controller is None:
-                _LOGGER.debug(
-                    "Cannot arm local PID for breezer %s: PID is not configured",
-                    breezer_guid,
-                )
-                return False
-            result = controller.set_active(True)
-            if result:
-                self._ensure_timer()
-            return result
+    def start_breezer_pid(self, breezer_guid: str) -> bool:
+        """Arm local PID control for a breezer."""
+        controller = self._controller(breezer_guid)
+        if controller is None:
+            _LOGGER.debug(
+                "Cannot arm local PID for breezer %s: PID is not configured",
+                breezer_guid,
+            )
+            return False
 
+        controller.start()
+        self._ensure_timer()
+        return True
+
+    @callback
+    def stop_breezer_pid(self, breezer_guid: str) -> bool:
+        """Disarm local PID control for a breezer."""
         controller = self._controllers.get(breezer_guid)
         if controller is None:
             return False
-        result = controller.set_active(False)
+
+        controller.stop()
         if not self.has_active_pid():
             self.async_stop()
-        return result
+        return True
 
     def get_target_co2(self, breezer_guid: str) -> float:
         """Return the local target CO2 for a breezer."""
