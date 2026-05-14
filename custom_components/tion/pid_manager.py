@@ -16,10 +16,12 @@ from .client import TionError
 from .const import (
     CONF_CO2_SENSOR_ENTITY_ID,
     CONF_PID_BREEZERS,
+    CONF_PID_BASE_OUTPUT,
     CONF_PID_ENABLED,
     CONF_PID_KD,
     CONF_PID_KI,
     CONF_PID_KP,
+    DEFAULT_PID_BASE_OUTPUT,
     DEFAULT_PID_KD,
     DEFAULT_PID_KI,
     DEFAULT_PID_KP,
@@ -66,14 +68,15 @@ class _TionBreezerPidController:
         self.last_update: str | None = None
         self.target_co2 = DEFAULT_TARGET_CO2
 
-        options = manager.entry.options.get(CONF_PID_BREEZERS, {}).get(
-            breezer_guid, {}
-        )
+        options = manager.entry.options.get(CONF_PID_BREEZERS, {}).get(breezer_guid, {})
         self.controller = PidController(
             PidCoefficients(
                 kp=float(options.get(CONF_PID_KP, DEFAULT_PID_KP)),
                 ki=float(options.get(CONF_PID_KI, DEFAULT_PID_KI)),
                 kd=float(options.get(CONF_PID_KD, DEFAULT_PID_KD)),
+                base_output=float(
+                    options.get(CONF_PID_BASE_OUTPUT, DEFAULT_PID_BASE_OUTPUT)
+                ),
             )
         )
 
@@ -211,8 +214,7 @@ class _TionBreezerPidController:
             command_changed = True
         else:
             command_changed = (
-                current_speed != output.speed
-                or bool(device.data.is_on) != output.is_on
+                current_speed != output.speed or bool(device.data.is_on) != output.is_on
             )
 
         if not command_changed:
@@ -364,7 +366,9 @@ class TionPidManager:
     def is_active(self, breezer_guid: str) -> bool:
         """Return if PID is currently armed for a breezer."""
         controller = self._controllers.get(breezer_guid)
-        return bool(controller and controller.active and self.is_configured(breezer_guid))
+        return bool(
+            controller and controller.active and self.is_configured(breezer_guid)
+        )
 
     @callback
     def start_breezer_pid(self, breezer_guid: str) -> bool:

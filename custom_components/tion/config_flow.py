@@ -30,10 +30,12 @@ from .const import (
     CONF_BREEZER_GUID,
     CONF_CO2_SENSOR_ENTITY_ID,
     CONF_PID_BREEZERS,
+    CONF_PID_BASE_OUTPUT,
     CONF_PID_ENABLED,
     CONF_PID_KD,
     CONF_PID_KI,
     CONF_PID_KP,
+    DEFAULT_PID_BASE_OUTPUT,
     DEFAULT_PID_KD,
     DEFAULT_PID_KI,
     DEFAULT_PID_KP,
@@ -248,6 +250,7 @@ class TionOptionsFlow(OptionsFlow):
                 pid_breezers[self._breezer_guid] = {
                     CONF_PID_ENABLED: user_input[CONF_PID_ENABLED],
                     CONF_CO2_SENSOR_ENTITY_ID: co2_sensor_entity_id,
+                    CONF_PID_BASE_OUTPUT: float(user_input[CONF_PID_BASE_OUTPUT]),
                     CONF_PID_KP: float(user_input[CONF_PID_KP]),
                     CONF_PID_KI: float(user_input[CONF_PID_KI]),
                     CONF_PID_KD: float(user_input[CONF_PID_KD]),
@@ -313,6 +316,19 @@ class TionOptionsFlow(OptionsFlow):
                     selector.EntitySelectorConfig(
                         domain=Platform.SENSOR,
                         device_class=SensorDeviceClass.CO2,
+                    )
+                ),
+                vol.Required(
+                    CONF_PID_BASE_OUTPUT,
+                    default=pid_options.get(
+                        CONF_PID_BASE_OUTPUT, DEFAULT_PID_BASE_OUTPUT
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        max=100,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
                 vol.Required(

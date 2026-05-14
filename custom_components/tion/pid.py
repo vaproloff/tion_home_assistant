@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+def _clamp(value: float, lower: float, upper: float) -> float:
+    """Clamp a value between lower and upper bounds."""
+    return max(min(value, upper), lower)
+
+
 @dataclass(frozen=True, slots=True)
 class PidCoefficients:
     """PID controller coefficients."""
@@ -12,13 +17,14 @@ class PidCoefficients:
     kp: float
     ki: float
     kd: float
+    base_output: float = 0.0
 
 
 @dataclass(slots=True)
 class PidState:
     """PID controller state."""
 
-    integral: float = 0.0
+    i_output: float = 0.0
     last_error: float | None = None
     last_time: float | None = None
 
@@ -64,24 +70,20 @@ class PidController:
         if self.state.last_time is not None and now > self.state.last_time:
             elapsed = now - self.state.last_time
 
-        derivative = 0.0
+        p_output = self.coefficients.kp * error
+
+        if self.coefficients.ki:
+            self.state.i_output += self.coefficients.ki * error * elapsed
+            self.state.i_output = _clamp(self.state.i_output, -100.0, 100.0)
+
+        d_output = 0.0
         if elapsed > 0 and self.state.last_error is not None:
-            derivative = (error - self.state.last_error) / elapsed
+            d_output = self.coefficients.kd * (error - self.state.last_error) / elapsed
 
-        integral = 0.0
-        if self.coefficients.ki != 0:
-            integral = self.state.integral
-            if elapsed > 0:
-                integral += error * elapsed
+        raw_output = (
+            self.coefficients.base_output + p_output + self.state.i_output + d_output
+        )
 
-        raw_output = self._raw_output(error, integral, derivative)
-        if self.coefficients.ki != 0 and self._is_winding_up(
-            raw_output, error, max_allowed
-        ):
-            integral = self.state.integral
-            raw_output = self._raw_output(error, integral, derivative)
-
-        self.state.integral = integral
         self.state.last_error = error
         self.state.last_time = now
 
@@ -93,26 +95,15 @@ class PidController:
                 is_on=False,
             )
 
-        speed = max(min(max_allowed, max(0, int(round(raw_output)))), min_allowed)
+        output_percent = _clamp(raw_output, 0.0, 100.0)
+        speed = max(
+            min(max_allowed, int(round(output_percent / 100 * device_max_speed))),
+            min_allowed,
+        )
 
         return PidOutput(
             error=error,
             raw_output=raw_output,
             speed=speed,
             is_on=speed > 0,
-        )
-
-    def _raw_output(self, error: float, integral: float, derivative: float) -> float:
-        """Return unclamped PID output."""
-        return (
-            self.coefficients.kp * error
-            + self.coefficients.ki * integral
-            + self.coefficients.kd * derivative
-        )
-
-    @staticmethod
-    def _is_winding_up(raw_output: float, error: float, max_allowed: int) -> bool:
-        """Return if the integral should be held at the current value."""
-        return (raw_output < 0 and error < 0) or (
-            raw_output > max_allowed and error > 0
         )
