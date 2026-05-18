@@ -31,11 +31,21 @@
       "init": {
         "data": {
           "scan_interval": "API poll interval",
-          "breezer_guid": "Breezer for external CO2 control"
+          "options_action": "Action"
         },
         "data_description": {
           "scan_interval": "Tion devices data minimum update period.",
-          "breezer_guid": "Select a breezer to configure or update its local PID controller."
+          "options_action": "Save options or open local PID settings."
+        }
+      },
+      "local_pid": {
+        "data": {
+          "breezer_guid": "Breezer for external CO2 control",
+          "local_pid_action": "Local PID action"
+        },
+        "data_description": {
+          "breezer_guid": "Select a breezer to configure, update, or remove its local PID controller.",
+          "local_pid_action": "Choose what to do with local PID settings for the selected breezer."
         }
       },
       "breezer": {
@@ -59,6 +69,21 @@
     },
     "error": {
       "required": "Required"
+    }
+  },
+  "selector": {
+    "init_menu_selector": {
+      "options": {
+        "configure_local_pid": "Configure local PID",
+        "done": "Done"
+      }
+    },
+    "local_pid_menu_selector": {
+      "options": {
+        "configure_breezer_pid": "Configure breezer local PID",
+        "remove_breezer_pid": "Remove breezer local PID",
+        "done": "Done"
+      }
     }
   },
   "entity": {

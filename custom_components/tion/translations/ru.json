@@ -30,11 +30,21 @@
       "init": {
         "data": {
           "scan_interval": "Интервал обновления",
-          "breezer_guid": "Бризер для внешнего CO2"
+          "options_action": "Действие"
         },
         "data_description": {
           "scan_interval": "Минимальный период обновления данных устройств Tion от API.",
-          "breezer_guid": "Выберите бризер, для которого нужно настроить или обновить локальный PID-регулятор."
+          "options_action": "Сохраните параметры или откройте настройки локального PID."
+        }
+      },
+      "local_pid": {
+        "data": {
+          "breezer_guid": "Бризер для внешнего CO2",
+          "local_pid_action": "Действие Local PID"
+        },
+        "data_description": {
+          "breezer_guid": "Выберите бризер, для которого нужно настроить, обновить или удалить локальный PID-регулятор.",
+          "local_pid_action": "Выберите действие с настройками локального PID для выбранного бризера."
         }
       },
       "breezer": {
@@ -58,6 +68,21 @@
     },
     "error": {
       "required": "Обязательное поле"
+    }
+  },
+  "selector": {
+    "init_menu_selector": {
+      "options": {
+        "configure_local_pid": "Настройка локального PID-контроллера",
+        "done": "Сохранить"
+      }
+    },
+    "local_pid_menu_selector": {
+      "options": {
+        "configure_breezer_pid": "Настройка локального PID-контроллера бризера",
+        "remove_breezer_pid": "Удалить локальный PID-контроллер бризера",
+        "done": "Сохранить"
+      }
     }
   },
   "entity": {

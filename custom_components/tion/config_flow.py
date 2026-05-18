@@ -47,6 +47,16 @@ from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
+CONF_OPTIONS_ACTION = "options_action"
+CONF_LOCAL_PID_ACTION = "local_pid_action"
+
+OPTIONS_ACTION_DONE = "done"
+OPTIONS_ACTION_CONFIGURE_LOCAL_PID = "configure_local_pid"
+
+LOCAL_PID_ACTION_DONE = "done"
+LOCAL_PID_ACTION_CONFIGURE_BREEZER_PID = "configure_breezer_pid"
+LOCAL_PID_ACTION_REMOVE_BREEZER_PID = "remove_breezer_pid"
+
 
 class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     """Tion config flow."""
@@ -182,7 +192,8 @@ class TionOptionsFlow(OptionsFlow):
 
     def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize Tion options flow."""
-        self._scan_interval: int | None = None
+        self._entry_id = config_entry.entry_id
+        self._options = dict(config_entry.options)
         self._breezer_guid: str | None = None
 
     async def async_step_init(
@@ -191,18 +202,11 @@ class TionOptionsFlow(OptionsFlow):
         """Manage the options."""
 
         if user_input is not None:
-            self._scan_interval = user_input[CONF_SCAN_INTERVAL]
-            self._breezer_guid = user_input.get(CONF_BREEZER_GUID)
-            if self._breezer_guid is not None:
-                return await self.async_step_breezer()
+            self._options[CONF_SCAN_INTERVAL] = user_input[CONF_SCAN_INTERVAL]
+            if user_input[CONF_OPTIONS_ACTION] == OPTIONS_ACTION_CONFIGURE_LOCAL_PID:
+                return await self.async_step_local_pid()
 
-            return self.async_create_entry(
-                title="",
-                data={
-                    **self.config_entry.options,
-                    CONF_SCAN_INTERVAL: self._scan_interval,
-                },
-            )
+            return self.async_create_entry(title="", data=self._options)
 
         return self.async_show_form(
             step_id="init",
@@ -210,20 +214,82 @@ class TionOptionsFlow(OptionsFlow):
                 {
                     vol.Required(
                         CONF_SCAN_INTERVAL,
-                        default=self.config_entry.options.get(
+                        default=self._options.get(
                             CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=10)),
-                    vol.Optional(
-                        CONF_BREEZER_GUID, default=None
+                    vol.Required(
+                        CONF_OPTIONS_ACTION, default=OPTIONS_ACTION_DONE
                     ): selector.SelectSelector(
                         selector.SelectSelectorConfig(
-                            options=self._breezer_options(),
-                            mode=selector.SelectSelectorMode.DROPDOWN,
+                            options=[
+                                OPTIONS_ACTION_CONFIGURE_LOCAL_PID,
+                                OPTIONS_ACTION_DONE,
+                            ],
+                            mode=selector.SelectSelectorMode.LIST,
+                            translation_key="init_menu_selector",
                         )
                     ),
                 }
             ),
+        )
+
+    async def async_step_local_pid(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage local PID action selection."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            local_pid_action = user_input[CONF_LOCAL_PID_ACTION]
+            self._breezer_guid = user_input.get(CONF_BREEZER_GUID)
+
+            if local_pid_action == LOCAL_PID_ACTION_DONE:
+                self._breezer_guid = None
+                return await self.async_step_init()
+
+            if self._breezer_guid is None:
+                errors[CONF_BREEZER_GUID] = "required"
+            elif local_pid_action == LOCAL_PID_ACTION_CONFIGURE_BREEZER_PID:
+                return await self.async_step_breezer()
+            elif local_pid_action == LOCAL_PID_ACTION_REMOVE_BREEZER_PID:
+                pid_breezers = dict(self._options.get(CONF_PID_BREEZERS, {}))
+                pid_breezers.pop(self._breezer_guid, None)
+
+                if pid_breezers:
+                    self._options[CONF_PID_BREEZERS] = pid_breezers
+                else:
+                    self._options.pop(CONF_PID_BREEZERS, None)
+
+        return self.async_show_form(
+            step_id="local_pid",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_BREEZER_GUID, default=None): vol.Any(
+                        None,
+                        selector.SelectSelector(
+                            selector.SelectSelectorConfig(
+                                options=self._breezer_options(),
+                                mode=selector.SelectSelectorMode.DROPDOWN,
+                            )
+                        ),
+                    ),
+                    vol.Required(
+                        CONF_LOCAL_PID_ACTION, default=LOCAL_PID_ACTION_DONE
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                LOCAL_PID_ACTION_CONFIGURE_BREEZER_PID,
+                                LOCAL_PID_ACTION_REMOVE_BREEZER_PID,
+                                LOCAL_PID_ACTION_DONE,
+                            ],
+                            mode=selector.SelectSelectorMode.LIST,
+                            translation_key="local_pid_menu_selector",
+                        )
+                    ),
+                }
+            ),
+            errors=errors,
         )
 
     async def async_step_breezer(
@@ -237,16 +303,7 @@ class TionOptionsFlow(OptionsFlow):
             if user_input[CONF_PID_ENABLED] and not co2_sensor_entity_id:
                 errors[CONF_CO2_SENSOR_ENTITY_ID] = "required"
             else:
-                options = dict(self.config_entry.options)
-                options[CONF_SCAN_INTERVAL] = (
-                    self._scan_interval
-                    if self._scan_interval is not None
-                    else self.config_entry.options.get(
-                        CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
-                    )
-                )
-
-                pid_breezers = dict(options.get(CONF_PID_BREEZERS, {}))
+                pid_breezers = dict(self._options.get(CONF_PID_BREEZERS, {}))
                 pid_breezers[self._breezer_guid] = {
                     CONF_PID_ENABLED: user_input[CONF_PID_ENABLED],
                     CONF_CO2_SENSOR_ENTITY_ID: co2_sensor_entity_id,
@@ -255,9 +312,9 @@ class TionOptionsFlow(OptionsFlow):
                     CONF_PID_KI: float(user_input[CONF_PID_KI]),
                     CONF_PID_KD: float(user_input[CONF_PID_KD]),
                 }
-                options[CONF_PID_BREEZERS] = pid_breezers
+                self._options[CONF_PID_BREEZERS] = pid_breezers
 
-                return self.async_create_entry(title="", data=options)
+                return await self.async_step_local_pid()
 
         return self.async_show_form(
             step_id="breezer",
@@ -269,7 +326,7 @@ class TionOptionsFlow(OptionsFlow):
         """Return selectable breezers for the config entry."""
         coordinator: TionDataUpdateCoordinator | None = self.hass.data.get(
             DOMAIN, {}
-        ).get(self.config_entry.entry_id)
+        ).get(self._entry_id)
         if coordinator is None or coordinator.data is None:
             return []
 
@@ -287,9 +344,7 @@ class TionOptionsFlow(OptionsFlow):
 
     def _pid_options(self, breezer_guid: str) -> dict[str, Any]:
         """Return stored PID options for a breezer."""
-        return self.config_entry.options.get(CONF_PID_BREEZERS, {}).get(
-            breezer_guid, {}
-        )
+        return self._options.get(CONF_PID_BREEZERS, {}).get(breezer_guid, {})
 
     def _pid_schema(self) -> vol.Schema:
         """Return breezer PID options schema."""
