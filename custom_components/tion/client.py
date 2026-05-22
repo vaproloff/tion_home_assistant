@@ -1,12 +1,9 @@
 """The Tion API interaction module."""
 
 import asyncio
-import base64
 from collections.abc import Awaitable, Callable
 from json import JSONDecodeError
 import logging
-import secrets
-import time
 from typing import Any
 
 from aiohttp import ClientError, ClientSession, ContentTypeError
@@ -148,7 +145,6 @@ class TionClient:
     _CLIENT_SECRET = "DTT2jJnY3k2H2GyZ"
     _SCOPE = "offline_access ma-account ma-device ma-firmware"
     _HOST = "api.magicair.tion.ru"
-    _COCOA_REFERENCE_TIMESTAMP = 978307200
 
     def __init__(
         self,
@@ -181,9 +177,6 @@ class TionClient:
             "Authorization": self._authorization or "",
             "Connection": "Keep-Alive",
             "Host": self._HOST,
-            "X-Debug": "true",
-            "x-request-time": str(int(time.time() - self._COCOA_REFERENCE_TIMESTAMP)),
-            "x-thumbprint": base64.b64encode(secrets.token_hex(16).encode()).decode(),
         }
 
     def add_update_listener(self, coro: Callable[[str], Awaitable[None]]) -> None:
