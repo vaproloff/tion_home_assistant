@@ -135,14 +135,16 @@ class TionLocation:
 class TionClient:
     """Tion API Client."""
 
-    _API_ENDPOINT = "https://api2.magicair.tion.ru/"
-    _AUTH_URL = "idsrv/oauth2/token"
-    _LOCATION_URL = "location"
+    _API_ENDPOINT = "https://api.magicair.tion.ru/"
+    _AUTH_URL = "idsrv/connect/token"
+    _LOCATION_URL = "Location"
     _DEVICE_URL = "device"
     _ZONE_URL = "zone"
     _TASK_URL = "task"
-    _CLIENT_ID = "cd594955-f5ba-4c20-9583-5990bb29f4ef"
-    _CLIENT_SECRET = "syRxSrT77P"
+    _CLIENT_ID = "a750d720-e146-47b0-b414-35e3b1dd7862"
+    _CLIENT_SECRET = "DTT2jJnY3k2H2GyZ"
+    _SCOPE = "offline_access ma-account ma-device ma-firmware"
+    _HOST = "api.magicair.tion.ru"
 
     def __init__(
         self,
@@ -170,16 +172,11 @@ class TionClient:
     def _headers(self) -> dict[str, str]:
         """Return headers for API request."""
         return {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Encoding": "gzip, deflate",
-            "Accept-Language": "ru-RU",
+            "Accept": "application/json",
+            "Accept-Language": "ru-RU;q=1, en-RU;q=0.9",
             "Authorization": self._authorization or "",
             "Connection": "Keep-Alive",
-            "Content-Type": "application/json",
-            "Host": "api2.magicair.tion.ru",
-            "Origin": "https://magicair.tion.ru",
-            "Referer": "https://magicair.tion.ru/dashboard/overview",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2486.0 Safari/537.36 Edge/13.10586",
+            "Host": self._HOST,
         }
 
     def add_update_listener(self, coro: Callable[[str], Awaitable[None]]) -> None:
@@ -203,7 +200,8 @@ class TionClient:
             "password": self._password,
             "client_id": self._CLIENT_ID,
             "client_secret": self._CLIENT_SECRET,
-            "grant_type": "password",
+            "grant_type": "extended",
+            "scope": self._SCOPE,
         }
 
         response = await self._request(
@@ -246,7 +244,7 @@ class TionClient:
             async with self._session.request(
                 method,
                 url=f"{self._API_ENDPOINT}{url_path}",
-                headers=self._headers() if auth_required else None,
+                headers=self._headers(),
                 timeout=10,
                 **kwargs,
             ) as response:

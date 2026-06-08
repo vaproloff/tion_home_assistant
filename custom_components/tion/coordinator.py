@@ -1,7 +1,5 @@
 """Coordinator for Tion integration."""
 
-from __future__ import annotations
-
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import timedelta
