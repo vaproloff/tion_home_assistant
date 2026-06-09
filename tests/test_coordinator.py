@@ -165,3 +165,49 @@ def test_get_device_zone_prefers_passed_data() -> None:
 
     assert coordinator.get_device_zone(BREEZER_GUID, fresh).guid == "zone"
     assert coordinator.get_device_zone(BREEZER_GUID).guid == "zone"
+
+
+def test_update_runs_pid_on_fresh_data_when_active() -> None:
+    """Test active PID is evaluated on the freshly fetched data."""
+    locations = [_location(speed=3)]
+    pid_manager = FakePidManager(active=True)
+    coordinator = _make_coordinator(
+        client=FakeClient(locations), pid_manager=pid_manager
+    )
+
+    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
+
+    assert result.locations == locations
+    assert pid_manager.evaluated is result
+
+
+def test_update_skips_pid_when_inactive() -> None:
+    """Test PID is not evaluated when no controller is active."""
+    locations = [_location(speed=3)]
+    pid_manager = FakePidManager(active=False)
+    coordinator = _make_coordinator(
+        client=FakeClient(locations), pid_manager=pid_manager
+    )
+
+    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
+
+    assert result.locations == locations
+    assert pid_manager.evaluated is None
+
+
+def test_update_returns_cached_data_and_skips_pid_when_stale() -> None:
+    """Test stale data (recent manual command) is returned and PID is skipped."""
+    cached = TionData([_location(speed=1)])
+    pid_manager = FakePidManager(active=True)
+    coordinator = _make_coordinator(
+        client=FakeClient([_location(speed=9)]),
+        data=cached,
+        pid_manager=pid_manager,
+        now=100.0,
+        last_completed=200.0,
+    )
+
+    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
+
+    assert result is cached
+    assert pid_manager.evaluated is None

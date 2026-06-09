@@ -79,7 +79,12 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             _LOGGER.debug("Ignoring stale Tion location data")
             return self.data
 
-        return TionData(locations)
+        data = TionData(locations)
+
+        if self.pid_manager.has_active_pid():
+            await self.pid_manager.async_evaluate_all(data)
+
+        return data
 
     async def _async_send_command(
         self,
