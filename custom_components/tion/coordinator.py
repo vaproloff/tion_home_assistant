@@ -33,6 +33,28 @@ class TionData:
 
     locations: list[TionLocation]
 
+    def devices(self) -> list[TionZoneDevice]:
+        """Return all devices across all locations and zones."""
+        return [
+            device
+            for location in self.locations
+            for zone in location.zones
+            for device in zone.devices
+        ]
+
+    def device(self, guid: str) -> TionZoneDevice | None:
+        """Return the device with the given guid, or None."""
+        return next((device for device in self.devices() if device.guid == guid), None)
+
+    def zone(self, guid: str) -> TionZone | None:
+        """Return the zone containing the device with the given guid, or None."""
+        for location in self.locations:
+            for zone in location.zones:
+                if any(device.guid == guid for device in zone.devices):
+                    return zone
+
+        return None
+
 
 class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
     """Class to manage fetching Tion data."""
@@ -138,31 +160,14 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             self.client.send_settings(**kwargs), request_refresh=request_refresh
         )
 
-    def get_devices(self, data: TionData | None = None) -> list[TionZoneDevice]:
+    def get_devices(self) -> list[TionZoneDevice]:
         """Get all devices from coordinator data."""
-        data = data if data is not None else self.data
-        return [
-            device
-            for location in data.locations
-            for zone in location.zones
-            for device in zone.devices
-        ]
+        return self.data.devices()
 
-    def get_device(self, guid: str, data: TionData | None = None) -> TionZoneDevice | None:
+    def get_device(self, guid: str) -> TionZoneDevice | None:
         """Get a device by guid from coordinator data."""
-        for device in self.get_devices(data):
-            if device.guid == guid:
-                return device
+        return self.data.device(guid)
 
-        return None
-
-    def get_device_zone(self, guid: str, data: TionData | None = None) -> TionZone | None:
+    def get_device_zone(self, guid: str) -> TionZone | None:
         """Get a device zone by device guid from coordinator data."""
-        data = data if data is not None else self.data
-        for location in data.locations:
-            for zone in location.zones:
-                for device in zone.devices:
-                    if device.guid == guid:
-                        return zone
-
-        return None
+        return self.data.zone(guid)

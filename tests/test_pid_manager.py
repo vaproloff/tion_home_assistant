@@ -26,10 +26,6 @@ from custom_components.tion.pid_manager import (
 SENSOR_ENTITY_ID = "sensor.external_co2"
 BREEZER_GUID = "breezer-guid"
 
-# PID reads device/zone through the coordinator, which ignores this argument in
-# the fakes below; a sentinel keeps call sites explicit.
-DATA = SimpleNamespace(locations=[])
-
 
 def _pid_options(*, enabled: bool = True) -> dict:
     """Return fake local PID options."""
@@ -125,18 +121,6 @@ class FakeCoordinator:
             ),
         )
 
-    def get_device(
-        self, guid: str, data: Any = None
-    ) -> TionZoneDevice | None:
-        """Return the fake breezer."""
-        return self.device if guid == BREEZER_GUID else None
-
-    def get_device_zone(
-        self, guid: str, data: Any = None
-    ) -> SimpleNamespace | None:
-        """Return the fake zone."""
-        return self.zone if guid == BREEZER_GUID else None
-
     async def async_send_breezer(self, **kwargs: Any) -> bool:
         """Record a fake breezer command."""
         self.commands.append(kwargs)
@@ -151,6 +135,23 @@ class FakeCoordinator:
     async def async_request_refresh(self) -> None:
         """Record a refresh request."""
         self.refresh_requests += 1
+
+
+class FakeData:
+    """Fake coordinator data exposing device and zone lookups."""
+
+    def __init__(self, device: TionZoneDevice, zone: Any) -> None:
+        """Initialize fake coordinator data."""
+        self._device = device
+        self._zone = zone
+
+    def device(self, guid: str) -> TionZoneDevice | None:
+        """Return the fake breezer."""
+        return self._device if guid == BREEZER_GUID else None
+
+    def zone(self, guid: str) -> Any:
+        """Return the fake zone."""
+        return self._zone if guid == BREEZER_GUID else None
 
 
 def _device(*, speed: int = 1, is_on: bool = True) -> TionZoneDevice:
@@ -177,6 +178,11 @@ def _device(*, speed: int = 1, is_on: bool = True) -> TionZoneDevice:
     )
 
 
+def _data(coordinator: FakeCoordinator) -> FakeData:
+    """Build coordinator data exposing the coordinator's device and zone."""
+    return FakeData(coordinator.device, coordinator.zone)
+
+
 def test_pid_manager_sends_breezer_command_for_changed_output() -> None:
     """Test a valid PID tick sends a changed speed command and updates locally."""
     device = _device(speed=1)
@@ -184,7 +190,7 @@ def test_pid_manager_sends_breezer_command_for_changed_output() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, DATA))
+    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
 
     assert output is not None
     assert output.speed == 6
@@ -279,7 +285,7 @@ def test_pid_manager_pauses_on_invalid_sensor_state() -> None:
     manager = TionPidManager(FakeHass("unknown"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, DATA))
+    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
 
     assert output is None
     assert coordinator.zone_commands == []
@@ -297,7 +303,7 @@ def test_pid_manager_skips_unchanged_output() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, DATA))
+    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
 
     assert output is not None
     assert output.speed == 6
@@ -312,7 +318,7 @@ def test_pid_manager_disarm_resets_pid_core_state() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, DATA))
+    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
     controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
     manager.stop_breezer_pid(BREEZER_GUID)
 
@@ -330,7 +336,7 @@ def test_pid_manager_evaluate_all_deactivates_unconfigured() -> None:
     manager.start_breezer_pid(BREEZER_GUID)
     entry.options[CONF_PID_BREEZERS][BREEZER_GUID][CONF_PID_ENABLED] = False
 
-    asyncio.run(manager.async_evaluate_all(DATA))
+    asyncio.run(manager.async_evaluate_all(_data(coordinator)))
 
     controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
     assert controller.active is False
@@ -341,18 +347,20 @@ def test_pid_manager_evaluate_all_deactivates_unconfigured() -> None:
 def test_pid_manager_evaluate_all_isolates_per_breezer_failures() -> None:
     """Test that an unexpected exception in one breezer does not abort the loop."""
 
-    class RaisingCoordinator(FakeCoordinator):
-        """Coordinator whose get_device_zone always raises an unexpected error."""
+    class RaisingData(FakeData):
+        """Coordinator data whose zone() always raises an unexpected error."""
 
-        def get_device_zone(self, guid: str, data: Any = None) -> None:
+        def zone(self, guid: str) -> None:
             raise RuntimeError("unexpected device data failure")
 
-    coordinator = RaisingCoordinator(_device(speed=1))
+    coordinator = FakeCoordinator(_device(speed=1))
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
     # Must not raise; the exception must be swallowed and logged.
-    asyncio.run(manager.async_evaluate_all(DATA))
+    asyncio.run(
+        manager.async_evaluate_all(RaisingData(coordinator.device, coordinator.zone))
+    )
 
 
 def test_pid_manager_returns_auto_zone_to_manual() -> None:
@@ -361,7 +369,7 @@ def test_pid_manager_returns_auto_zone_to_manual() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, DATA))
+    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
 
     assert output is not None
     assert coordinator.zone_commands == [

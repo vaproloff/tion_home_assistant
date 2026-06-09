@@ -130,7 +130,7 @@ class _TionBreezerPidController:
             self.stop(PID_STATUS_NOT_CONFIGURED)
             return None
 
-        zone = self.coordinator.get_device_zone(self.breezer_guid, data)
+        zone = data.zone(self.breezer_guid)
         if zone is None or not zone.valid:
             self._pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
             return None
@@ -174,7 +174,7 @@ class _TionBreezerPidController:
             self._pause(PID_STATUS_PAUSED_SENSOR_UNAVAILABLE)
             return None
 
-        device = self.coordinator.get_device(self.breezer_guid, data)
+        device = data.device(self.breezer_guid)
         self.source_co2 = source_co2
         if device is None or not device.valid or not device.is_online:
             self._pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)

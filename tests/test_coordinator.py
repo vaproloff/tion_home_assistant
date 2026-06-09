@@ -1,10 +1,9 @@
 """Tests for the Tion data update coordinator."""
 
 # FakeClient, FakePidManager, _location, and _make_coordinator form a shared
-# test harness used across coordinator tests added in multiple tasks.  Task 1
-# exercises the track_stale guard; Tasks 2 and 4 extend coverage to
-# get_device(..., data=...) and _async_update_data respectively, and rely on
-# this same harness.  Do not remove unused helpers — they are intentional.
+# test harness covering the coordinator's stale-command guard, the TionData
+# lookup helpers, and PID evaluation inside _async_update_data.  Do not remove
+# unused helpers — they are intentional.
 
 import asyncio
 from types import SimpleNamespace
@@ -147,23 +146,44 @@ def test_send_command_track_stale_true_marks_completion() -> None:
     assert coordinator._current_command_started_at is None  # noqa: SLF001
 
 
-def test_get_device_prefers_passed_data() -> None:
-    """Test get_device reads from the passed data, else falls back to self.data."""
-    own = TionData([_location(speed=1)])
-    fresh = TionData([_location(speed=9)])
-    coordinator = _make_coordinator(client=FakeClient([]), data=own)
+def test_tion_data_devices_returns_all_devices() -> None:
+    """Test TionData.devices() flattens devices across locations and zones."""
+    data = TionData([_location(speed=5)])
+
+    assert [device.guid for device in data.devices()] == [BREEZER_GUID]
+
+
+def test_tion_data_device_finds_device_by_guid() -> None:
+    """Test TionData.device() returns the matching device, else None."""
+    data = TionData([_location(speed=5)])
+
+    assert data.device(BREEZER_GUID).data.speed == 5
+    assert data.device("missing") is None
+
+
+def test_tion_data_zone_finds_zone_by_device_guid() -> None:
+    """Test TionData.zone() returns the zone containing the device, else None."""
+    data = TionData([_location(speed=5)])
+
+    assert data.zone(BREEZER_GUID).guid == "zone"
+    assert data.zone("missing") is None
+
+
+def test_get_device_delegates_to_data() -> None:
+    """Test get_device resolves the device from self.data."""
+    coordinator = _make_coordinator(
+        client=FakeClient([]), data=TionData([_location(speed=1)])
+    )
 
     assert coordinator.get_device(BREEZER_GUID).data.speed == 1
-    assert coordinator.get_device(BREEZER_GUID, fresh).data.speed == 9
 
 
-def test_get_device_zone_prefers_passed_data() -> None:
-    """Test get_device_zone resolves the zone from the passed data."""
-    own = TionData([_location(speed=1)])
-    fresh = TionData([_location(speed=9)])
-    coordinator = _make_coordinator(client=FakeClient([]), data=own)
+def test_get_device_zone_delegates_to_data() -> None:
+    """Test get_device_zone resolves the zone from self.data."""
+    coordinator = _make_coordinator(
+        client=FakeClient([]), data=TionData([_location(speed=1)])
+    )
 
-    assert coordinator.get_device_zone(BREEZER_GUID, fresh).guid == "zone"
     assert coordinator.get_device_zone(BREEZER_GUID).guid == "zone"
 
 
