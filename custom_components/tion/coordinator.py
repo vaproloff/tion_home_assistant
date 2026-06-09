@@ -80,16 +80,22 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         return TionData(locations)
 
     async def _async_send_command(
-        self, command: Awaitable[bool], *, request_refresh: bool = True
+        self,
+        command: Awaitable[bool],
+        *,
+        request_refresh: bool = True,
+        track_stale: bool = True,
     ) -> bool:
         """Send a command and refresh coordinator data after it succeeds."""
         command_started_at = self.hass.loop.time()
-        self._current_command_started_at = command_started_at
+        if track_stale:
+            self._current_command_started_at = command_started_at
         try:
             result = await command
-            self._last_command_completed_at = self.hass.loop.time()
+            if track_stale:
+                self._last_command_completed_at = self.hass.loop.time()
         finally:
-            if self._current_command_started_at == command_started_at:
+            if track_stale and self._current_command_started_at == command_started_at:
                 self._current_command_started_at = None
 
         if request_refresh:
@@ -98,19 +104,23 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         return result
 
     async def async_send_breezer(
-        self, *, request_refresh: bool = True, **kwargs: Any
+        self, *, request_refresh: bool = True, track_stale: bool = True, **kwargs: Any
     ) -> bool:
         """Send new breezer data to API."""
         return await self._async_send_command(
-            self.client.send_breezer(**kwargs), request_refresh=request_refresh
+            self.client.send_breezer(**kwargs),
+            request_refresh=request_refresh,
+            track_stale=track_stale,
         )
 
     async def async_send_zone(
-        self, *, request_refresh: bool = True, **kwargs: Any
+        self, *, request_refresh: bool = True, track_stale: bool = True, **kwargs: Any
     ) -> bool:
         """Send new zone data to API."""
         return await self._async_send_command(
-            self.client.send_zone(**kwargs), request_refresh=request_refresh
+            self.client.send_zone(**kwargs),
+            request_refresh=request_refresh,
+            track_stale=track_stale,
         )
 
     async def async_send_settings(
