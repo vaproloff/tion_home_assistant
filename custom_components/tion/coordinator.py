@@ -17,6 +17,8 @@ from .client import (
     TionClient,
     TionConnectionError,
     TionLocation,
+    TionZone,
+    TionZoneDevice,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -131,26 +133,28 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             self.client.send_settings(**kwargs), request_refresh=request_refresh
         )
 
-    def get_devices(self):
+    def get_devices(self, data: TionData | None = None) -> list[TionZoneDevice]:
         """Get all devices from coordinator data."""
+        data = data if data is not None else self.data
         return [
             device
-            for location in self.data.locations
+            for location in data.locations
             for zone in location.zones
             for device in zone.devices
         ]
 
-    def get_device(self, guid: str):
+    def get_device(self, guid: str, data: TionData | None = None) -> TionZoneDevice | None:
         """Get a device by guid from coordinator data."""
-        for device in self.get_devices():
+        for device in self.get_devices(data):
             if device.guid == guid:
                 return device
 
         return None
 
-    def get_device_zone(self, guid: str):
+    def get_device_zone(self, guid: str, data: TionData | None = None) -> TionZone | None:
         """Get a device zone by device guid from coordinator data."""
-        for location in self.data.locations:
+        data = data if data is not None else self.data
+        for location in data.locations:
             for zone in location.zones:
                 for device in zone.devices:
                     if device.guid == guid:

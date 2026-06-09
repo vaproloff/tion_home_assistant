@@ -145,3 +145,23 @@ def test_send_command_track_stale_true_marks_completion() -> None:
     assert result is True
     assert coordinator._last_command_completed_at == 50.0  # noqa: SLF001
     assert coordinator._current_command_started_at is None  # noqa: SLF001
+
+
+def test_get_device_prefers_passed_data() -> None:
+    """Test get_device reads from the passed data, else falls back to self.data."""
+    own = TionData([_location(speed=1)])
+    fresh = TionData([_location(speed=9)])
+    coordinator = _make_coordinator(client=FakeClient([]), data=own)
+
+    assert coordinator.get_device(BREEZER_GUID).data.speed == 1
+    assert coordinator.get_device(BREEZER_GUID, fresh).data.speed == 9
+
+
+def test_get_device_zone_prefers_passed_data() -> None:
+    """Test get_device_zone resolves the zone from the passed data."""
+    own = TionData([_location(speed=1)])
+    fresh = TionData([_location(speed=9)])
+    coordinator = _make_coordinator(client=FakeClient([]), data=own)
+
+    assert coordinator.get_device_zone(BREEZER_GUID, fresh).guid == "zone"
+    assert coordinator.get_device_zone(BREEZER_GUID).guid == "zone"
