@@ -412,7 +412,13 @@ class TionPidManager:
             if controller.active
         }
         for breezer_guid in breezer_guids:
-            await self.async_evaluate_breezer(breezer_guid, data)
+            try:
+                await self.async_evaluate_breezer(breezer_guid, data)
+            except Exception:  # broad catch is intentional; isolate per-breezer failures
+                _LOGGER.exception(
+                    "Unexpected error evaluating local PID for breezer %s",
+                    breezer_guid,
+                )
 
     async def async_evaluate_breezer(
         self, breezer_guid: str, data: TionData

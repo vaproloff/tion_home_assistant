@@ -338,6 +338,23 @@ def test_pid_manager_evaluate_all_deactivates_unconfigured() -> None:
     assert manager.has_active_pid() is False
 
 
+def test_pid_manager_evaluate_all_isolates_per_breezer_failures() -> None:
+    """Test that an unexpected exception in one breezer does not abort the loop."""
+
+    class RaisingCoordinator(FakeCoordinator):
+        """Coordinator whose get_device_zone always raises an unexpected error."""
+
+        def get_device_zone(self, guid: str, data: Any = None) -> None:
+            raise RuntimeError("unexpected device data failure")
+
+    coordinator = RaisingCoordinator(_device(speed=1))
+    manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
+    manager.start_breezer_pid(BREEZER_GUID)
+
+    # Must not raise; the exception must be swallowed and logged.
+    asyncio.run(manager.async_evaluate_all(DATA))
+
+
 def test_pid_manager_returns_auto_zone_to_manual() -> None:
     """Test active local PID disables MagicAir cloud auto mode."""
     coordinator = FakeCoordinator(_device(speed=6), zone_mode=ZoneMode.AUTO)
