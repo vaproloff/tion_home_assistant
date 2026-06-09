@@ -47,7 +47,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     coordinator = TionDataUpdateCoordinator(hass, entry, client, scan_interval)
     await coordinator.async_config_entry_first_refresh()
-    pid_manager = TionPidManager(hass, entry, coordinator, scan_interval)
+    pid_manager = TionPidManager(hass, entry, coordinator)
     coordinator.pid_manager = pid_manager
     entry.async_on_unload(pid_manager.async_start())
     hass.data[DOMAIN][entry.entry_id] = coordinator

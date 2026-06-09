@@ -1,22 +1,18 @@
 """Runtime manager for local Tion CO2 PID control."""
 
-from __future__ import annotations
-
-from datetime import timedelta
 import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .client import TionError
 from .const import (
     CONF_CO2_SENSOR_ENTITY_ID,
-    CONF_PID_BREEZERS,
     CONF_PID_BASE_OUTPUT,
+    CONF_PID_BREEZERS,
     CONF_PID_ENABLED,
     CONF_PID_KD,
     CONF_PID_KI,
@@ -35,7 +31,7 @@ from .const import (
     PID_STATUS_SEND_FAILED,
     ZoneMode,
 )
-from .coordinator import TionDataUpdateCoordinator
+from .coordinator import TionData, TionDataUpdateCoordinator
 from .pid import PidCoefficients, PidController, PidOutput
 
 _LOGGER = logging.getLogger(__name__)
@@ -119,7 +115,7 @@ class _TionBreezerPidController:
             "pid_last_update": self.last_update,
         }
 
-    async def async_evaluate(self) -> PidOutput | None:
+    async def async_evaluate(self, data: TionData) -> PidOutput | None:
         """Evaluate this PID controller and send a command if needed."""
         options = self.entry.options.get(CONF_PID_BREEZERS, {}).get(
             self.breezer_guid, {}
@@ -132,7 +128,7 @@ class _TionBreezerPidController:
             self.stop(PID_STATUS_NOT_CONFIGURED)
             return None
 
-        zone = self.coordinator.get_device_zone(self.breezer_guid)
+        zone = self.coordinator.get_device_zone(self.breezer_guid, data)
         if zone is None or not zone.valid:
             self._pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
             return None
@@ -152,6 +148,7 @@ class _TionBreezerPidController:
                     mode=ZoneMode.MANUAL,
                     co2=target_co2,
                     request_refresh=False,
+                    track_stale=False,
                 )
             except TionError as err:
                 _LOGGER.warning(
@@ -175,7 +172,7 @@ class _TionBreezerPidController:
             self._pause(PID_STATUS_PAUSED_SENSOR_UNAVAILABLE)
             return None
 
-        device = self.coordinator.get_device(self.breezer_guid)
+        device = self.coordinator.get_device(self.breezer_guid, data)
         self.source_co2 = source_co2
         if device is None or not device.valid or not device.is_online:
             self._pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
@@ -248,6 +245,7 @@ class _TionBreezerPidController:
                 heater_mode=device.data.heater_mode,
                 gate=device.data.gate,
                 request_refresh=False,
+                track_stale=False,
             )
         except TionError as err:
             _LOGGER.warning(
@@ -257,6 +255,11 @@ class _TionBreezerPidController:
             )
             self._pause(PID_STATUS_SEND_FAILED)
             return None
+
+        # Optimistically reflect the sent command so the UI updates immediately
+        # and the next cycle's command_changed check compares against it.
+        device.data.speed = output.speed
+        device.data.is_on = output.is_on
 
         return output
 
@@ -287,53 +290,27 @@ class TionPidManager:
         hass: HomeAssistant,
         entry: ConfigEntry,
         coordinator: TionDataUpdateCoordinator,
-        scan_interval: int,
     ) -> None:
         """Initialize the PID manager."""
         self.hass = hass
         self.entry = entry
         self.coordinator = coordinator
-        self.scan_interval = scan_interval
         self._controllers: dict[str, _TionBreezerPidController] = {}
-        self._unsub_interval: CALLBACK_TYPE | None = None
 
     @callback
     def async_start(self) -> CALLBACK_TYPE:
-        """Start periodic PID evaluation."""
-        if self.has_active_pid():
-            self._ensure_timer()
+        """Return an unload callback.
+
+        Local PID is evaluated inside the coordinator update cycle, so there is
+        no separate timer to start here.
+        """
         return self.async_stop
 
     @callback
-    def _ensure_timer(self) -> None:
-        """Start the PID timer when at least one controller is active."""
-        if self._unsub_interval is None:
-            _LOGGER.debug(
-                "Starting local PID timer for config entry %s with interval %s seconds",
-                getattr(self.entry, "entry_id", "<unknown>"),
-                self.scan_interval,
-            )
-            self._unsub_interval = async_track_time_interval(
-                self.hass,
-                self._handle_interval,
-                timedelta(seconds=self.scan_interval),
-            )
-
-    @callback
     def async_stop(self) -> None:
-        """Stop periodic PID evaluation."""
-        if self._unsub_interval is not None:
-            _LOGGER.debug(
-                "Stopping local PID timer for config entry %s",
-                getattr(self.entry, "entry_id", "<unknown>"),
-            )
-            self._unsub_interval()
-            self._unsub_interval = None
-
-    @callback
-    def _handle_interval(self, _now) -> None:
-        """Handle periodic PID evaluation."""
-        self.hass.async_create_task(self.async_evaluate_all())
+        """Disarm all local PID controllers."""
+        for controller in self._controllers.values():
+            controller.active = False
 
     def configured_breezers(self) -> set[str]:
         """Return breezers that have local PID control enabled."""
@@ -350,11 +327,6 @@ class TionPidManager:
     def has_active_pid(self) -> bool:
         """Return if at least one breezer has active local PID control."""
         return any(controller.active for controller in self._controllers.values())
-
-    @property
-    def running(self) -> bool:
-        """Return if the periodic PID evaluation timer is running."""
-        return self._unsub_interval is not None
 
     def is_configured(self, breezer_guid: str) -> bool:
         """Return if a breezer has enabled external CO2 PID settings."""
@@ -382,7 +354,9 @@ class TionPidManager:
             return False
 
         controller.start()
-        self._ensure_timer()
+        # PID now runs inside the coordinator cycle; kick an immediate refresh so
+        # arming takes effect without waiting for the next interval.
+        self.hass.async_create_task(self.coordinator.async_request_refresh())
         return True
 
     @callback
@@ -393,8 +367,6 @@ class TionPidManager:
             return False
 
         controller.stop()
-        if not self.has_active_pid():
-            self.async_stop()
         return True
 
     def get_target_co2(self, breezer_guid: str) -> float:
@@ -432,31 +404,26 @@ class TionPidManager:
             "pid_last_update": None,
         }
 
-    async def async_evaluate_all(self) -> None:
-        """Evaluate active PID controllers."""
+    async def async_evaluate_all(self, data: TionData) -> None:
+        """Evaluate active PID controllers on freshly fetched coordinator data."""
         breezer_guids = {
             breezer_guid
             for breezer_guid, controller in self._controllers.items()
             if controller.active
         }
-        if not breezer_guids:
-            self.async_stop()
-            return
-
         for breezer_guid in breezer_guids:
-            await self.async_evaluate_breezer(breezer_guid)
-        self.coordinator.async_update_listeners()
-        if not self.has_active_pid():
-            self.async_stop()
+            await self.async_evaluate_breezer(breezer_guid, data)
 
-    async def async_evaluate_breezer(self, breezer_guid: str) -> PidOutput | None:
+    async def async_evaluate_breezer(
+        self, breezer_guid: str, data: TionData
+    ) -> PidOutput | None:
         """Evaluate one PID controller and send a command if needed."""
         controller = self._controllers.get(breezer_guid)
         if controller is None:
             controller = self._controller(breezer_guid)
         if controller is None:
             return None
-        return await controller.async_evaluate()
+        return await controller.async_evaluate(data)
 
     def _pid_options(self, breezer_guid: str) -> dict[str, Any]:
         """Return stored PID options for a breezer."""
