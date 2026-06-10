@@ -8,6 +8,12 @@ from .const import CONF_PRESET_MAX_SPEED, CONF_PRESET_MIN_SPEED
 
 ATTR_SAVED_MIN_SPEED = "preset_saved_min_speed"
 ATTR_SAVED_MAX_SPEED = "preset_saved_max_speed"
+# How many coordinator updates may report stale limits before we assume our
+# write was applied and stop suppressing reconcile resets. The coordinator's
+# stale-command tracking already drops most stale refreshes, so a small bound
+# is enough to cover eventual consistency while preventing a permanently stuck
+# gate when a cloud write is silently dropped.
+PENDING_CONFIRM_POLLS = 3
 
 
 class TionPresetController:
@@ -27,6 +33,7 @@ class TionPresetController:
         # set, reconcile() must not treat a divergence as an external change,
         # because the cloud is eventually-consistent.
         self._pending: tuple[int, int] | None = None
+        self._pending_polls = 0
 
     @property
     def has_presets(self) -> bool:
@@ -43,7 +50,7 @@ class TionPresetController:
         """Return the active preset mode."""
         return self._active
 
-    def expected_limits(self) -> tuple[int, int] | None:
+    def _expected_limits(self) -> tuple[int, int] | None:
         """Return (min, max) of the active preset, or None for PRESET_NONE."""
         if self._active == PRESET_NONE:
             return None
@@ -62,6 +69,7 @@ class TionPresetController:
             self._active = PRESET_NONE
             self.reset_saved()
             self._pending = limits
+            self._pending_polls = 0
             return limits
 
         if self._active == PRESET_NONE:
@@ -69,8 +77,9 @@ class TionPresetController:
             self._saved_max = int(cur_max)
 
         self._active = preset
-        limits = self.expected_limits()
+        limits = self._expected_limits()
         self._pending = limits
+        self._pending_polls = 0
         return limits
 
     def reconcile(self, reported_min: object, reported_max: object) -> bool:
@@ -86,12 +95,18 @@ class TionPresetController:
         if self._pending is not None:
             if reported == self._pending:
                 self._pending = None
+                self._pending_polls = 0
+            else:
+                self._pending_polls += 1
+                if self._pending_polls >= PENDING_CONFIRM_POLLS:
+                    self._pending = None
+                    self._pending_polls = 0
             return False
 
         if self._active == PRESET_NONE:
             return False
 
-        if reported != self.expected_limits():
+        if reported != self._expected_limits():
             self._active = PRESET_NONE
             self.reset_saved()
             return True
@@ -113,6 +128,7 @@ class TionPresetController:
         self._saved_min = saved_min
         self._saved_max = saved_max
         self._pending = None
+        self._pending_polls = 0
 
     def restore_attributes(self) -> dict[str, int | None]:
         """Return saved limits for the entity's extra_state_attributes."""

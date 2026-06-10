@@ -2,7 +2,7 @@
 
 from homeassistant.components.climate import PRESET_NONE
 
-from custom_components.tion.presets import TionPresetController
+from custom_components.tion.presets import PENDING_CONFIRM_POLLS, TionPresetController
 
 PRESETS = {
     "eco": {"min_speed": 1, "max_speed": 2},
@@ -78,6 +78,16 @@ def test_activate_to_none_restores_and_resets() -> None:
     }
 
 
+def test_activate_none_without_active_preset_returns_current() -> None:
+    """Test activating PRESET_NONE with no saved state returns current limits."""
+    controller = _controller()
+
+    limits = controller.activate(PRESET_NONE, 2, 4)
+
+    assert limits == (2, 4)
+    assert controller.preset_mode == PRESET_NONE
+
+
 def test_reconcile_pending_ignores_inflight_old_limits() -> None:
     """Test the pending gate suppresses a reset while cloud still reports old limits."""
     controller = _controller()
@@ -88,6 +98,21 @@ def test_reconcile_pending_ignores_inflight_old_limits() -> None:
 
     assert changed is False
     assert controller.preset_mode == "boost"
+
+
+def test_reconcile_pending_gate_gives_up_after_repeated_stale_polls() -> None:
+    """Test the pending gate stops suppressing resets if cloud never confirms."""
+    controller = _controller()
+    controller.activate("boost", 1, 3)
+
+    # The cloud never reflects our write; after PENDING_CONFIRM_POLLS stale
+    # polls the gate gives up and the next external change is detected.
+    for _ in range(PENDING_CONFIRM_POLLS):
+        assert controller.reconcile(1, 3) is False
+        assert controller.preset_mode == "boost"
+
+    assert controller.reconcile(2, 5) is True
+    assert controller.preset_mode == PRESET_NONE
 
 
 def test_reconcile_confirms_then_resets_on_external_change() -> None:
@@ -119,12 +144,17 @@ def test_reconcile_no_reset_when_matches() -> None:
 
 
 def test_reconcile_coerces_string_values() -> None:
-    """Test reconcile coerces API string values to int before comparing."""
+    """Test reconcile coerces API string values to int and confirms the gate."""
     controller = _controller()
     controller.activate("boost", 1, 3)
 
+    # String "4"/"6" must coerce and confirm the pending limits.
     assert controller.reconcile("4", "6") is False
     assert controller.preset_mode == "boost"
+
+    # Pending now cleared, so a real divergence is detected and resets.
+    assert controller.reconcile(2, 5) is True
+    assert controller.preset_mode == PRESET_NONE
 
 
 def test_restore_rehydrates_active_preset_and_saved() -> None:
