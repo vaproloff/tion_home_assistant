@@ -2,6 +2,15 @@
 
 from enum import StrEnum
 
+from homeassistant.components.climate import (
+    PRESET_ACTIVITY,
+    PRESET_AWAY,
+    PRESET_BOOST,
+    PRESET_COMFORT,
+    PRESET_ECO,
+    PRESET_HOME,
+    PRESET_SLEEP,
+)
 from homeassistant.const import Platform
 
 DOMAIN = "tion"
@@ -21,6 +30,20 @@ CONF_PID_BASE_OUTPUT = "pid_base_output"
 CONF_PID_KP = "pid_kp"
 CONF_PID_KI = "pid_ki"
 CONF_PID_KD = "pid_kd"
+CONF_PRESETS = "presets"
+CONF_PRESET_MIN_SPEED = "min_speed"
+CONF_PRESET_MAX_SPEED = "max_speed"
+
+SUPPORTED_PRESETS: tuple[str, ...] = (
+    PRESET_ECO,
+    PRESET_AWAY,
+    PRESET_BOOST,
+    PRESET_COMFORT,
+    PRESET_SLEEP,
+    PRESET_ACTIVITY,
+    PRESET_HOME,
+)
+
 PID_STATUS_INACTIVE = "inactive"
 PID_STATUS_RUNNING = "running"
 PID_STATUS_NOT_CONFIGURED = "not_configured"
