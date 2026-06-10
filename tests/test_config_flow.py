@@ -4,30 +4,39 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+from homeassistant.const import CONF_SCAN_INTERVAL
+from homeassistant.data_entry_flow import FlowResultType
+
 from custom_components.tion.config_flow import (
     CONF_LOCAL_PID_ACTION,
     CONF_OPTIONS_ACTION,
+    CONF_PRESET_NAME,
+    CONF_PRESETS_ACTION,
     LOCAL_PID_ACTION_CONFIGURE_BREEZER_PID,
     LOCAL_PID_ACTION_DONE,
     LOCAL_PID_ACTION_REMOVE_BREEZER_PID,
     OPTIONS_ACTION_CONFIGURE_LOCAL_PID,
+    OPTIONS_ACTION_CONFIGURE_PRESETS,
     OPTIONS_ACTION_DONE,
+    PRESETS_ACTION_ADD,
+    PRESETS_ACTION_DONE,
     TionOptionsFlow,
 )
 from custom_components.tion.const import (
     CONF_BREEZER_GUID,
     CONF_CO2_SENSOR_ENTITY_ID,
-    CONF_PID_BREEZERS,
     CONF_PID_BASE_OUTPUT,
+    CONF_PID_BREEZERS,
     CONF_PID_ENABLED,
     CONF_PID_KD,
     CONF_PID_KI,
     CONF_PID_KP,
+    CONF_PRESET_MAX_SPEED,
+    CONF_PRESET_MIN_SPEED,
+    CONF_PRESETS,
     DOMAIN,
     TionDeviceType,
 )
-from homeassistant.const import CONF_SCAN_INTERVAL
-from homeassistant.data_entry_flow import FlowResultType
 
 BREEZER_GUID = "breezer-guid"
 SECOND_BREEZER_GUID = "second-breezer-guid"
@@ -66,6 +75,17 @@ class FakeCoordinator:
     def get_devices(self) -> list[SimpleNamespace]:
         """Return fake devices."""
         return self._devices
+
+
+def _preset_options() -> dict[str, Any]:
+    """Return fake preset options for one breezer."""
+    return {
+        CONF_PRESETS: {
+            BREEZER_GUID: {
+                "boost": {CONF_PRESET_MIN_SPEED: 4, CONF_PRESET_MAX_SPEED: 6},
+            }
+        }
+    }
 
 
 def _pid_options(*, enabled: bool = True) -> dict[str, Any]:
@@ -276,6 +296,109 @@ def test_options_local_pid_remove_last_breezer_clears_pid_breezers() -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "local_pid"
     assert CONF_PID_BREEZERS not in flow._options  # noqa: SLF001
+
+
+def test_options_init_configure_presets_opens_presets_step() -> None:
+    """Test choosing Configure presets opens the presets step."""
+    flow = _flow()
+
+    result = asyncio.run(
+        flow.async_step_init(
+            {
+                CONF_SCAN_INTERVAL: 60,
+                CONF_OPTIONS_ACTION: OPTIONS_ACTION_CONFIGURE_PRESETS,
+            }
+        )
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "presets"
+
+
+def test_options_presets_done_returns_to_init() -> None:
+    """Test Done in the presets step returns to init without a breezer."""
+    flow = _flow()
+
+    result = asyncio.run(
+        flow.async_step_presets(
+            {CONF_BREEZER_GUID: None, CONF_PRESETS_ACTION: PRESETS_ACTION_DONE}
+        )
+    )
+
+    assert result["step_id"] == "init"
+    assert flow._breezer_guid is None  # noqa: SLF001
+
+
+def test_options_presets_add_requires_breezer() -> None:
+    """Test adding a preset without a breezer raises a required error."""
+    flow = _flow()
+
+    result = asyncio.run(
+        flow.async_step_presets(
+            {CONF_BREEZER_GUID: None, CONF_PRESETS_ACTION: PRESETS_ACTION_ADD}
+        )
+    )
+
+    assert result["step_id"] == "presets"
+    assert result["errors"][CONF_BREEZER_GUID] == "required"
+
+
+def test_options_presets_add_opens_name_form() -> None:
+    """Test add with a breezer opens the preset name selection form."""
+    flow = _flow()
+
+    result = asyncio.run(
+        flow.async_step_presets(
+            {CONF_BREEZER_GUID: BREEZER_GUID, CONF_PRESETS_ACTION: PRESETS_ACTION_ADD}
+        )
+    )
+
+    assert result["step_id"] == "preset_add"
+    assert flow._breezer_guid == BREEZER_GUID  # noqa: SLF001
+
+
+def test_options_preset_config_rejects_min_above_max() -> None:
+    """Test preset config validates min_speed <= max_speed."""
+    flow = _flow()
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+    flow._preset_name = "boost"  # noqa: SLF001
+
+    result = asyncio.run(
+        flow.async_step_preset_config(
+            {CONF_PRESET_MIN_SPEED: 5, CONF_PRESET_MAX_SPEED: 2}
+        )
+    )
+
+    assert result["step_id"] == "preset_config"
+    assert result["errors"]["base"] == "min_above_max"
+
+
+def test_options_preset_config_saves_and_returns_to_presets() -> None:
+    """Test a valid preset config is stored under the breezer guid."""
+    flow = _flow()
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+    flow._preset_name = "boost"  # noqa: SLF001
+
+    result = asyncio.run(
+        flow.async_step_preset_config(
+            {CONF_PRESET_MIN_SPEED: 4, CONF_PRESET_MAX_SPEED: 6}
+        )
+    )
+
+    stored = flow._options[CONF_PRESETS][BREEZER_GUID]["boost"]  # noqa: SLF001
+    assert result["step_id"] == "presets"
+    assert stored == {CONF_PRESET_MIN_SPEED: 4, CONF_PRESET_MAX_SPEED: 6}
+
+
+def test_options_preset_remove_deletes_and_cleans_up() -> None:
+    """Test removing the only preset clears the breezer and CONF_PRESETS keys."""
+    flow = _flow(_preset_options())
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = asyncio.run(flow.async_step_preset_remove({CONF_PRESET_NAME: "boost"}))
+
+    assert result["step_id"] == "presets"
+    assert CONF_PRESETS not in flow._options  # noqa: SLF001
 
 
 def test_options_final_done_saves_draft_changes() -> None:
