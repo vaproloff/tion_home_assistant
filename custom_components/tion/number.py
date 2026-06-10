@@ -278,12 +278,10 @@ class TionLocalTargetCO2(TionNumber, RestoreEntity):
         if (last_state := await self.async_get_last_state()) is not None:
             try:
                 self._target_co2 = float(last_state.state)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 self._target_co2 = DEFAULT_TARGET_CO2
 
-        self.coordinator.pid_manager.set_target_co2(
-            self._device.guid, self._target_co2
-        )
+        self.coordinator.pid_manager.set_target_co2(self._device.guid, self._target_co2)
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new local target CO2 value."""

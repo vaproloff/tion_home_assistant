@@ -97,7 +97,7 @@ class PidController:
 
         output_percent = _clamp(raw_output, 0.0, 100.0)
         speed = max(
-            min(max_allowed, int(round(output_percent / 100 * device_max_speed))),
+            min(max_allowed, round(output_percent / 100 * device_max_speed)),
             min_allowed,
         )
 

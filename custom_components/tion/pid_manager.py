@@ -43,7 +43,7 @@ def _int_or_default(value: Any, default: int | None) -> int | None:
     """Convert an API value to int or return a default."""
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 
@@ -169,7 +169,7 @@ class _TionBreezerPidController:
 
         try:
             source_co2 = float(co2_state.state)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             self.source_co2 = None
             self._pause(PID_STATUS_PAUSED_SENSOR_UNAVAILABLE)
             return None
@@ -209,7 +209,7 @@ class _TionBreezerPidController:
 
         try:
             current_speed = int(device.data.speed)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             command_changed = True
         else:
             command_changed = (
@@ -416,7 +416,9 @@ class TionPidManager:
         for breezer_guid in breezer_guids:
             try:
                 await self.async_evaluate_breezer(breezer_guid, data)
-            except Exception:  # broad catch is intentional; isolate per-breezer failures
+            except (
+                Exception
+            ):  # broad catch is intentional; isolate per-breezer failures
                 _LOGGER.exception(
                     "Unexpected error evaluating local PID for breezer %s",
                     breezer_guid,

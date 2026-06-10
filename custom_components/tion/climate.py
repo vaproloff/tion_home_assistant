@@ -149,9 +149,7 @@ class TionClimate(
             attrs.update({"power": self._heater_power})
 
         attrs.update(
-            self.coordinator.pid_manager.extra_state_attributes(
-                self._breezer_guid
-            )
+            self.coordinator.pid_manager.extra_state_attributes(self._breezer_guid)
         )
 
         return attrs
@@ -346,10 +344,9 @@ class TionClimate(
     def _restore_local_pid(self, last_state: State) -> None:
         """Restore local PID active state after Home Assistant restart."""
         pid_manager = self.coordinator.pid_manager
-        if (
-            last_state.attributes.get("pid_active") is True
-            and pid_manager.is_configured(self._breezer_guid)
-        ):
+        if last_state.attributes.get(
+            "pid_active"
+        ) is True and pid_manager.is_configured(self._breezer_guid):
             _LOGGER.debug("%s: restoring active local PID", self.name)
             pid_manager.start_breezer_pid(self._breezer_guid)
 
@@ -436,10 +433,7 @@ class TionClimate(
             return
 
         pid_manager = self.coordinator.pid_manager
-        if (
-            fan_mode == FAN_AUTO
-            and pid_manager.is_configured(self._breezer_guid)
-        ):
+        if fan_mode == FAN_AUTO and pid_manager.is_configured(self._breezer_guid):
             pid_active = pid_manager.is_active(self._breezer_guid)
             mode_changed = self._mode != ZoneMode.MANUAL
             if not pid_active:
