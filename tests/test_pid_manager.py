@@ -190,7 +190,9 @@ def test_pid_manager_sends_breezer_command_for_changed_output() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
+    output = asyncio.run(
+        manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator))
+    )
 
     assert output is not None
     assert output.speed == 6
@@ -233,9 +235,7 @@ def test_pid_manager_arming_requests_immediate_refresh() -> None:
 def test_pid_manager_does_not_arm_without_enabled_pid() -> None:
     """Test disabled PID options do not arm a controller and report no enabled PID."""
     coordinator = FakeCoordinator(_device(speed=1))
-    manager = TionPidManager(
-        FakeHass("1000"), FakeDisabledConfigEntry(), coordinator
-    )
+    manager = TionPidManager(FakeHass("1000"), FakeDisabledConfigEntry(), coordinator)
 
     unsubscribe = manager.async_start()
 
@@ -264,9 +264,7 @@ def test_pid_manager_async_stop_disarms_controllers() -> None:
 def test_pid_manager_extra_attributes_default_for_unconfigured_pid() -> None:
     """Test PID attributes are stable when no runtime controller exists."""
     coordinator = FakeCoordinator(_device(speed=1))
-    manager = TionPidManager(
-        FakeHass("1000"), FakeDisabledConfigEntry(), coordinator
-    )
+    manager = TionPidManager(FakeHass("1000"), FakeDisabledConfigEntry(), coordinator)
 
     assert manager.extra_state_attributes(BREEZER_GUID) == {
         "pid_active": False,
@@ -285,7 +283,9 @@ def test_pid_manager_pauses_on_invalid_sensor_state() -> None:
     manager = TionPidManager(FakeHass("unknown"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
+    output = asyncio.run(
+        manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator))
+    )
 
     assert output is None
     assert coordinator.zone_commands == []
@@ -303,7 +303,9 @@ def test_pid_manager_skips_unchanged_output() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
+    output = asyncio.run(
+        manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator))
+    )
 
     assert output is not None
     assert output.speed == 6
@@ -318,7 +320,9 @@ def test_pid_manager_disarm_resets_pid_core_state() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
+    output = asyncio.run(
+        manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator))
+    )
     controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
     manager.stop_breezer_pid(BREEZER_GUID)
 
@@ -369,7 +373,9 @@ def test_pid_manager_returns_auto_zone_to_manual() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    output = asyncio.run(manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator)))
+    output = asyncio.run(
+        manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator))
+    )
 
     assert output is not None
     assert coordinator.zone_commands == [
