@@ -448,7 +448,7 @@ class TionOptionsFlow(OptionsFlow):
         return self.async_show_form(
             step_id="preset_config",
             data_schema=self._preset_schema(),
-            description_placeholders={"preset_name": self._preset_name},
+            description_placeholders={"preset_name": self._preset_name or ""},
             errors=errors,
         )
 

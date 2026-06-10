@@ -20,6 +20,7 @@ from custom_components.tion.config_flow import (
     OPTIONS_ACTION_DONE,
     PRESETS_ACTION_ADD,
     PRESETS_ACTION_DONE,
+    PRESETS_ACTION_EDIT,
     TionOptionsFlow,
 )
 from custom_components.tion.const import (
@@ -311,7 +312,7 @@ def test_options_init_configure_presets_opens_presets_step() -> None:
         )
     )
 
-    assert result["type"] == FlowResultType.FORM
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "presets"
 
 
@@ -325,6 +326,7 @@ def test_options_presets_done_returns_to_init() -> None:
         )
     )
 
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "init"
     assert flow._breezer_guid is None  # noqa: SLF001
 
@@ -339,6 +341,7 @@ def test_options_presets_add_requires_breezer() -> None:
         )
     )
 
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "presets"
     assert result["errors"][CONF_BREEZER_GUID] == "required"
 
@@ -353,6 +356,7 @@ def test_options_presets_add_opens_name_form() -> None:
         )
     )
 
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "preset_add"
     assert flow._breezer_guid == BREEZER_GUID  # noqa: SLF001
 
@@ -369,6 +373,7 @@ def test_options_preset_config_rejects_min_above_max() -> None:
         )
     )
 
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "preset_config"
     assert result["errors"]["base"] == "min_above_max"
 
@@ -386,6 +391,7 @@ def test_options_preset_config_saves_and_returns_to_presets() -> None:
     )
 
     stored = flow._options[CONF_PRESETS][BREEZER_GUID]["boost"]  # noqa: SLF001
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "presets"
     assert stored == {CONF_PRESET_MIN_SPEED: 4, CONF_PRESET_MAX_SPEED: 6}
 
@@ -397,8 +403,36 @@ def test_options_preset_remove_deletes_and_cleans_up() -> None:
 
     result = asyncio.run(flow.async_step_preset_remove({CONF_PRESET_NAME: "boost"}))
 
+    assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "presets"
     assert CONF_PRESETS not in flow._options  # noqa: SLF001
+
+
+def test_options_presets_edit_opens_edit_form() -> None:
+    """Test choosing Edit with a breezer opens the preset selection form."""
+    flow = _flow(_preset_options())
+
+    result = asyncio.run(
+        flow.async_step_presets(
+            {CONF_BREEZER_GUID: BREEZER_GUID, CONF_PRESETS_ACTION: PRESETS_ACTION_EDIT}
+        )
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "preset_edit"
+    assert flow._breezer_guid == BREEZER_GUID  # noqa: SLF001
+
+
+def test_options_preset_edit_selects_and_opens_prefilled_config() -> None:
+    """Test selecting a preset to edit opens preset_config (exercising pre-fill)."""
+    flow = _flow(_preset_options())
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = asyncio.run(flow.async_step_preset_edit({CONF_PRESET_NAME: "boost"}))
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "preset_config"
+    assert flow._preset_name == "boost"  # noqa: SLF001
 
 
 def test_options_final_done_saves_draft_changes() -> None:
