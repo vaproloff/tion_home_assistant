@@ -36,6 +36,7 @@ from custom_components.tion.const import (
     CONF_PRESET_MIN_SPEED,
     CONF_PRESETS,
     DOMAIN,
+    SUPPORTED_PRESETS,
     TionDeviceType,
 )
 
@@ -433,6 +434,21 @@ def test_options_preset_edit_selects_and_opens_prefilled_config() -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "preset_config"
     assert flow._preset_name == "boost"  # noqa: SLF001
+
+
+def test_options_preset_add_all_configured_returns_to_presets() -> None:
+    """Test Add when every preset is already configured returns to presets."""
+    all_presets = {
+        name: {CONF_PRESET_MIN_SPEED: 1, CONF_PRESET_MAX_SPEED: 2}
+        for name in SUPPORTED_PRESETS
+    }
+    flow = _flow({CONF_PRESETS: {BREEZER_GUID: all_presets}})
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = asyncio.run(flow.async_step_preset_add())
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "presets"
 
 
 def test_options_final_done_saves_draft_changes() -> None:

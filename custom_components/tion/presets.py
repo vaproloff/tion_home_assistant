@@ -12,7 +12,8 @@ ATTR_SAVED_MAX_SPEED = "preset_saved_max_speed"
 # write was applied and stop suppressing reconcile resets. The coordinator's
 # stale-command tracking already drops most stale refreshes, so a small bound
 # is enough to cover eventual consistency while preventing a permanently stuck
-# gate when a cloud write is silently dropped.
+# gate when a cloud write is silently dropped. At the default 60s scan
+# interval this is roughly a 3-minute ceiling before the gate gives up.
 PENDING_CONFIRM_POLLS = 3
 
 

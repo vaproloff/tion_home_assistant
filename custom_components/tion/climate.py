@@ -406,8 +406,14 @@ class TionClimate(
         """Handle updated data from the coordinator."""
         self._load_zone()
         self._load_breezer()
-        if self._presets.has_presets:
-            self._presets.reconcile(self._speed_min_set, self._speed_max_set)
+        if self._presets.has_presets and self._presets.reconcile(
+            self._speed_min_set, self._speed_max_set
+        ):
+            _LOGGER.debug(
+                "%s: preset reset to %s by external limit change",
+                self.name,
+                self._presets.preset_mode,
+            )
         super()._handle_coordinator_update()
 
     async def async_turn_on(self) -> None:
