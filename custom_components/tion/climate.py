@@ -36,8 +36,12 @@ from .const import (
     TionDeviceType,
     ZoneMode,
 )
-from .presets import TionPresetController
 from .coordinator import TionDataUpdateCoordinator
+from .presets import (
+    ATTR_SAVED_MAX_SPEED,
+    ATTR_SAVED_MIN_SPEED,
+    TionPresetController,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -393,8 +397,8 @@ class TionClimate(
             return
         self._presets.restore(
             preset_mode,
-            last_state.attributes.get("preset_saved_min_speed"),
-            last_state.attributes.get("preset_saved_max_speed"),
+            last_state.attributes.get(ATTR_SAVED_MIN_SPEED),
+            last_state.attributes.get(ATTR_SAVED_MAX_SPEED),
         )
 
     @callback

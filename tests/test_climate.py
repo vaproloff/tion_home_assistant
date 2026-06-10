@@ -8,10 +8,19 @@ from custom_components.tion.const import TionDeviceType
 
 from homeassistant.components.climate import ATTR_PRESET_MODE, FAN_AUTO, PRESET_NONE
 
-from custom_components.tion.presets import TionPresetController
+from custom_components.tion.presets import (
+    ATTR_SAVED_MAX_SPEED,
+    ATTR_SAVED_MIN_SPEED,
+    TionPresetController,
+)
 
 BREEZER_GUID = "breezer-guid"
 PID_BREEZER_GUID = "pid-breezer-guid"
+
+
+async def _noop_send() -> bool:
+    """No-op breezer send for tests."""
+    return True
 
 
 class FakePidManager:
@@ -187,6 +196,8 @@ def _preset_climate(
     entity._speed = speed_min_set  # noqa: SLF001
     entity._heater_power = None  # noqa: SLF001
     entity.async_write_ha_state = lambda: None
+    entity._load_zone = lambda: None  # noqa: SLF001
+    entity._load_breezer = lambda: None  # noqa: SLF001
     return entity
 
 
@@ -243,15 +254,15 @@ def test_climate_restores_preset() -> None:
     last_state = SimpleNamespace(
         attributes={
             ATTR_PRESET_MODE: "boost",
-            "preset_saved_min_speed": 1,
-            "preset_saved_max_speed": 3,
+            ATTR_SAVED_MIN_SPEED: 1,
+            ATTR_SAVED_MAX_SPEED: 3,
         }
     )
 
     entity._restore_preset(last_state)  # noqa: SLF001
 
     assert entity.preset_mode == "boost"
-    assert entity.extra_state_attributes["preset_saved_min_speed"] == 1
+    assert entity.extra_state_attributes[ATTR_SAVED_MIN_SPEED] == 1
 
 
 def test_climate_restore_ignores_none_preset() -> None:
@@ -273,3 +284,53 @@ def test_climate_preset_modes_none_without_presets() -> None:
 
     assert entity.preset_modes is None
     assert entity.preset_mode is None
+
+
+def test_climate_set_preset_none_restores_saved_limits() -> None:
+    """Test deactivating a preset restores the saved limits and pushes them."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+        speed_min_set=1,
+        speed_max_set=3,
+    )
+    send_calls = 0
+
+    async def _send_breezer() -> bool:
+        nonlocal send_calls
+        send_calls += 1
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("boost"))
+    # Cloud confirms the applied limits so the pending gate clears.
+    entity._presets.reconcile(4, 6)  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode(PRESET_NONE))
+
+    assert send_calls == 2
+    assert entity._speed_min_set == 1  # noqa: SLF001
+    assert entity._speed_max_set == 3  # noqa: SLF001
+    assert entity.preset_mode == PRESET_NONE
+
+
+def test_climate_coordinator_update_resets_preset_on_manual_change() -> None:
+    """Test an external limit change resets the preset on a coordinator update."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+    )
+    entity._send_breezer = _noop_send  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("boost"))
+    # Confirm the applied limits so the pending gate clears.
+    entity._presets.reconcile(4, 6)  # noqa: SLF001
+
+    # The cloud now reports limits the user changed manually (via the number
+    # entity or the Tion app); _handle_coordinator_update must drop the preset.
+    entity._speed_min_set = 2  # noqa: SLF001
+    entity._speed_max_set = 5  # noqa: SLF001
+    entity._handle_coordinator_update()  # noqa: SLF001
+
+    assert entity.preset_mode == PRESET_NONE
