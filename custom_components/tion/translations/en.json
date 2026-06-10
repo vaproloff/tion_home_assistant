@@ -35,7 +35,7 @@
         },
         "data_description": {
           "scan_interval": "Tion devices data minimum update period.",
-          "options_action": "Save options or open local PID settings."
+          "options_action": "Save options, open local PID settings, or configure presets."
         }
       },
       "local_pid": {
@@ -65,16 +65,63 @@
           "pid_ki": "Default: 0.002.",
           "pid_kd": "Default: 0.0."
         }
+      },
+      "presets": {
+        "data": {
+          "breezer_guid": "Breezer",
+          "presets_action": "Preset action"
+        },
+        "data_description": {
+          "breezer_guid": "Select a breezer to add, edit, or remove its speed presets.",
+          "presets_action": "Choose what to do with presets for the selected breezer."
+        }
+      },
+      "preset_add": {
+        "data": {
+          "preset_name": "Preset"
+        },
+        "data_description": {
+          "preset_name": "Pick a preset to configure for this breezer."
+        }
+      },
+      "preset_config": {
+        "title": "Configure preset {preset_name}",
+        "data": {
+          "min_speed": "Minimum speed",
+          "max_speed": "Maximum speed"
+        },
+        "data_description": {
+          "min_speed": "Lower speed limit applied in the zone auto mode.",
+          "max_speed": "Upper speed limit applied in the zone auto mode."
+        }
+      },
+      "preset_edit": {
+        "data": {
+          "preset_name": "Preset"
+        },
+        "data_description": {
+          "preset_name": "Pick a preset to edit."
+        }
+      },
+      "preset_remove": {
+        "data": {
+          "preset_name": "Preset"
+        },
+        "data_description": {
+          "preset_name": "Pick a preset to remove."
+        }
       }
     },
     "error": {
-      "required": "Required"
+      "required": "Required",
+      "min_above_max": "Minimum speed must not be greater than maximum speed"
     }
   },
   "selector": {
     "init_menu_selector": {
       "options": {
         "configure_local_pid": "Configure local PID",
+        "configure_presets": "Configure presets",
         "done": "Done"
       }
     },
@@ -83,6 +130,25 @@
         "configure_breezer_pid": "Configure breezer local PID",
         "remove_breezer_pid": "Remove breezer local PID",
         "done": "Done"
+      }
+    },
+    "presets_menu_selector": {
+      "options": {
+        "add": "Add preset",
+        "edit": "Edit preset",
+        "remove": "Remove preset",
+        "done": "Done"
+      }
+    },
+    "preset_name_selector": {
+      "options": {
+        "eco": "Eco",
+        "away": "Away",
+        "boost": "Boost",
+        "comfort": "Comfort",
+        "sleep": "Sleep",
+        "activity": "Activity",
+        "home": "Home"
       }
     }
   },

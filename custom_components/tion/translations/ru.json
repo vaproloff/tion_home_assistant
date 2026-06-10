@@ -34,7 +34,7 @@
         },
         "data_description": {
           "scan_interval": "Минимальный период обновления данных устройств Tion от API.",
-          "options_action": "Сохраните параметры или откройте настройки локального PID."
+          "options_action": "Сохранить настройки, открыть локальный PID или настроить пресеты."
         }
       },
       "local_pid": {
@@ -64,16 +64,63 @@
           "pid_ki": "Значение по умолчанию: 0.002.",
           "pid_kd": "Значение по умолчанию: 0.0."
         }
+      },
+      "presets": {
+        "data": {
+          "breezer_guid": "Бризер",
+          "presets_action": "Действие с пресетом"
+        },
+        "data_description": {
+          "breezer_guid": "Выберите бризер для добавления, изменения или удаления его пресетов скорости.",
+          "presets_action": "Выберите, что сделать с пресетами выбранного бризера."
+        }
+      },
+      "preset_add": {
+        "data": {
+          "preset_name": "Пресет"
+        },
+        "data_description": {
+          "preset_name": "Выберите пресет для настройки этого бризера."
+        }
+      },
+      "preset_config": {
+        "title": "Настройка пресета {preset_name}",
+        "data": {
+          "min_speed": "Минимальная скорость",
+          "max_speed": "Максимальная скорость"
+        },
+        "data_description": {
+          "min_speed": "Нижний предел скорости в авто-режиме зоны.",
+          "max_speed": "Верхний предел скорости в авто-режиме зоны."
+        }
+      },
+      "preset_edit": {
+        "data": {
+          "preset_name": "Пресет"
+        },
+        "data_description": {
+          "preset_name": "Выберите пресет для изменения."
+        }
+      },
+      "preset_remove": {
+        "data": {
+          "preset_name": "Пресет"
+        },
+        "data_description": {
+          "preset_name": "Выберите пресет для удаления."
+        }
       }
     },
     "error": {
-      "required": "Обязательное поле"
+      "required": "Обязательное поле",
+      "min_above_max": "Минимальная скорость не может быть больше максимальной"
     }
   },
   "selector": {
     "init_menu_selector": {
       "options": {
         "configure_local_pid": "Настройка локального PID-контроллера",
+        "configure_presets": "Настроить пресеты",
         "done": "Сохранить"
       }
     },
@@ -82,6 +129,25 @@
         "configure_breezer_pid": "Настройка локального PID-контроллера бризера",
         "remove_breezer_pid": "Удалить локальный PID-контроллер бризера",
         "done": "Сохранить"
+      }
+    },
+    "presets_menu_selector": {
+      "options": {
+        "add": "Добавить пресет",
+        "edit": "Изменить пресет",
+        "remove": "Удалить пресет",
+        "done": "Готово"
+      }
+    },
+    "preset_name_selector": {
+      "options": {
+        "eco": "Эко",
+        "away": "Нет дома",
+        "boost": "Турбо",
+        "comfort": "Комфорт",
+        "sleep": "Сон",
+        "activity": "Активность",
+        "home": "Дома"
       }
     }
   },
