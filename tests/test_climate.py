@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from custom_components.tion.climate import TionClimate
 from custom_components.tion.const import TionDeviceType
 
-from homeassistant.components.climate import FAN_AUTO
+from homeassistant.components.climate import ATTR_PRESET_MODE, FAN_AUTO, PRESET_NONE
+
+from custom_components.tion.presets import TionPresetController
 
 BREEZER_GUID = "breezer-guid"
 PID_BREEZER_GUID = "pid-breezer-guid"
@@ -40,6 +42,10 @@ class FakePidManager:
         """Record local PID stop."""
         self.active_calls.append((breezer_guid, False))
         return True
+
+    def extra_state_attributes(self, breezer_guid: str) -> dict:
+        """Return fake PID attributes."""
+        return {}
 
 
 class FakeCoordinator:
@@ -162,3 +168,108 @@ def test_climate_rejects_fan_auto_for_non_pid_breezer_in_local_pid_zone() -> Non
 
     assert send_zone_calls == 0
     assert pid_manager.active_calls == []
+
+
+def _preset_climate(
+    pid_manager: FakePidManager,
+    *,
+    presets: dict[str, dict[str, int]] | None = None,
+    speed_min_set: int = 1,
+    speed_max_set: int = 3,
+) -> TionClimate:
+    """Return a minimal climate entity wired with a preset controller."""
+    entity = _climate(pid_manager)
+    entity._presets = TionPresetController(presets or {})  # noqa: SLF001
+    entity._speed_min_set = speed_min_set  # noqa: SLF001
+    entity._speed_max_set = speed_max_set  # noqa: SLF001
+    entity._mode = None  # noqa: SLF001
+    entity._zone_valid = False  # noqa: SLF001
+    entity._speed = speed_min_set  # noqa: SLF001
+    entity._heater_power = None  # noqa: SLF001
+    entity.async_write_ha_state = lambda: None
+    return entity
+
+
+def test_climate_set_preset_mode_sends_limits() -> None:
+    """Test activating a preset pushes the preset min/max speed to the cloud."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+    )
+    send_calls = 0
+
+    async def _send_breezer() -> bool:
+        nonlocal send_calls
+        send_calls += 1
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("boost"))
+
+    assert send_calls == 1
+    assert entity._speed_min_set == 4  # noqa: SLF001
+    assert entity._speed_max_set == 6  # noqa: SLF001
+    assert entity.preset_mode == "boost"
+
+
+def test_climate_set_preset_mode_rejects_unknown() -> None:
+    """Test an unknown preset name does not send a command."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+    )
+    send_calls = 0
+
+    async def _send_breezer() -> bool:
+        nonlocal send_calls
+        send_calls += 1
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("nonexistent"))
+
+    assert send_calls == 0
+    assert entity.preset_mode == PRESET_NONE
+
+
+def test_climate_restores_preset() -> None:
+    """Test the active preset and saved limits are restored from last state."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+    )
+    last_state = SimpleNamespace(
+        attributes={
+            ATTR_PRESET_MODE: "boost",
+            "preset_saved_min_speed": 1,
+            "preset_saved_max_speed": 3,
+        }
+    )
+
+    entity._restore_preset(last_state)  # noqa: SLF001
+
+    assert entity.preset_mode == "boost"
+    assert entity.extra_state_attributes["preset_saved_min_speed"] == 1
+
+
+def test_climate_restore_ignores_none_preset() -> None:
+    """Test restore does nothing when the previous preset was PRESET_NONE."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+    )
+    last_state = SimpleNamespace(attributes={ATTR_PRESET_MODE: PRESET_NONE})
+
+    entity._restore_preset(last_state)  # noqa: SLF001
+
+    assert entity.preset_mode == PRESET_NONE
+
+
+def test_climate_preset_modes_none_without_presets() -> None:
+    """Test preset_modes is None when no presets are configured."""
+    entity = _preset_climate(FakePidManager(), presets={})
+
+    assert entity.preset_modes is None
+    assert entity.preset_mode is None
