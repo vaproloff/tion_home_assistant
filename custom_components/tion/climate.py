@@ -37,11 +37,7 @@ from .const import (
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .presets import (
-    ATTR_SAVED_MAX_SPEED,
-    ATTR_SAVED_MIN_SPEED,
-    TionPresetController,
-)
+from .presets import ATTR_SAVED_MAX_SPEED, ATTR_SAVED_MIN_SPEED, TionPresetController
 
 _LOGGER = logging.getLogger(__name__)
 

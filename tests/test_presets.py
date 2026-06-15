@@ -2,7 +2,7 @@
 
 from homeassistant.components.climate import PRESET_NONE
 
-from custom_components.tion.presets import PENDING_CONFIRM_POLLS, TionPresetController
+from custom_components.tion.presets import TionPresetController
 
 PRESETS = {
     "eco": {"min_speed": 1, "max_speed": 2},
@@ -65,8 +65,6 @@ def test_activate_to_none_restores_and_resets() -> None:
     """Test returning to PRESET_NONE restores saved limits and clears them."""
     controller = _controller()
     controller.activate("boost", 1, 3)
-    # Confirm pending so the controller is in steady state.
-    controller.reconcile(4, 6)
 
     limits = controller.activate(PRESET_NONE, 4, 6)
 
@@ -88,43 +86,15 @@ def test_activate_none_without_active_preset_returns_current() -> None:
     assert controller.preset_mode == PRESET_NONE
 
 
-def test_reconcile_pending_ignores_inflight_old_limits() -> None:
-    """Test the pending gate suppresses a reset while cloud still reports old limits."""
+def test_reconcile_resets_on_external_change() -> None:
+    """Test a divergent reported limit resets the active preset to PRESET_NONE.
+
+    The coordinator only surfaces reads taken after our command completed, so a
+    divergence is a genuine external change and resets immediately.
+    """
     controller = _controller()
     controller.activate("boost", 1, 3)
 
-    # Cloud is eventually-consistent and still reports the old limits.
-    changed = controller.reconcile(1, 3)
-
-    assert changed is False
-    assert controller.preset_mode == "boost"
-
-
-def test_reconcile_pending_gate_gives_up_after_repeated_stale_polls() -> None:
-    """Test the pending gate stops suppressing resets if cloud never confirms."""
-    controller = _controller()
-    controller.activate("boost", 1, 3)
-
-    # The cloud never reflects our write; after PENDING_CONFIRM_POLLS stale
-    # polls the gate gives up and the next external change is detected.
-    for _ in range(PENDING_CONFIRM_POLLS):
-        assert controller.reconcile(1, 3) is False
-        assert controller.preset_mode == "boost"
-
-    assert controller.reconcile(2, 5) is True
-    assert controller.preset_mode == PRESET_NONE
-
-
-def test_reconcile_confirms_then_resets_on_external_change() -> None:
-    """Test reset happens only after cloud confirmed our limits."""
-    controller = _controller()
-    controller.activate("boost", 1, 3)
-
-    # Cloud confirms our applied limits -> clears pending, no change.
-    assert controller.reconcile(4, 6) is False
-    assert controller.preset_mode == "boost"
-
-    # A later external change diverges -> reset to PRESET_NONE.
     assert controller.reconcile(2, 5) is True
     assert controller.preset_mode == PRESET_NONE
     assert controller.restore_attributes() == {
@@ -137,28 +107,27 @@ def test_reconcile_no_reset_when_matches() -> None:
     """Test no reset while reported limits keep matching the active preset."""
     controller = _controller()
     controller.activate("boost", 1, 3)
-    controller.reconcile(4, 6)  # confirm
 
     assert controller.reconcile(4, 6) is False
     assert controller.preset_mode == "boost"
 
 
 def test_reconcile_coerces_string_values() -> None:
-    """Test reconcile coerces API string values to int and confirms the gate."""
+    """Test reconcile coerces API string values to int before comparing."""
     controller = _controller()
     controller.activate("boost", 1, 3)
 
-    # String "4"/"6" must coerce and confirm the pending limits.
+    # String "4"/"6" must coerce and match the active preset's limits.
     assert controller.reconcile("4", "6") is False
     assert controller.preset_mode == "boost"
 
-    # Pending now cleared, so a real divergence is detected and resets.
+    # A real divergence is detected and resets.
     assert controller.reconcile(2, 5) is True
     assert controller.preset_mode == PRESET_NONE
 
 
 def test_restore_rehydrates_active_preset_and_saved() -> None:
-    """Test restore sets active preset and saved limits without a pending gate."""
+    """Test restore sets the active preset and saved limits after a restart."""
     controller = _controller()
 
     controller.restore("boost", 1, 3)
@@ -168,7 +137,7 @@ def test_restore_rehydrates_active_preset_and_saved() -> None:
         "preset_saved_min_speed": 1,
         "preset_saved_max_speed": 3,
     }
-    # No pending: a divergence is treated as external immediately.
+    # A later divergence is treated as an external change.
     assert controller.reconcile(2, 5) is True
     assert controller.preset_mode == PRESET_NONE
 

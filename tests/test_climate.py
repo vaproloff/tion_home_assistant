@@ -304,9 +304,6 @@ def test_climate_set_preset_none_restores_saved_limits() -> None:
     entity._send_breezer = _send_breezer  # noqa: SLF001
 
     asyncio.run(entity.async_set_preset_mode("boost"))
-    # Cloud confirms the applied limits so the pending gate clears.
-    entity._presets.reconcile(4, 6)  # noqa: SLF001
-
     asyncio.run(entity.async_set_preset_mode(PRESET_NONE))
 
     assert send_calls == 2
@@ -324,8 +321,6 @@ def test_climate_coordinator_update_resets_preset_on_manual_change() -> None:
     entity._send_breezer = _noop_send  # noqa: SLF001
 
     asyncio.run(entity.async_set_preset_mode("boost"))
-    # Confirm the applied limits so the pending gate clears.
-    entity._presets.reconcile(4, 6)  # noqa: SLF001
 
     # The cloud now reports limits the user changed manually (via the number
     # entity or the Tion app); _handle_coordinator_update must drop the preset.
