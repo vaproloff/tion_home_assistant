@@ -483,6 +483,12 @@ class TionClimate(
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new target fan mode."""
+        await self._apply_fan_mode(fan_mode)
+
+    async def _apply_fan_mode(
+        self, fan_mode: str, *, request_refresh: bool = True
+    ) -> None:
+        """Apply a fan mode, routing local PID / cloud AUTO / manual speed."""
         if fan_mode not in self.fan_modes:
             _LOGGER.warning("%s: unsupported fan mode '%s'", self.name, fan_mode)
             return
@@ -508,7 +514,7 @@ class TionClimate(
             self._mode = ZoneMode.MANUAL
             self._set_swing_modes()
             self.async_write_ha_state()
-            await self._send_zone()
+            await self._send_zone(request_refresh=request_refresh)
             return
 
         if pid_manager.is_active(self._breezer_guid):
@@ -562,10 +568,10 @@ class TionClimate(
         self.async_write_ha_state()
 
         if mode_changed:
-            await self._send_zone(request_refresh=not speed_changed)
+            await self._send_zone(request_refresh=request_refresh and not speed_changed)
 
         if speed_changed:
-            await self._send_breezer()
+            await self._send_breezer(request_refresh=request_refresh)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set new preset mode by applying its speed limits to the breezer."""
