@@ -4,23 +4,19 @@ import asyncio
 from types import SimpleNamespace
 
 from custom_components.tion.climate import TionClimate
-from custom_components.tion.const import TionDeviceType
+from custom_components.tion.const import TionDeviceType, ZoneMode
 
 from homeassistant.components.climate import ATTR_PRESET_MODE, FAN_AUTO, PRESET_NONE
 
 from custom_components.tion.presets import (
     ATTR_SAVED_MAX_SPEED,
     ATTR_SAVED_MIN_SPEED,
+    ATTR_SAVED_SPEED,
     TionPresetController,
 )
 
 BREEZER_GUID = "breezer-guid"
 PID_BREEZER_GUID = "pid-breezer-guid"
-
-
-async def _noop_send() -> bool:
-    """No-op breezer send for tests."""
-    return True
 
 
 class FakePidManager:
@@ -37,19 +33,26 @@ class FakePidManager:
         if configured:
             self.configured_guids.add(BREEZER_GUID)
         self.active_calls: list[tuple[str, bool]] = []
+        self.active_guids: set[str] = set()
 
     def is_configured(self, breezer_guid: str) -> bool:
         """Return if fake local PID is configured."""
         return breezer_guid in self.configured_guids
 
+    def is_active(self, breezer_guid: str) -> bool:
+        """Return if fake local PID is active."""
+        return breezer_guid in self.active_guids
+
     def start_breezer_pid(self, breezer_guid: str) -> bool:
         """Record local PID start."""
         self.active_calls.append((breezer_guid, True))
+        self.active_guids.add(breezer_guid)
         return True
 
     def stop_breezer_pid(self, breezer_guid: str) -> bool:
         """Record local PID stop."""
         self.active_calls.append((breezer_guid, False))
+        self.active_guids.discard(breezer_guid)
         return True
 
     def extra_state_attributes(self, breezer_guid: str) -> dict:
@@ -182,57 +185,98 @@ def test_climate_rejects_fan_auto_for_non_pid_breezer_in_local_pid_zone() -> Non
 def _preset_climate(
     pid_manager: FakePidManager,
     *,
-    presets: dict[str, dict[str, int]] | None = None,
+    presets: dict[str, dict[str, int | str]] | None = None,
     speed_min_set: int = 1,
     speed_max_set: int = 3,
+    speed: int = 1,
+    zone_devices: list[SimpleNamespace] | None = None,
 ) -> TionClimate:
     """Return a minimal climate entity wired with a preset controller."""
-    entity = _climate(pid_manager)
+    entity = _climate(pid_manager, zone_devices=zone_devices)
     entity._presets = TionPresetController(presets or {})  # noqa: SLF001
     entity._speed_min_set = speed_min_set  # noqa: SLF001
     entity._speed_max_set = speed_max_set  # noqa: SLF001
     entity._mode = None  # noqa: SLF001
     entity._zone_valid = False  # noqa: SLF001
-    entity._speed = speed_min_set  # noqa: SLF001
+    entity._speed = speed  # noqa: SLF001
     entity._heater_power = None  # noqa: SLF001
+    entity._gate = None  # noqa: SLF001
     entity.async_write_ha_state = lambda: None
     entity._load_zone = lambda: None  # noqa: SLF001
     entity._load_breezer = lambda: None  # noqa: SLF001
     return entity
 
 
-def test_climate_set_preset_mode_sends_limits() -> None:
-    """Test activating a preset pushes the preset min/max speed to the cloud."""
+def test_climate_set_auto_preset_applies_fan_auto_and_limits() -> None:
+    """Test activating an auto preset switches to Fan Auto and pushes limits."""
     entity = _preset_climate(
         FakePidManager(),
-        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+        presets={"eco": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        speed_min_set=2,
+        speed_max_set=5,
+        speed=3,
     )
-    send_calls = 0
+    breezer_calls: list[bool] = []
+    zone_calls: list[bool] = []
 
-    async def _send_breezer() -> bool:
-        nonlocal send_calls
-        send_calls += 1
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        breezer_calls.append(request_refresh)
+        return True
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        zone_calls.append(request_refresh)
         return True
 
     entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("eco"))
+
+    assert entity.preset_mode == "eco"
+    assert entity._speed_min_set == 1  # noqa: SLF001
+    assert entity._speed_max_set == 2  # noqa: SLF001
+    assert entity._mode == ZoneMode.AUTO  # noqa: SLF001
+    # Mode switch sends zone without refresh; the limits send carries the refresh.
+    assert zone_calls == [False]
+    assert breezer_calls == [True]
+
+
+def test_climate_set_manual_preset_applies_speed() -> None:
+    """Test activating a manual preset switches to manual at the target speed."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"type": "manual", "speed": 3}},
+        speed=2,
+    )
+    breezer_calls: list[bool] = []
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        breezer_calls.append(request_refresh)
+        return True
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
 
     asyncio.run(entity.async_set_preset_mode("boost"))
 
-    assert send_calls == 1
-    assert entity._speed_min_set == 4  # noqa: SLF001
-    assert entity._speed_max_set == 6  # noqa: SLF001
     assert entity.preset_mode == "boost"
+    assert entity._mode == ZoneMode.MANUAL  # noqa: SLF001
+    assert entity.speed == 3
+    assert breezer_calls == [True]
 
 
 def test_climate_set_preset_mode_rejects_unknown() -> None:
     """Test an unknown preset name does not send a command."""
     entity = _preset_climate(
         FakePidManager(),
-        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+        presets={"boost": {"type": "manual", "speed": 3}},
     )
     send_calls = 0
 
-    async def _send_breezer() -> bool:
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
         nonlocal send_calls
         send_calls += 1
         return True
@@ -245,15 +289,66 @@ def test_climate_set_preset_mode_rejects_unknown() -> None:
     assert entity.preset_mode == PRESET_NONE
 
 
-def test_climate_restores_preset() -> None:
-    """Test the active preset and saved limits are restored from last state."""
+def test_climate_auto_preset_noop_when_fan_auto_unavailable() -> None:
+    """Test an auto preset is not applied when Fan Auto is hidden in the zone."""
+    pid_manager = FakePidManager(configured_guids={PID_BREEZER_GUID})
+    entity = _preset_climate(
+        pid_manager,
+        presets={"eco": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        zone_devices=[_device(BREEZER_GUID), _device(PID_BREEZER_GUID)],
+    )
+    sends: list[str] = []
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        sends.append("breezer")
+        return True
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        sends.append("zone")
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("eco"))
+
+    assert entity.preset_mode == PRESET_NONE
+    assert sends == []
+
+
+def test_climate_preset_does_not_change_power() -> None:
+    """Test activating a preset does not toggle the breezer power."""
     entity = _preset_climate(
         FakePidManager(),
-        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+        presets={"boost": {"type": "manual", "speed": 3}},
+        speed=2,
+    )
+    entity._is_on = False  # noqa: SLF001
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        return True
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("boost"))
+
+    assert entity._is_on is False  # noqa: SLF001
+
+
+def test_climate_restores_preset() -> None:
+    """Test the active preset and saved intent are restored from last state."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"type": "manual", "speed": 3}},
     )
     last_state = SimpleNamespace(
         attributes={
             ATTR_PRESET_MODE: "boost",
+            ATTR_SAVED_SPEED: None,
             ATTR_SAVED_MIN_SPEED: 1,
             ATTR_SAVED_MAX_SPEED: 3,
         }
@@ -263,13 +358,14 @@ def test_climate_restores_preset() -> None:
 
     assert entity.preset_mode == "boost"
     assert entity.extra_state_attributes[ATTR_SAVED_MIN_SPEED] == 1
+    assert entity.extra_state_attributes[ATTR_SAVED_SPEED] is None
 
 
 def test_climate_restore_ignores_none_preset() -> None:
     """Test restore does nothing when the previous preset was PRESET_NONE."""
     entity = _preset_climate(
         FakePidManager(),
-        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+        presets={"boost": {"type": "manual", "speed": 3}},
     )
     last_state = SimpleNamespace(attributes={ATTR_PRESET_MODE: PRESET_NONE})
 
@@ -286,44 +382,51 @@ def test_climate_preset_modes_none_without_presets() -> None:
     assert entity.preset_mode is None
 
 
-def test_climate_set_preset_none_restores_saved_limits() -> None:
-    """Test deactivating a preset restores the saved limits and pushes them."""
+def test_climate_set_preset_none_restores_saved_intent() -> None:
+    """Test deactivating a preset restores and applies the saved intent."""
     entity = _preset_climate(
         FakePidManager(),
-        presets={"boost": {"min_speed": 4, "max_speed": 6}},
-        speed_min_set=1,
-        speed_max_set=3,
+        presets={"boost": {"type": "manual", "speed": 3}},
+        speed=2,
     )
-    send_calls = 0
 
-    async def _send_breezer() -> bool:
-        nonlocal send_calls
-        send_calls += 1
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        return True
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
         return True
 
     entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
 
     asyncio.run(entity.async_set_preset_mode("boost"))
     asyncio.run(entity.async_set_preset_mode(PRESET_NONE))
 
-    assert send_calls == 2
-    assert entity._speed_min_set == 1  # noqa: SLF001
-    assert entity._speed_max_set == 3  # noqa: SLF001
     assert entity.preset_mode == PRESET_NONE
+    assert entity.speed == 2
 
 
 def test_climate_coordinator_update_resets_preset_on_manual_change() -> None:
-    """Test an external limit change resets the preset on a coordinator update."""
+    """Test an external limit change resets an auto preset on a coordinator update."""
     entity = _preset_climate(
         FakePidManager(),
-        presets={"boost": {"min_speed": 4, "max_speed": 6}},
+        presets={"eco": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        speed=2,
     )
-    entity._send_breezer = _noop_send  # noqa: SLF001
 
-    asyncio.run(entity.async_set_preset_mode("boost"))
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        return True
 
-    # The cloud now reports limits the user changed manually (via the number
-    # entity or the Tion app); _handle_coordinator_update must drop the preset.
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("eco"))
+    assert entity.preset_mode == "eco"
+
+    # The cloud now reports limits the user changed manually; reconcile drops it.
     entity._speed_min_set = 2  # noqa: SLF001
     entity._speed_max_set = 5  # noqa: SLF001
     entity._handle_coordinator_update()  # noqa: SLF001

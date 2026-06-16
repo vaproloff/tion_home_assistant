@@ -37,7 +37,13 @@ from .const import (
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .presets import ATTR_SAVED_MAX_SPEED, ATTR_SAVED_MIN_SPEED, TionPresetController
+from .presets import (
+    ATTR_SAVED_MAX_SPEED,
+    ATTR_SAVED_MIN_SPEED,
+    ATTR_SAVED_SPEED,
+    FanIntent,
+    TionPresetController,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -385,7 +391,7 @@ class TionClimate(
 
     @callback
     def _restore_preset(self, last_state: State) -> None:
-        """Restore active preset and saved limits after Home Assistant restart."""
+        """Restore active preset and saved intent after Home Assistant restart."""
         if not self._presets.has_presets:
             return
         preset_mode = last_state.attributes.get(ATTR_PRESET_MODE)
@@ -393,6 +399,7 @@ class TionClimate(
             return
         self._presets.restore(
             preset_mode,
+            last_state.attributes.get(ATTR_SAVED_SPEED),
             last_state.attributes.get(ATTR_SAVED_MIN_SPEED),
             last_state.attributes.get(ATTR_SAVED_MAX_SPEED),
         )
@@ -402,14 +409,14 @@ class TionClimate(
         """Handle updated data from the coordinator."""
         self._load_zone()
         self._load_breezer()
-        if self._presets.has_presets and self._presets.reconcile(
-            self._speed_min_set, self._speed_max_set
-        ):
-            _LOGGER.debug(
-                "%s: preset reset to %s by external limit change",
-                self.name,
-                self._presets.preset_mode,
-            )
+        if self._presets.has_presets:
+            current = self._current_fan_intent()
+            if current is not None and self._presets.reconcile(current):
+                _LOGGER.debug(
+                    "%s: preset reset to %s by external change",
+                    self.name,
+                    self._presets.preset_mode,
+                )
         super()._handle_coordinator_update()
 
     async def async_turn_on(self) -> None:
@@ -573,34 +580,55 @@ class TionClimate(
         if speed_changed:
             await self._send_breezer(request_refresh=request_refresh)
 
+    def _current_fan_intent(self) -> FanIntent | None:
+        """Build the current fan intent from the resolved fan mode and limits."""
+        fan_mode = self.fan_mode
+        if fan_mode is None:
+            return None
+        try:
+            if fan_mode == FAN_AUTO:
+                return (None, int(self._speed_min_set), int(self._speed_max_set))
+            return (int(fan_mode), None, None)
+        except (TypeError, ValueError):
+            return None
+
+    async def _apply_intent(self, intent: FanIntent) -> None:
+        """Apply a preset's fan intent, reusing the fan-mode routing."""
+        fan_speed, min_speed, max_speed = intent
+        if fan_speed is not None:
+            await self._apply_fan_mode(str(fan_speed))
+            return
+        self._speed_min_set = min_speed
+        self._speed_max_set = max_speed
+        await self._apply_fan_mode(FAN_AUTO, request_refresh=False)
+        await self._send_breezer(request_refresh=True)
+
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Set new preset mode by applying its speed limits to the breezer."""
+        """Set a preset by applying its fan intent (auto limits or manual speed)."""
         if preset_mode not in self._presets.preset_modes:
             _LOGGER.warning("%s: unsupported preset mode '%s'", self.name, preset_mode)
             return
 
         if preset_mode == self._presets.preset_mode:
             _LOGGER.debug(
-                "%s: no need to change preset: %s already set",
+                "%s: no need to change preset: %s already set", self.name, preset_mode
+            )
+            return
+
+        target = self._presets.expected_intent(preset_mode)
+        if target is not None and target[0] is None and FAN_AUTO not in self.fan_modes:
+            _LOGGER.warning(
+                "%s: cannot apply auto preset '%s', Fan Auto is unavailable",
                 self.name,
                 preset_mode,
             )
             return
 
-        new_min, new_max = self._presets.activate(
-            preset_mode, self._speed_min_set, self._speed_max_set
-        )
-        _LOGGER.debug(
-            "%s: applying preset '%s' (speed_min_set=%s, speed_max_set=%s)",
-            self.name,
-            preset_mode,
-            new_min,
-            new_max,
-        )
-        self._speed_min_set = new_min
-        self._speed_max_set = new_max
+        applied = self._presets.activate(preset_mode, self._current_fan_intent())
+        _LOGGER.debug("%s: applying preset '%s' as %s", self.name, preset_mode, applied)
+        if applied is not None:
+            await self._apply_intent(applied)
         self.async_write_ha_state()
-        await self._send_breezer()
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set Tion breezer air gate."""
