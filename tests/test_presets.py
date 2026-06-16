@@ -14,6 +14,7 @@ from custom_components.tion.const import (
     TionPresetType,
 )
 from custom_components.tion.presets import (
+    ATTR_SAVED_PRESET,
     AutoPreset,
     ManualPreset,
     Preset,
@@ -48,176 +49,169 @@ def test_preset_modes_lists_none_and_configured() -> None:
     assert controller.preset_modes == [PRESET_NONE, "eco", "boost"]
 
 
-def test_expected_intent_by_type() -> None:
-    """Test expected_intent encodes auto as limits and manual as speed."""
+def test_preset_returns_configured_object() -> None:
+    """Test preset() returns the configured Preset object by name."""
     controller = _controller()
 
-    assert controller.expected_intent("eco") == (None, 1, 2)
-    assert controller.expected_intent("boost") == (5, None, None)
-    assert controller.expected_intent(PRESET_NONE) is None
+    assert controller.preset("eco") == AutoPreset(1, 2)
+    assert controller.preset("boost") == ManualPreset(5)
+    assert controller.preset(PRESET_NONE) is None
 
 
-def test_activate_auto_from_none_saves_current_intent() -> None:
-    """Test activating an auto preset saves current intent and returns limits."""
+def test_activate_auto_from_none_saves_current() -> None:
+    """Test activating an auto preset saves current state and returns its limits."""
     controller = _controller()
 
-    applied = controller.activate("eco", (3, None, None))
+    applied = controller.activate("eco", ManualPreset(3))
 
-    assert applied == (None, 1, 2)
+    assert applied == AutoPreset(1, 2)
     assert controller.preset_mode == "eco"
     assert controller.restore_attributes() == {
-        "preset_saved_speed": 3,
-        "preset_saved_min_speed": None,
-        "preset_saved_max_speed": None,
+        ATTR_SAVED_PRESET: {"type": "manual", "speed": 3}
     }
 
 
-def test_activate_manual_from_none_saves_current_intent() -> None:
-    """Test activating a manual preset saves current intent and returns speed."""
+def test_activate_manual_from_none_saves_current() -> None:
+    """Test activating a manual preset saves current state and returns its speed."""
     controller = _controller()
 
-    applied = controller.activate("boost", (None, 1, 4))
+    applied = controller.activate("boost", AutoPreset(1, 4))
 
-    assert applied == (5, None, None)
+    assert applied == ManualPreset(5)
     assert controller.preset_mode == "boost"
     assert controller.restore_attributes() == {
-        "preset_saved_speed": None,
-        "preset_saved_min_speed": 1,
-        "preset_saved_max_speed": 4,
+        ATTR_SAVED_PRESET: {"type": "auto", "min_speed": 1, "max_speed": 4}
     }
 
 
 def test_activate_preset_to_preset_keeps_saved() -> None:
-    """Test switching preset to preset does not overwrite the saved intent."""
+    """Test switching preset to preset does not overwrite the saved state."""
     controller = _controller()
-    controller.activate("eco", (3, None, None))
+    controller.activate("eco", ManualPreset(3))
 
-    applied = controller.activate("boost", (None, 1, 2))
+    applied = controller.activate("boost", AutoPreset(1, 2))
 
-    assert applied == (5, None, None)
+    assert applied == ManualPreset(5)
     assert controller.preset_mode == "boost"
     assert controller.restore_attributes() == {
-        "preset_saved_speed": 3,
-        "preset_saved_min_speed": None,
-        "preset_saved_max_speed": None,
+        ATTR_SAVED_PRESET: {"type": "manual", "speed": 3}
     }
 
 
-def test_activate_none_restores_saved_intent() -> None:
-    """Test returning to PRESET_NONE restores the saved intent and clears it."""
+def test_activate_none_restores_saved() -> None:
+    """Test returning to PRESET_NONE restores the saved state and clears it."""
     controller = _controller()
-    controller.activate("eco", (3, None, None))
+    controller.activate("eco", ManualPreset(3))
 
-    applied = controller.activate(PRESET_NONE, (None, 1, 2))
+    applied = controller.activate(PRESET_NONE, AutoPreset(1, 2))
 
-    assert applied == (3, None, None)
+    assert applied == ManualPreset(3)
     assert controller.preset_mode == PRESET_NONE
-    assert controller.restore_attributes() == {
-        "preset_saved_speed": None,
-        "preset_saved_min_speed": None,
-        "preset_saved_max_speed": None,
-    }
+    assert controller.restore_attributes() == {ATTR_SAVED_PRESET: None}
 
 
 def test_activate_none_without_saved_returns_current() -> None:
-    """Test PRESET_NONE with no saved intent returns the current intent."""
+    """Test PRESET_NONE with no saved state returns the current state."""
     controller = _controller()
 
-    applied = controller.activate(PRESET_NONE, (2, None, None))
+    applied = controller.activate(PRESET_NONE, ManualPreset(2))
 
-    assert applied == (2, None, None)
+    assert applied == ManualPreset(2)
     assert controller.preset_mode == PRESET_NONE
 
 
 def test_reconcile_resets_auto_on_limit_change() -> None:
     """Test an auto preset resets when reported limits diverge."""
     controller = _controller()
-    controller.activate("eco", (3, None, None))
+    controller.activate("eco", ManualPreset(3))
 
-    assert controller.reconcile((None, 2, 5)) is True
+    assert controller.reconcile(AutoPreset(2, 5)) is True
     assert controller.preset_mode == PRESET_NONE
 
 
 def test_reconcile_resets_auto_on_switch_to_manual() -> None:
     """Test an auto preset resets when the breezer goes manual."""
     controller = _controller()
-    controller.activate("eco", (3, None, None))
+    controller.activate("eco", ManualPreset(3))
 
-    assert controller.reconcile((4, None, None)) is True
+    assert controller.reconcile(ManualPreset(4)) is True
     assert controller.preset_mode == PRESET_NONE
 
 
 def test_reconcile_resets_manual_on_speed_change() -> None:
     """Test a manual preset resets when the reported speed diverges."""
     controller = _controller()
-    controller.activate("boost", (None, 1, 2))
+    controller.activate("boost", AutoPreset(1, 2))
 
-    assert controller.reconcile((3, None, None)) is True
+    assert controller.reconcile(ManualPreset(3)) is True
     assert controller.preset_mode == PRESET_NONE
 
 
 def test_reconcile_resets_manual_on_switch_to_auto() -> None:
     """Test a manual preset resets when the breezer goes auto."""
     controller = _controller()
-    controller.activate("boost", (None, 1, 2))
+    controller.activate("boost", AutoPreset(1, 2))
 
-    assert controller.reconcile((None, 1, 2)) is True
+    assert controller.reconcile(AutoPreset(1, 2)) is True
     assert controller.preset_mode == PRESET_NONE
 
 
 def test_reconcile_keeps_manual_on_limit_change() -> None:
     """Test a manual preset ignores limit changes (not part of its intent)."""
     controller = _controller()
-    controller.activate("boost", (None, 1, 2))
+    controller.activate("boost", AutoPreset(1, 2))
 
-    assert controller.reconcile((5, None, None)) is False
+    assert controller.reconcile(ManualPreset(5)) is False
     assert controller.preset_mode == "boost"
 
 
 def test_reconcile_no_reset_when_matches() -> None:
-    """Test no reset while the reported intent matches the active preset."""
+    """Test no reset while the reported state matches the active preset."""
     controller = _controller()
-    controller.activate("eco", (3, None, None))
+    controller.activate("eco", ManualPreset(3))
 
-    assert controller.reconcile((None, 1, 2)) is False
+    assert controller.reconcile(AutoPreset(1, 2)) is False
+    assert controller.preset_mode == "eco"
+
+
+def test_reconcile_none_does_not_reset() -> None:
+    """Test an unreadable snapshot does not reset the active preset."""
+    controller = _controller()
+    controller.activate("eco", ManualPreset(3))
+
+    assert controller.reconcile(None) is False
     assert controller.preset_mode == "eco"
 
 
 def test_restore_rehydrates_active_and_saved() -> None:
-    """Test restore sets the active preset and saved intent after a restart."""
+    """Test restore sets the active preset and saved state after a restart."""
     controller = _controller()
 
-    controller.restore("eco", 3, None, None)
+    controller.restore("eco", ManualPreset(3))
 
     assert controller.preset_mode == "eco"
     assert controller.restore_attributes() == {
-        "preset_saved_speed": 3,
-        "preset_saved_min_speed": None,
-        "preset_saved_max_speed": None,
+        ATTR_SAVED_PRESET: {"type": "manual", "speed": 3}
     }
-    assert controller.reconcile((None, 2, 5)) is True
+    assert controller.reconcile(AutoPreset(2, 5)) is True
     assert controller.preset_mode == PRESET_NONE
 
 
-def test_restore_normalizes_empty_saved_to_none() -> None:
-    """Test restore with no saved fields leaves the saved intent cleared."""
+def test_restore_without_saved_clears_saved() -> None:
+    """Test restore with no saved preset leaves the saved state cleared."""
     controller = _controller()
 
-    controller.restore("boost", None, None, None)
+    controller.restore("boost", None)
 
     assert controller.preset_mode == "boost"
-    assert controller.restore_attributes() == {
-        "preset_saved_speed": None,
-        "preset_saved_min_speed": None,
-        "preset_saved_max_speed": None,
-    }
+    assert controller.restore_attributes() == {ATTR_SAVED_PRESET: None}
 
 
 def test_restore_ignores_unknown_preset() -> None:
     """Test restore ignores a preset name that is not configured."""
     controller = _controller()
 
-    controller.restore("nonexistent", 1, None, None)
+    controller.restore("nonexistent", ManualPreset(1))
 
     assert controller.preset_mode == PRESET_NONE
 

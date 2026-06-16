@@ -9,9 +9,7 @@ from custom_components.tion.const import TionDeviceType, ZoneMode
 from homeassistant.components.climate import ATTR_PRESET_MODE, FAN_AUTO, PRESET_NONE
 
 from custom_components.tion.presets import (
-    ATTR_SAVED_MAX_SPEED,
-    ATTR_SAVED_MIN_SPEED,
-    ATTR_SAVED_SPEED,
+    ATTR_SAVED_PRESET,
     TionPresetController,
 )
 
@@ -348,17 +346,18 @@ def test_climate_restores_preset() -> None:
     last_state = SimpleNamespace(
         attributes={
             ATTR_PRESET_MODE: "boost",
-            ATTR_SAVED_SPEED: None,
-            ATTR_SAVED_MIN_SPEED: 1,
-            ATTR_SAVED_MAX_SPEED: 3,
+            ATTR_SAVED_PRESET: {"type": "auto", "min_speed": 1, "max_speed": 3},
         }
     )
 
     entity._restore_preset(last_state)  # noqa: SLF001
 
     assert entity.preset_mode == "boost"
-    assert entity.extra_state_attributes[ATTR_SAVED_MIN_SPEED] == 1
-    assert entity.extra_state_attributes[ATTR_SAVED_SPEED] is None
+    assert entity.extra_state_attributes[ATTR_SAVED_PRESET] == {
+        "type": "auto",
+        "min_speed": 1,
+        "max_speed": 3,
+    }
 
 
 def test_climate_restore_ignores_none_preset() -> None:
