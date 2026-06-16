@@ -34,10 +34,13 @@ from custom_components.tion.const import (
     CONF_PID_KP,
     CONF_PRESET_MAX_SPEED,
     CONF_PRESET_MIN_SPEED,
+    CONF_PRESET_SPEED,
+    CONF_PRESET_TYPE,
     CONF_PRESETS,
     DOMAIN,
     SUPPORTED_PRESETS,
     TionDeviceType,
+    TionPresetType,
 )
 
 BREEZER_GUID = "breezer-guid"
@@ -84,7 +87,11 @@ def _preset_options() -> dict[str, Any]:
     return {
         CONF_PRESETS: {
             BREEZER_GUID: {
-                "boost": {CONF_PRESET_MIN_SPEED: 4, CONF_PRESET_MAX_SPEED: 6},
+                "boost": {
+                    CONF_PRESET_TYPE: TionPresetType.AUTO.value,
+                    CONF_PRESET_MIN_SPEED: 4,
+                    CONF_PRESET_MAX_SPEED: 6,
+                },
             }
         }
     }
@@ -363,10 +370,11 @@ def test_options_presets_add_opens_name_form() -> None:
 
 
 def test_options_preset_config_rejects_min_above_max() -> None:
-    """Test preset config validates min_speed <= max_speed."""
+    """Test auto preset config validates min_speed <= max_speed."""
     flow = _flow()
     flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
     flow._preset_name = "boost"  # noqa: SLF001
+    flow._preset_type = TionPresetType.AUTO.value  # noqa: SLF001
 
     result = asyncio.run(
         flow.async_step_preset_config(
@@ -379,11 +387,12 @@ def test_options_preset_config_rejects_min_above_max() -> None:
     assert result["errors"]["base"] == "min_above_max"
 
 
-def test_options_preset_config_saves_and_returns_to_presets() -> None:
-    """Test a valid preset config is stored under the breezer guid."""
+def test_options_preset_config_saves_auto_preset() -> None:
+    """Test a valid auto preset config is stored with its type."""
     flow = _flow()
     flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
     flow._preset_name = "boost"  # noqa: SLF001
+    flow._preset_type = TionPresetType.AUTO.value  # noqa: SLF001
 
     result = asyncio.run(
         flow.async_step_preset_config(
@@ -394,7 +403,56 @@ def test_options_preset_config_saves_and_returns_to_presets() -> None:
     stored = flow._options[CONF_PRESETS][BREEZER_GUID]["boost"]  # noqa: SLF001
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "presets"
-    assert stored == {CONF_PRESET_MIN_SPEED: 4, CONF_PRESET_MAX_SPEED: 6}
+    assert stored == {
+        CONF_PRESET_TYPE: TionPresetType.AUTO.value,
+        CONF_PRESET_MIN_SPEED: 4,
+        CONF_PRESET_MAX_SPEED: 6,
+    }
+
+
+def test_options_preset_config_saves_manual_preset() -> None:
+    """Test a valid manual preset config is stored with its target speed."""
+    flow = _flow()
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+    flow._preset_name = "boost"  # noqa: SLF001
+    flow._preset_type = TionPresetType.MANUAL.value  # noqa: SLF001
+
+    result = asyncio.run(flow.async_step_preset_config({CONF_PRESET_SPEED: 5}))
+
+    stored = flow._options[CONF_PRESETS][BREEZER_GUID]["boost"]  # noqa: SLF001
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "presets"
+    assert stored == {
+        CONF_PRESET_TYPE: TionPresetType.MANUAL.value,
+        CONF_PRESET_SPEED: 5,
+    }
+
+
+def test_options_preset_add_opens_type_step() -> None:
+    """Test selecting a preset name opens the type-selection step."""
+    flow = _flow()
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = asyncio.run(flow.async_step_preset_add({CONF_PRESET_NAME: "boost"}))
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "preset_type"
+    assert flow._preset_name == "boost"  # noqa: SLF001
+
+
+def test_options_preset_type_opens_config() -> None:
+    """Test choosing a type stores it and opens the config form."""
+    flow = _flow()
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+    flow._preset_name = "boost"  # noqa: SLF001
+
+    result = asyncio.run(
+        flow.async_step_preset_type({CONF_PRESET_TYPE: TionPresetType.MANUAL.value})
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "preset_config"
+    assert flow._preset_type == TionPresetType.MANUAL.value  # noqa: SLF001
 
 
 def test_options_preset_remove_deletes_and_cleans_up() -> None:
@@ -434,12 +492,17 @@ def test_options_preset_edit_selects_and_opens_prefilled_config() -> None:
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "preset_config"
     assert flow._preset_name == "boost"  # noqa: SLF001
+    assert flow._preset_type == TionPresetType.AUTO.value  # noqa: SLF001
 
 
 def test_options_preset_add_all_configured_returns_to_presets() -> None:
     """Test Add when every preset is already configured returns to presets."""
     all_presets = {
-        name: {CONF_PRESET_MIN_SPEED: 1, CONF_PRESET_MAX_SPEED: 2}
+        name: {
+            CONF_PRESET_TYPE: TionPresetType.AUTO.value,
+            CONF_PRESET_MIN_SPEED: 1,
+            CONF_PRESET_MAX_SPEED: 2,
+        }
         for name in SUPPORTED_PRESETS
     }
     flow = _flow({CONF_PRESETS: {BREEZER_GUID: all_presets}})

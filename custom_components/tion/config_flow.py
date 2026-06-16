@@ -37,6 +37,8 @@ from .const import (
     CONF_PID_KP,
     CONF_PRESET_MAX_SPEED,
     CONF_PRESET_MIN_SPEED,
+    CONF_PRESET_SPEED,
+    CONF_PRESET_TYPE,
     CONF_PRESETS,
     DEFAULT_PID_BASE_OUTPUT,
     DEFAULT_PID_KD,
@@ -46,6 +48,7 @@ from .const import (
     DOMAIN,
     SUPPORTED_PRESETS,
     TionDeviceType,
+    TionPresetType,
 )
 from .coordinator import TionDataUpdateCoordinator
 
@@ -210,6 +213,7 @@ class TionOptionsFlow(OptionsFlow):
         self._options = dict(config_entry.options)
         self._breezer_guid: str | None = None
         self._preset_name: str | None = None
+        self._preset_type: str | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -403,7 +407,7 @@ class TionOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             self._preset_name = user_input[CONF_PRESET_NAME]
-            return await self.async_step_preset_config()
+            return await self.async_step_preset_type()
 
         configured = self._breezer_presets(self._breezer_guid)
         available = [name for name in SUPPORTED_PRESETS if name not in configured]
@@ -426,27 +430,62 @@ class TionOptionsFlow(OptionsFlow):
             ),
         )
 
+    async def async_step_preset_type(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Select the type of a new preset."""
+        if user_input is not None:
+            self._preset_type = user_input[CONF_PRESET_TYPE]
+            return await self.async_step_preset_config()
+
+        return self.async_show_form(
+            step_id="preset_type",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PRESET_TYPE, default=TionPresetType.AUTO.value
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                TionPresetType.AUTO.value,
+                                TionPresetType.MANUAL.value,
+                            ],
+                            mode=selector.SelectSelectorMode.LIST,
+                            translation_key="preset_type_selector",
+                        )
+                    ),
+                }
+            ),
+        )
+
     async def async_step_preset_config(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Configure min/max speed for the selected preset."""
+        """Configure the speed(s) for the selected preset and type."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            if self._preset_type == TionPresetType.MANUAL:
+                self._store_preset(
+                    {
+                        CONF_PRESET_TYPE: TionPresetType.MANUAL.value,
+                        CONF_PRESET_SPEED: int(user_input[CONF_PRESET_SPEED]),
+                    }
+                )
+                return await self.async_step_presets()
+
             min_speed = int(user_input[CONF_PRESET_MIN_SPEED])
             max_speed = int(user_input[CONF_PRESET_MAX_SPEED])
             if min_speed > max_speed:
                 errors["base"] = "min_above_max"
             else:
-                presets = dict(self._options.get(CONF_PRESETS, {}))
-                breezer_presets = dict(presets.get(self._breezer_guid, {}))
-                breezer_presets[self._preset_name] = {
-                    CONF_PRESET_MIN_SPEED: min_speed,
-                    CONF_PRESET_MAX_SPEED: max_speed,
-                }
-                presets[self._breezer_guid] = breezer_presets
-                self._options[CONF_PRESETS] = presets
-                self._preset_name = None
+                self._store_preset(
+                    {
+                        CONF_PRESET_TYPE: TionPresetType.AUTO.value,
+                        CONF_PRESET_MIN_SPEED: min_speed,
+                        CONF_PRESET_MAX_SPEED: max_speed,
+                    }
+                )
                 return await self.async_step_presets()
 
         return self.async_show_form(
@@ -455,6 +494,16 @@ class TionOptionsFlow(OptionsFlow):
             description_placeholders={"preset_name": self._preset_name or ""},
             errors=errors,
         )
+
+    def _store_preset(self, preset: dict[str, Any]) -> None:
+        """Persist a configured preset for the current breezer."""
+        presets = dict(self._options.get(CONF_PRESETS, {}))
+        breezer_presets = dict(presets.get(self._breezer_guid, {}))
+        breezer_presets[self._preset_name] = preset
+        presets[self._breezer_guid] = breezer_presets
+        self._options[CONF_PRESETS] = presets
+        self._preset_name = None
+        self._preset_type = None
 
     async def async_step_preset_edit(
         self, user_input: dict[str, Any] | None = None
@@ -466,6 +515,7 @@ class TionOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             self._preset_name = user_input[CONF_PRESET_NAME]
+            self._preset_type = configured[self._preset_name][CONF_PRESET_TYPE]
             return await self.async_step_preset_config()
 
         return self.async_show_form(
@@ -541,9 +591,27 @@ class TionOptionsFlow(OptionsFlow):
         return 6
 
     def _preset_schema(self) -> vol.Schema:
-        """Return the min/max speed schema for the current preset."""
+        """Return the config schema for the current preset type."""
         preset = self._breezer_presets(self._breezer_guid).get(self._preset_name, {})
         max_speed = self._breezer_max_speed(self._breezer_guid)
+
+        if self._preset_type == TionPresetType.MANUAL:
+            return vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PRESET_SPEED,
+                        default=preset.get(CONF_PRESET_SPEED, 1),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=1,
+                            max=max_speed,
+                            step=1,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                }
+            )
+
         return vol.Schema(
             {
                 vol.Required(
