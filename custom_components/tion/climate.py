@@ -355,6 +355,16 @@ class TionClimate(
             )
 
     @property
+    def speed_min_set(self) -> int | None:
+        """Return the breezer's lower auto-speed limit."""
+        return self._speed_min_set
+
+    @property
+    def speed_max_set(self) -> int | None:
+        """Return the breezer's upper auto-speed limit."""
+        return self._speed_max_set
+
+    @property
     def heater_enabled(self) -> bool:
         """Return if heater active now."""
         if self._type == TionDeviceType.BREEZER_4S:
@@ -489,19 +499,67 @@ class TionClimate(
             _LOGGER.warning("%s: service not supported", self.name)
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
-        """Set new target fan mode."""
-        await self._apply_fan_mode(fan_mode)
-
-    async def _apply_fan_mode(
-        self, fan_mode: str, *, request_refresh: bool = True
-    ) -> None:
-        """Apply a fan mode, routing local PID / cloud AUTO / manual speed."""
+        """Set new target fan mode (cloud/PID auto or a manual speed)."""
         if fan_mode not in self.fan_modes:
             _LOGGER.warning("%s: unsupported fan mode '%s'", self.name, fan_mode)
             return
 
+        if fan_mode == FAN_AUTO:
+            await self._enter_auto_mode()
+            return
+
         pid_manager = self.coordinator.pid_manager
-        if fan_mode == FAN_AUTO and pid_manager.is_configured(self._breezer_guid):
+        if pid_manager.is_active(self._breezer_guid):
+            pid_manager.stop_breezer_pid(self._breezer_guid)
+
+        new_speed = None
+        try:
+            new_speed = int(fan_mode)
+        except (TypeError, ValueError) as e:
+            _LOGGER.warning(
+                "%s: unable to convert new fan mode to int: %s. Error: %s",
+                self.name,
+                fan_mode,
+                e,
+            )
+
+        mode_changed = self._mode != ZoneMode.MANUAL
+        speed_changed = new_speed is not None and self.speed != new_speed
+
+        if not mode_changed and not speed_changed:
+            return
+
+        if mode_changed:
+            _LOGGER.debug(
+                "%s: changing zone mode (%s -> %s)",
+                self.name,
+                self._mode,
+                ZoneMode.MANUAL,
+            )
+            self._mode = ZoneMode.MANUAL
+            self._set_swing_modes()
+
+        if speed_changed:
+            _LOGGER.debug(
+                "%s: changing breezer speed (%s -> %s)",
+                self.name,
+                self.speed,
+                new_speed,
+            )
+            self.speed = new_speed
+
+        self.async_write_ha_state()
+
+        if mode_changed:
+            await self._send_zone(request_refresh=not speed_changed)
+
+        if speed_changed:
+            await self._send_breezer()
+
+    async def _enter_auto_mode(self, *, request_refresh: bool = True) -> None:
+        """Switch the breezer into Auto (local PID if configured, else cloud auto)."""
+        pid_manager = self.coordinator.pid_manager
+        if pid_manager.is_configured(self._breezer_guid):
             pid_active = pid_manager.is_active(self._breezer_guid)
             mode_changed = self._mode != ZoneMode.MANUAL
             if not pid_active:
@@ -527,58 +585,31 @@ class TionClimate(
         if pid_manager.is_active(self._breezer_guid):
             pid_manager.stop_breezer_pid(self._breezer_guid)
 
-        new_mode = ZoneMode.MANUAL
-        new_speed = None
-
-        if fan_mode == FAN_AUTO:
-            new_mode = ZoneMode.AUTO
-        else:
-            try:
-                new_speed = int(fan_mode)
-            except (TypeError, ValueError) as e:
-                _LOGGER.warning(
-                    "%s: unable to convert new fan mode to int: %s. Error: %s",
-                    self.name,
-                    fan_mode,
-                    e,
-                )
-
-        mode_changed = self._mode != new_mode
-        speed_changed = (
-            new_mode == ZoneMode.MANUAL
-            and new_speed is not None
-            and self.speed != new_speed
-        )
-
-        if not mode_changed and not speed_changed:
+        if self._mode == ZoneMode.AUTO:
             return
 
-        if mode_changed:
-            _LOGGER.debug(
-                "%s: changing zone mode (%s -> %s)",
-                self.name,
-                self._mode,
-                new_mode,
-            )
-            self._mode = new_mode
-            self._set_swing_modes()
-
-        if speed_changed:
-            _LOGGER.debug(
-                "%s: changing breezer speed (%s -> %s)",
-                self.name,
-                self.speed,
-                new_speed,
-            )
-            self.speed = new_speed
-
+        _LOGGER.debug(
+            "%s: changing zone mode (%s -> %s)",
+            self.name,
+            self._mode,
+            ZoneMode.AUTO,
+        )
+        self._mode = ZoneMode.AUTO
+        self._set_swing_modes()
         self.async_write_ha_state()
+        await self._send_zone(request_refresh=request_refresh)
 
-        if mode_changed:
-            await self._send_zone(request_refresh=request_refresh and not speed_changed)
+    async def async_apply_auto_limits(self, min_speed: int, max_speed: int) -> None:
+        """Apply auto-mode speed limits with a single refresh (two-phase write).
 
-        if speed_changed:
-            await self._send_breezer(request_refresh=request_refresh)
+        The intermediate mode switch is sent without a refresh so that one
+        inline refresh cannot read stale cloud limits and trip reconcile; the
+        trailing breezer send carries the single refresh.
+        """
+        self._speed_min_set = min_speed
+        self._speed_max_set = max_speed
+        await self._enter_auto_mode(request_refresh=False)
+        await self._send_breezer(request_refresh=True)
 
     def _current_fan_intent(self) -> FanIntent | None:
         """Build the current fan intent from the resolved fan mode and limits."""
@@ -596,12 +627,9 @@ class TionClimate(
         """Apply a preset's fan intent, reusing the fan-mode routing."""
         fan_speed, min_speed, max_speed = intent
         if fan_speed is not None:
-            await self._apply_fan_mode(str(fan_speed))
+            await self.async_set_fan_mode(str(fan_speed))
             return
-        self._speed_min_set = min_speed
-        self._speed_max_set = max_speed
-        await self._apply_fan_mode(FAN_AUTO, request_refresh=False)
-        await self._send_breezer(request_refresh=True)
+        await self.async_apply_auto_limits(min_speed, max_speed)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set a preset by applying its fan intent (auto limits or manual speed)."""
