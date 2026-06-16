@@ -33,6 +33,8 @@ CONF_PID_KD = "pid_kd"
 CONF_PRESETS = "presets"
 CONF_PRESET_MIN_SPEED = "min_speed"
 CONF_PRESET_MAX_SPEED = "max_speed"
+CONF_PRESET_TYPE = "type"
+CONF_PRESET_SPEED = "speed"
 
 SUPPORTED_PRESETS: tuple[str, ...] = (
     PRESET_ECO,
@@ -100,6 +102,13 @@ class ZoneMode(StrEnum):
 
     MANUAL = "manual"
     AUTO = "auto"
+
+
+class TionPresetType(StrEnum):
+    """Supported preset types."""
+
+    AUTO = "auto"
+    MANUAL = "manual"
 
 
 class Heater(StrEnum):
