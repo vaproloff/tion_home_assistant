@@ -84,15 +84,25 @@
           "preset_name": "Pick a preset to configure for this breezer."
         }
       },
+      "preset_type": {
+        "data": {
+          "type": "Preset type"
+        },
+        "data_description": {
+          "type": "Auto sets zone auto-mode speed limits; manual sets a fixed speed."
+        }
+      },
       "preset_config": {
         "title": "Configure preset {preset_name}",
         "data": {
           "min_speed": "Minimum speed",
-          "max_speed": "Maximum speed"
+          "max_speed": "Maximum speed",
+          "speed": "Speed"
         },
         "data_description": {
           "min_speed": "Lower speed limit applied in the zone auto mode.",
-          "max_speed": "Upper speed limit applied in the zone auto mode."
+          "max_speed": "Upper speed limit applied in the zone auto mode.",
+          "speed": "Fixed manual speed applied to the breezer."
         }
       },
       "preset_edit": {
@@ -150,6 +160,12 @@
         "sleep": "Sleep",
         "activity": "Activity",
         "home": "Home"
+      }
+    },
+    "preset_type_selector": {
+      "options": {
+        "auto": "Auto (speed limits)",
+        "manual": "Manual (fixed speed)"
       }
     }
   },
