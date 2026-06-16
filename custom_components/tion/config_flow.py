@@ -1,11 +1,12 @@
 """Adds config flow (UI flow) for Tion component."""
 
+from collections.abc import Mapping
 import hashlib
 import logging
-from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
+
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -398,6 +399,8 @@ class TionOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Select a preset name to add for the breezer."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
             self._preset_name = user_input[CONF_PRESET_NAME]
             return await self.async_step_preset_config()
@@ -405,6 +408,7 @@ class TionOptionsFlow(OptionsFlow):
         configured = self._breezer_presets(self._breezer_guid)
         available = [name for name in SUPPORTED_PRESETS if name not in configured]
         if not available:
+            errors["base"] = "all_presets_configured"
             return await self.async_step_presets()
 
         return self.async_show_form(
@@ -550,7 +554,7 @@ class TionOptionsFlow(OptionsFlow):
                         min=0,
                         max=max_speed,
                         step=1,
-                        mode=selector.NumberSelectorMode.BOX,
+                        mode=selector.NumberSelectorMode.SLIDER,
                     )
                 ),
                 vol.Required(
@@ -561,7 +565,7 @@ class TionOptionsFlow(OptionsFlow):
                         min=0,
                         max=max_speed,
                         step=1,
-                        mode=selector.NumberSelectorMode.BOX,
+                        mode=selector.NumberSelectorMode.SLIDER,
                     )
                 ),
             }

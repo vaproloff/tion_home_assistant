@@ -1,7 +1,5 @@
 """Per-breezer speed preset controller for Tion breezers."""
 
-from __future__ import annotations
-
 from homeassistant.components.climate import PRESET_NONE
 
 from .const import CONF_PRESET_MAX_SPEED, CONF_PRESET_MIN_SPEED
@@ -69,11 +67,6 @@ class TionPresetController:
     def reconcile(self, reported_min: object, reported_max: object) -> bool:
         """Detect external limit changes, resetting to PRESET_NONE if needed.
 
-        The coordinator only surfaces reads taken after a command completed (see
-        its stale-command tracking) and send_breezer waits for the cloud task to
-        finish, so any divergence seen here is a genuine external change rather
-        than our own not-yet-applied write.
-
         Returns True when the preset state changed.
         """
         if self._active == PRESET_NONE:
@@ -81,7 +74,7 @@ class TionPresetController:
 
         try:
             reported = (int(reported_min), int(reported_max))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
         if reported != self._expected_limits():

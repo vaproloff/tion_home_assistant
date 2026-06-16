@@ -114,7 +114,8 @@
     },
     "error": {
       "required": "Required",
-      "min_above_max": "Minimum speed must not be greater than maximum speed"
+      "min_above_max": "Minimum speed must not be greater than maximum speed",
+      "all_presets_configured": "All presets already configured"
     }
   },
   "selector": {
