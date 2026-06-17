@@ -264,3 +264,25 @@ async def test_poll_connection_error_does_not_switch_profiles() -> None:
         await client.send_settings("guid-1", {"backlight": True})
 
     assert client.active_profile == "api"
+
+
+@pytest.mark.asyncio
+async def test_switch_listener_reports_new_active_profile() -> None:
+    """A failover switch notifies the active-profile listener with the new name."""
+    stored: dict[str, str] = {"active_profile": "api"}
+
+    async def on_switch(name: str) -> None:
+        stored["active_profile"] = name
+
+    routes = {
+        "api.": _fail_conn,
+        "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
+    }
+    client, _ = _make_client(
+        routes, auth={"api": "t", "api2": "t2"}, active_profile="api"
+    )
+    client.add_active_profile_listener(on_switch)
+
+    await client.get_locations()
+
+    assert stored["active_profile"] == "api2"
