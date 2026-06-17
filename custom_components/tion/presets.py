@@ -22,17 +22,22 @@ class PresetTarget(Protocol):
     """The narrow entity surface a preset needs to apply and snapshot itself."""
 
     @property
-    def fan_mode(self) -> str | None: ...
+    def fan_mode(self) -> str | None:
+        """The breezer's current fan mode, or None if unknown."""
 
     @property
-    def speed_min_set(self) -> int | None: ...
+    def speed_min_set(self) -> int | None:
+        """The configured minimum auto speed."""
 
     @property
-    def speed_max_set(self) -> int | None: ...
+    def speed_max_set(self) -> int | None:
+        """The configured maximum auto speed."""
 
-    async def async_set_fan_mode(self, fan_mode: str) -> None: ...
+    async def async_set_fan_mode(self, fan_mode: str) -> None:
+        """Set the breezer's fan mode."""
 
-    async def async_apply_auto_limits(self, min_speed: int, max_speed: int) -> None: ...
+    async def async_apply_auto_limits(self, min_speed: int, max_speed: int) -> None:
+        """Switch to auto mode and apply the given speed limits."""
 
 
 @dataclass(frozen=True)
@@ -48,7 +53,7 @@ class Preset(ABC):
         """Serialize the preset for persistence in state attributes."""
 
     @classmethod
-    def from_config(cls, cfg: Mapping[str, int | str]) -> "Preset":
+    def from_config(cls, cfg: Mapping[str, int | str]) -> Preset:
         """Build a preset from an options-flow preset dict."""
         if cfg[CONF_PRESET_TYPE] == TionPresetType.MANUAL:
             return ManualPreset(int(cfg[CONF_PRESET_SPEED]))
@@ -57,14 +62,14 @@ class Preset(ABC):
         )
 
     @classmethod
-    def from_storage(cls, data: Mapping[str, int | str] | None) -> "Preset | None":
+    def from_storage(cls, data: Mapping[str, int | str] | None) -> Preset | None:
         """Rebuild a saved preset from restored state attributes."""
         if not data:
             return None
         return cls.from_config(data)
 
     @classmethod
-    def snapshot(cls, target: PresetTarget) -> "Preset | None":
+    def snapshot(cls, target: PresetTarget) -> Preset | None:
         """Capture the breezer's current speed intent, or None if unreadable.
 
         A single try/except so any unreadable field (None or non-numeric
@@ -77,7 +82,7 @@ class Preset(ABC):
             if fan_mode == FAN_AUTO:
                 return AutoPreset(int(target.speed_min_set), int(target.speed_max_set))
             return ManualPreset(int(fan_mode))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
 
