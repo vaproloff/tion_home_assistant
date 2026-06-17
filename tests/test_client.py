@@ -220,3 +220,47 @@ async def test_no_failover_on_api_error() -> None:
         await client.get_locations()
 
     assert client.active_profile == "api"
+
+
+def _queued_then_completed():
+    """Handler: POST returns queued; GET task returns completed."""
+
+    def handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
+        if method == "post":
+            return FakeResponse(200, {"status": "queued", "task_id": "T1"})
+        return FakeResponse(200, {"status": "completed"})
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_send_pins_task_poll_to_post_profile() -> None:
+    """When api is down, the POST and its task poll both go to api2."""
+    routes = {"api.": _fail_conn, "api2.": _queued_then_completed()}
+    client, session = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    ok = await client.send_settings("guid-1", {"backlight": True})
+
+    assert ok is True
+    assert client.active_profile == "api2"
+    task_calls = [c for c in session.calls if c.method == "get" and "/task/" in c.url]
+    assert task_calls
+    assert all("//api2." in c.url for c in task_calls)
+
+
+@pytest.mark.asyncio
+async def test_poll_connection_error_does_not_switch_profiles() -> None:
+    """A connection error during task polling propagates without failover."""
+
+    def handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
+        if method == "post":
+            return FakeResponse(200, {"status": "queued", "task_id": "T1"})
+        raise ClientError("poll dropped")
+
+    routes = {"api.": handler, "api2.": lambda *a: FakeResponse(200, {})}
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    with pytest.raises(TionConnectionError):
+        await client.send_settings("guid-1", {"backlight": True})
+
+    assert client.active_profile == "api"

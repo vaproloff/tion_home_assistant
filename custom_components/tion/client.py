@@ -209,10 +209,6 @@ DEFAULT_PROFILE = API_PROFILE
 class TionClient:
     """Tion API Client."""
 
-    _DEVICE_URL = "device"
-    _ZONE_URL = "zone"
-    _TASK_URL = "task"
-
     def __init__(
         self,
         session: ClientSession,
@@ -528,7 +524,8 @@ class TionClient:
             "gate": gate,
         }
 
-        return await self._send(f"{self._DEVICE_URL}/{guid}/mode", data)
+        device_url = self._profiles[self._active].device_url
+        return await self._send(f"{device_url}/{guid}/mode", data)
 
     async def send_zone(self, guid: str, mode: ZoneMode, co2: int):
         """Send new zone data to API."""
@@ -537,14 +534,17 @@ class TionClient:
             "co2": co2,
         }
 
-        return await self._send(f"{self._ZONE_URL}/{guid}/mode", data)
+        zone_url = self._profiles[self._active].zone_url
+        return await self._send(f"{zone_url}/{guid}/mode", data)
 
     async def send_settings(self, guid: str, data: dict[str, Any]):
         """Send new settings data to API."""
-        return await self._send(f"{self._DEVICE_URL}/{guid}/settings", data)
+        device_url = self._profiles[self._active].device_url
+        return await self._send(f"{device_url}/{guid}/settings", data)
 
     async def _send(self, url_path: str, data: dict[str, Any]) -> bool:
         response = await self._request("post", url_path, json=data)
+        served = self._profiles[self._active]
         if response.get("status") != "queued":
             raise TionApiError(
                 "Tion API did not queue the command: "
@@ -556,10 +556,12 @@ class TionClient:
         except KeyError as err:
             raise TionApiError("Tion API response did not contain a task id") from err
 
-        return await self._wait_for_task(task_id)
+        return await self._wait_for_task(task_id, profile=served)
 
-    async def _wait_for_task(self, task_id: str, max_time: int = 5) -> bool:
-        """Wait for task with defined task_id been completed."""
+    async def _wait_for_task(
+        self, task_id: str, *, profile: TionApiProfile, max_time: int = 5
+    ) -> bool:
+        """Wait for the task to complete, pinned to the POST's profile."""
         delay = 0.5
         start_time = asyncio.get_event_loop().time()
         while True:
@@ -569,7 +571,9 @@ class TionClient:
                     f"Timed out after {max_time} seconds waiting for Tion task"
                 )
 
-            response = await self._request("get", f"{self._TASK_URL}/{task_id}")
+            response = await self._request(
+                "get", f"{profile.task_url}/{task_id}", profile=profile
+            )
             task_status = response.get("status")
             if task_status == "completed":
                 return True
