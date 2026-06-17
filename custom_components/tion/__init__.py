@@ -1,6 +1,7 @@
 """The Tion component."""
 
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
@@ -24,6 +25,15 @@ from .pid_manager import TionPidManager
 _LOGGER = logging.getLogger(__name__)
 
 
+def _merge_auth_token(
+    stored: Any, profile_name: str, token: str
+) -> dict[str, str | None]:
+    """Merge a new per-profile token into stored auth (dict, legacy str, or None)."""
+    auth = dict(stored) if isinstance(stored, dict) else {}
+    auth[profile_name] = token
+    return auth
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up this integration using UI."""
     _LOGGER.debug("Setting up %s config entry %s", DOMAIN, entry.entry_id)
@@ -31,10 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data.setdefault(DOMAIN, {})
 
     async def update_auth_data(profile_name: str, token: str) -> None:
-        auth = {**entry.data.get(AUTH_DATA, {})}
-        if not isinstance(auth, dict):
-            auth = {}
-        auth[profile_name] = token
+        auth = _merge_auth_token(entry.data.get(AUTH_DATA), profile_name, token)
         hass.config_entries.async_update_entry(
             entry, data={**entry.data, AUTH_DATA: auth}
         )
