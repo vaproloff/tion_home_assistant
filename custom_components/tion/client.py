@@ -326,7 +326,7 @@ class TionClient:
     async def _request(
         self,
         method: str,
-        url_path: str,
+        url_path: str | Callable[[TionApiProfile], str],
         *,
         auth_required: bool = True,
         auth_request: bool = False,
@@ -347,10 +347,11 @@ class TionClient:
             )
 
         last_error: TionConnectionError | None = None
-        for attempt in range(len(self._profiles)):
-            target = self._profiles[self._active]
+        index = self._active
+        for _attempt in range(len(self._profiles)):
+            target = self._profiles[index]
             try:
-                return await self._request_profile(
+                result = await self._request_profile(
                     target,
                     method,
                     url_path,
@@ -361,10 +362,14 @@ class TionClient:
                 )
             except TionConnectionError as err:
                 last_error = err
-                if attempt < len(self._profiles) - 1:
-                    await self._set_active((self._active + 1) % len(self._profiles))
+                index = (index + 1) % len(self._profiles)
+                continue
+            await self._set_active(index)
+            return result
 
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise TionConnectionError("Error communicating with Tion API")
 
     async def _set_active(self, index: int) -> None:
         """Switch the active profile and notify listeners on change."""
@@ -383,7 +388,7 @@ class TionClient:
         self,
         profile: TionApiProfile,
         method: str,
-        url_path: str,
+        url_path: str | Callable[[TionApiProfile], str],
         *,
         auth_required: bool = True,
         auth_request: bool = False,
@@ -394,10 +399,11 @@ class TionClient:
         if auth_required and not self._authorization.get(profile.name):
             await self.async_get_authorization(profile)
 
+        path = url_path(profile) if callable(url_path) else url_path
         try:
             async with self._session.request(
                 method,
-                url=f"{profile.endpoint}{url_path}",
+                url=f"{profile.endpoint}{path}",
                 headers=self._headers(profile),
                 timeout=profile.timeout,
                 **kwargs,
@@ -444,7 +450,7 @@ class TionClient:
 
     async def get_locations(self) -> list[TionLocation]:
         """Get locations data from Tion API."""
-        response = await self._request("get", self._profiles[self._active].location_url)
+        response = await self._request("get", lambda profile: profile.location_url)
         if not isinstance(response, list):
             raise TionApiError("Tion API returned invalid location data")
 

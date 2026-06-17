@@ -1,5 +1,6 @@
 """Tests for the Tion API client."""
 
+import asyncio
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
@@ -215,6 +216,63 @@ async def test_both_profiles_down_raises_and_tries_each_once() -> None:
         await client.get_locations()
 
     assert sorted(calls) == ["api", "api2"]
+
+
+@pytest.mark.asyncio
+async def test_read_failover_uses_correct_path_per_profile() -> None:
+    """Read failover must use each profile's own location path (case differs)."""
+
+    def api2_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
+        if url.endswith("/location"):
+            return FakeResponse(200, [{"guid": "loc"}])
+        return FakeResponse(404, {})
+
+    routes = {"api.": _fail_conn, "api2.": api2_handler}
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    locations = await client.get_locations()
+
+    assert client.active_profile == "api2"
+    assert len(locations) == 1
+    assert locations[0].guid == "loc"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_failover_does_not_skip_healthy_profile() -> None:
+    """Two concurrent failovers must each reach the healthy profile."""
+    gate = asyncio.Event()
+    arrivals = {"count": 0}
+
+    class GatedFailResponse:
+        async def __aenter__(self) -> "GatedFailResponse":
+            arrivals["count"] += 1
+            await gate.wait()
+            raise ClientError("boom")
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+    def api_handler(method: str, url: str, kwargs: dict[str, Any]) -> GatedFailResponse:
+        return GatedFailResponse()
+
+    routes = {
+        "api.": api_handler,
+        "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
+    }
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    task1 = asyncio.create_task(client.get_locations())
+    task2 = asyncio.create_task(client.get_locations())
+
+    while arrivals["count"] < 2:
+        await asyncio.sleep(0.01)
+
+    gate.set()
+    results = await asyncio.gather(task1, task2)
+
+    assert client.active_profile == "api2"
+    assert all(len(r) == 1 for r in results)
+    assert all(r[0].guid == "loc" for r in results)
 
 
 @pytest.mark.asyncio
