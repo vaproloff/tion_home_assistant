@@ -566,6 +566,7 @@ class TionClimate(
         """
         self._speed_min_set = min_speed
         self._speed_max_set = max_speed
+        self.async_write_ha_state()
         await self._enter_auto_mode(request_refresh=False)
         await self._send_breezer(request_refresh=True)
 
@@ -619,7 +620,6 @@ class TionClimate(
         _LOGGER.debug("%s: applying preset '%s' as %s", self.name, preset_mode, applied)
         if applied is not None:
             await applied.apply(self)
-        self.async_write_ha_state()
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set Tion breezer air gate."""
