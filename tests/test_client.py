@@ -267,6 +267,25 @@ async def test_poll_connection_error_does_not_switch_profiles() -> None:
 
 
 @pytest.mark.asyncio
+async def test_validate_auth_returns_dict_for_config_entry() -> None:
+    """async_validate_auth returns the per-profile dict the entry will store."""
+    routes = {
+        "api.": lambda method, url, kwargs: (
+            _token_response()
+            if "connect/token" in url
+            else FakeResponse(200, [{"guid": "loc"}])
+        ),
+        "api2.": lambda *a: _token_response(),
+    }
+    client, _ = _make_client(routes)
+
+    auth = await client.async_validate_auth()
+
+    assert isinstance(auth, dict)
+    assert auth["api"] == "Bearer tok"
+
+
+@pytest.mark.asyncio
 async def test_switch_listener_reports_new_active_profile() -> None:
     """A failover switch notifies the active-profile listener with the new name."""
     stored: dict[str, str] = {"active_profile": "api"}
