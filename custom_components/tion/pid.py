@@ -1,7 +1,5 @@
 """PID speed calculation for Tion breezers."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 

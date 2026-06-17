@@ -2,8 +2,8 @@
 
 [![HACS validation](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml)
 [![Hassfest](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml)
-![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.1%2B-blue)
-![Version](https://img.shields.io/badge/version-2026.5.2-blue)
+![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.1%2B-blue)
+![Version](https://img.shields.io/badge/version-2026.6.0-blue)
 ![HACS](https://img.shields.io/badge/HACS-Custom-orange)
 [![GitHub stars](https://img.shields.io/github/stars/vaproloff/tion_home_assistant?style=social)](https://github.com/vaproloff/tion_home_assistant/stargazers)
 

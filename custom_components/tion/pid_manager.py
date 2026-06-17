@@ -1,7 +1,5 @@
 """Runtime manager for local Tion CO2 PID control."""
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 
