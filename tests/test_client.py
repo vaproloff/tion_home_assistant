@@ -1,5 +1,6 @@
 """Tests for the Tion API client."""
 
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -45,9 +46,7 @@ class FakeSession:
     `(method, url, kwargs) -> FakeResponse` which may raise.
     """
 
-    def __init__(
-        self, routes: dict[str, Any]
-    ) -> None:
+    def __init__(self, routes: dict[str, Any]) -> None:
         self.routes = routes
         self.calls: list[SimpleNamespace] = []
 
@@ -74,7 +73,9 @@ def _token_response() -> FakeResponse:
     return FakeResponse(200, {"token_type": "Bearer", "access_token": "tok"})
 
 
-def _make_client(routes: dict[str, Any], **kwargs: Any) -> tuple[TionClient, FakeSession]:
+def _make_client(
+    routes: dict[str, Any], **kwargs: Any
+) -> tuple[TionClient, FakeSession]:
     session = FakeSession(routes)
     client = TionClient(session, "user", "pass", **kwargs)
     return client, session
@@ -83,7 +84,10 @@ def _make_client(routes: dict[str, Any], **kwargs: Any) -> tuple[TionClient, Fak
 @pytest.mark.asyncio
 async def test_auth_is_stored_per_profile_and_listener_gets_name_and_token() -> None:
     """Authenticating a profile stores its token under the profile name."""
-    routes = {"api.": lambda *a: _token_response(), "api2.": lambda *a: _token_response()}
+    routes = {
+        "api.": lambda *a: _token_response(),
+        "api2.": lambda *a: _token_response(),
+    }
     client, _ = _make_client(routes)
     seen: list[tuple[str, str]] = []
 
@@ -102,7 +106,10 @@ async def test_auth_is_stored_per_profile_and_listener_gets_name_and_token() -> 
 @pytest.mark.asyncio
 async def test_legacy_string_auth_is_migrated_to_api_profile() -> None:
     """A legacy string token is treated as the api profile's token."""
-    routes = {"api.": lambda *a: _token_response(), "api2.": lambda *a: _token_response()}
+    routes = {
+        "api.": lambda *a: _token_response(),
+        "api2.": lambda *a: _token_response(),
+    }
     client, _ = _make_client(routes, auth="Bearer legacy")
 
     assert client.authorization == {"api": "Bearer legacy", "api2": None}
@@ -112,7 +119,10 @@ async def test_legacy_string_auth_is_migrated_to_api_profile() -> None:
 @pytest.mark.asyncio
 async def test_active_profile_can_be_restored_from_persisted_name() -> None:
     """The client starts on the persisted active profile."""
-    routes = {"api.": lambda *a: _token_response(), "api2.": lambda *a: _token_response()}
+    routes = {
+        "api.": lambda *a: _token_response(),
+        "api2.": lambda *a: _token_response(),
+    }
     client, _ = _make_client(routes, active_profile="api2")
 
     assert client.active_profile == "api2"
@@ -191,7 +201,7 @@ async def test_both_profiles_down_raises_and_tries_each_once() -> None:
     """When both profiles fail, the error propagates without looping."""
     calls: list[str] = []
 
-    def record(host: str):
+    def record(host: str) -> Callable[..., Exception]:
         def handler(*_a: Any) -> Exception:
             calls.append(host)
             return ClientError("down")
@@ -222,7 +232,7 @@ async def test_no_failover_on_api_error() -> None:
     assert client.active_profile == "api"
 
 
-def _queued_then_completed():
+def _queued_then_completed() -> Callable[[str, str, dict[str, Any]], FakeResponse]:
     """Handler: POST returns queued; GET task returns completed."""
 
     def handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:

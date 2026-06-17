@@ -264,9 +264,7 @@ class TionClient:
             "Authorization": self._authorization.get(profile.name) or "",
         }
 
-    def add_update_listener(
-        self, coro: Callable[[str, str], Awaitable[None]]
-    ) -> None:
+    def add_update_listener(self, coro: Callable[[str, str], Awaitable[None]]) -> None:
         """Add a listener notified as (profile_name, token) on re-auth."""
         self._auth_update_listeners.append(coro)
 
@@ -364,9 +362,7 @@ class TionClient:
             except TionConnectionError as err:
                 last_error = err
                 if attempt < len(self._profiles) - 1:
-                    await self._set_active(
-                        (self._active + 1) % len(self._profiles)
-                    )
+                    await self._set_active((self._active + 1) % len(self._profiles))
 
         raise last_error
 
@@ -448,9 +444,7 @@ class TionClient:
 
     async def get_locations(self) -> list[TionLocation]:
         """Get locations data from Tion API."""
-        response = await self._request(
-            "get", self._profiles[self._active].location_url
-        )
+        response = await self._request("get", self._profiles[self._active].location_url)
         if not isinstance(response, list):
             raise TionApiError("Tion API returned invalid location data")
 
