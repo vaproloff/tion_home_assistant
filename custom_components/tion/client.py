@@ -340,17 +340,52 @@ class TionClient:
         profile: TionApiProfile | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Make a request, on the given profile or the active one."""
-        target = profile or self._profiles[self._active]
-        return await self._request_profile(
-            target,
-            method,
-            url_path,
-            auth_required=auth_required,
-            auth_request=auth_request,
-            retry_auth=retry_auth,
-            **kwargs,
+        """Make a request, failing over between profiles on connection errors."""
+        if profile is not None:
+            return await self._request_profile(
+                profile,
+                method,
+                url_path,
+                auth_required=auth_required,
+                auth_request=auth_request,
+                retry_auth=retry_auth,
+                **kwargs,
+            )
+
+        last_error: TionConnectionError | None = None
+        for attempt in range(len(self._profiles)):
+            target = self._profiles[self._active]
+            try:
+                return await self._request_profile(
+                    target,
+                    method,
+                    url_path,
+                    auth_required=auth_required,
+                    auth_request=auth_request,
+                    retry_auth=retry_auth,
+                    **kwargs,
+                )
+            except TionConnectionError as err:
+                last_error = err
+                if attempt < len(self._profiles) - 1:
+                    await self._set_active(
+                        (self._active + 1) % len(self._profiles)
+                    )
+
+        raise last_error
+
+    async def _set_active(self, index: int) -> None:
+        """Switch the active profile and notify listeners on change."""
+        if index == self._active:
+            return
+
+        self._active = index
+        name = self._profiles[index].name
+        _LOGGER.warning(
+            "TionClient: switched to profile %s after a connection failure", name
         )
+        for coro in self._active_profile_listeners:
+            await coro(name)
 
     async def _request_profile(
         self,

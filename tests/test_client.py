@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from aiohttp import ClientError
 
 from custom_components.tion.client import (
     API2_PROFILE,
@@ -11,8 +12,10 @@ from custom_components.tion.client import (
     DEFAULT_PROFILE,
     PROFILES,
     PROFILES_BY_NAME,
+    TionApiError,
     TionApiProfile,
     TionClient,
+    TionConnectionError,
 )
 
 
@@ -151,3 +154,69 @@ def test_base_headers_never_set_content_type() -> None:
         assert isinstance(profile, TionApiProfile)
         assert "Content-Type" not in profile.base_headers
         assert profile.base_headers["Host"] == profile.host
+
+
+def _fail_conn(*_a: Any) -> Exception:
+    return ClientError("boom")
+
+
+@pytest.mark.asyncio
+async def test_request_fails_over_to_second_profile_and_sticks() -> None:
+    """A connection error on the active profile switches to the other one."""
+    routes = {
+        "api.": _fail_conn,
+        "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
+    }
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+    switches: list[str] = []
+
+    async def _on_switch(name: str) -> None:
+        switches.append(name)
+
+    client.add_active_profile_listener(_on_switch)
+
+    await client.get_locations()
+
+    assert client.active_profile == "api2"
+    assert switches == ["api2"]
+
+    # Subsequent request stays on api2 without touching api again.
+    await client.get_locations()
+    assert client.active_profile == "api2"
+    assert switches == ["api2"]
+
+
+@pytest.mark.asyncio
+async def test_both_profiles_down_raises_and_tries_each_once() -> None:
+    """When both profiles fail, the error propagates without looping."""
+    calls: list[str] = []
+
+    def record(host: str):
+        def handler(*_a: Any) -> Exception:
+            calls.append(host)
+            return ClientError("down")
+
+        return handler
+
+    routes = {"api.": record("api"), "api2.": record("api2")}
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    with pytest.raises(TionConnectionError):
+        await client.get_locations()
+
+    assert sorted(calls) == ["api", "api2"]
+
+
+@pytest.mark.asyncio
+async def test_no_failover_on_api_error() -> None:
+    """A non-connection error (4xx) does not trigger failover."""
+    routes = {
+        "api.": lambda *a: FakeResponse(404, {}),
+        "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
+    }
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    with pytest.raises(TionApiError):
+        await client.get_locations()
+
+    assert client.active_profile == "api"
