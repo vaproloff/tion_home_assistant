@@ -195,8 +195,8 @@ def test_pid_anti_windup_clamps_integral_output_at_upper_limit() -> None:
     assert controller.state.i_output == 100
 
 
-def test_pid_anti_windup_clamps_integral_output_at_lower_limit() -> None:
-    """Test integral output is clamped at -100 percent."""
+def test_pid_anti_windup_floors_integral_output_at_zero() -> None:
+    """Test integral output never winds down below zero on sustained low CO2."""
     controller = PidController(PidCoefficients(kp=0.0, ki=0.01, kd=0.0))
 
     controller.calculate(
@@ -224,6 +224,6 @@ def test_pid_anti_windup_clamps_integral_output_at_lower_limit() -> None:
         now=40,
     )
 
-    assert output.raw_output == -100
+    assert output.raw_output == 0
     assert output.speed == 0
-    assert controller.state.i_output == -100
+    assert controller.state.i_output == 0

@@ -74,7 +74,7 @@ class PidController:
 
         if self.coefficients.ki:
             self.state.i_output += self.coefficients.ki * error * elapsed
-            self.state.i_output = _clamp(self.state.i_output, -100.0, 100.0)
+            self.state.i_output = _clamp(self.state.i_output, 0.0, 100.0)
 
         d_output = 0.0
         if elapsed > 0 and self.state.last_error is not None:
