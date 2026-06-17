@@ -37,12 +37,7 @@ from .const import (
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .presets import (
-    ATTR_SAVED_PRESET,
-    AutoPreset,
-    Preset,
-    TionPresetController,
-)
+from .presets import ATTR_SAVED_PRESET, AutoPreset, Preset, TionPresetController
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -501,9 +496,7 @@ class TionClimate(
             await self._enter_auto_mode()
             return
 
-        pid_manager = self.coordinator.pid_manager
-        if pid_manager.is_active(self._breezer_guid):
-            pid_manager.stop_breezer_pid(self._breezer_guid)
+        self._set_pid(False)
 
         new_speed = None
         try:
@@ -551,46 +544,18 @@ class TionClimate(
 
     async def _enter_auto_mode(self, *, request_refresh: bool = True) -> None:
         """Switch the breezer into Auto (local PID if configured, else cloud auto)."""
-        pid_manager = self.coordinator.pid_manager
-        if pid_manager.is_configured(self._breezer_guid):
-            pid_active = pid_manager.is_active(self._breezer_guid)
-            mode_changed = self._mode != ZoneMode.MANUAL
-            if not pid_active:
-                pid_manager.start_breezer_pid(self._breezer_guid)
-
-            if not mode_changed:
-                if not pid_active:
-                    self.async_write_ha_state()
-                return
-
-            _LOGGER.debug(
-                "%s: changing zone mode (%s -> %s) for local PID",
-                self.name,
-                self._mode,
-                ZoneMode.MANUAL,
+        if self.coordinator.pid_manager.is_configured(self._breezer_guid):
+            # Local PID drives manual speeds, so the zone itself runs in MANUAL.
+            pid_started = self._set_pid(True)
+            transitioned = await self._transition_zone_mode(
+                ZoneMode.MANUAL, request_refresh=request_refresh
             )
-            self._mode = ZoneMode.MANUAL
-            self._set_swing_modes()
-            self.async_write_ha_state()
-            await self._send_zone(request_refresh=request_refresh)
+            if not transitioned and pid_started:
+                self.async_write_ha_state()
             return
 
-        if pid_manager.is_active(self._breezer_guid):
-            pid_manager.stop_breezer_pid(self._breezer_guid)
-
-        if self._mode == ZoneMode.AUTO:
-            return
-
-        _LOGGER.debug(
-            "%s: changing zone mode (%s -> %s)",
-            self.name,
-            self._mode,
-            ZoneMode.AUTO,
-        )
-        self._mode = ZoneMode.AUTO
-        self._set_swing_modes()
-        self.async_write_ha_state()
-        await self._send_zone(request_refresh=request_refresh)
+        self._set_pid(False)
+        await self._transition_zone_mode(ZoneMode.AUTO, request_refresh=request_refresh)
 
     async def async_apply_auto_limits(self, min_speed: int, max_speed: int) -> None:
         """Apply auto-mode speed limits with a single refresh (two-phase write).
@@ -603,6 +568,31 @@ class TionClimate(
         self._speed_max_set = max_speed
         await self._enter_auto_mode(request_refresh=False)
         await self._send_breezer(request_refresh=True)
+
+    def _set_pid(self, running: bool) -> bool:
+        """Start or stop the breezer's local PID, returning True if it changed."""
+        pid_manager = self.coordinator.pid_manager
+        is_active = pid_manager.is_active(self._breezer_guid)
+        if running and not is_active:
+            pid_manager.start_breezer_pid(self._breezer_guid)
+            return True
+        if not running and is_active:
+            pid_manager.stop_breezer_pid(self._breezer_guid)
+            return True
+        return False
+
+    async def _transition_zone_mode(
+        self, mode: ZoneMode, *, request_refresh: bool
+    ) -> bool:
+        """Move the zone into `mode` if needed, returning True if a send was issued."""
+        if self._mode == mode:
+            return False
+        _LOGGER.debug("%s: changing zone mode (%s -> %s)", self.name, self._mode, mode)
+        self._mode = mode
+        self._set_swing_modes()
+        self.async_write_ha_state()
+        await self._send_zone(request_refresh=request_refresh)
+        return True
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set a preset by applying it (auto limits or manual speed)."""
