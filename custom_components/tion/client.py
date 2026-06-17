@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from json import JSONDecodeError
 import logging
 from typing import Any
@@ -130,6 +131,79 @@ class TionLocation:
             for zone in data.get("zones", [])
             if not zone.get("is_virtual")
         ]
+
+
+@dataclass(frozen=True)
+class TionApiProfile:
+    """Connection profile for one Tion cloud endpoint."""
+
+    name: str
+    endpoint: str
+    auth_url: str
+    location_url: str
+    device_url: str
+    zone_url: str
+    task_url: str
+    client_id: str
+    client_secret: str
+    grant_type: str
+    host: str
+    base_headers: dict[str, str]
+    scope: str | None = None
+    timeout: int = 10
+
+
+API_PROFILE = TionApiProfile(
+    name="api",
+    endpoint="https://api.magicair.tion.ru/",
+    auth_url="idsrv/connect/token",
+    location_url="Location",
+    device_url="device",
+    zone_url="zone",
+    task_url="task",
+    client_id="a750d720-e146-47b0-b414-35e3b1dd7862",
+    client_secret="DTT2jJnY3k2H2GyZ",
+    grant_type="extended",
+    scope="offline_access ma-account ma-device ma-firmware",
+    host="api.magicair.tion.ru",
+    base_headers={
+        "Accept": "application/json",
+        "Accept-Language": "ru-RU;q=1, en-RU;q=0.9",
+        "Connection": "Keep-Alive",
+        "Host": "api.magicair.tion.ru",
+    },
+)
+
+API2_PROFILE = TionApiProfile(
+    name="api2",
+    endpoint="https://api2.magicair.tion.ru/",
+    auth_url="idsrv/oauth2/token",
+    location_url="location",
+    device_url="device",
+    zone_url="zone",
+    task_url="task",
+    client_id="cd594955-f5ba-4c20-9583-5990bb29f4ef",
+    client_secret="syRxSrT77P",
+    grant_type="password",
+    scope=None,
+    host="api2.magicair.tion.ru",
+    base_headers={
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ru-RU",
+        "Connection": "Keep-Alive",
+        "Host": "api2.magicair.tion.ru",
+        "Origin": "https://magicair.tion.ru",
+        "Referer": "https://magicair.tion.ru/dashboard/overview",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/46.0.2486.0 Safari/537.36 Edge/13.10586"
+        ),
+    },
+)
+
+PROFILES: list[TionApiProfile] = [API_PROFILE, API2_PROFILE]
+PROFILES_BY_NAME: dict[str, TionApiProfile] = {p.name: p for p in PROFILES}
+DEFAULT_PROFILE = API_PROFILE
 
 
 class TionClient:
