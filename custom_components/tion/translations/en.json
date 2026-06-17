@@ -78,17 +78,11 @@
       },
       "preset_add": {
         "data": {
-          "preset_name": "Preset"
-        },
-        "data_description": {
-          "preset_name": "Pick a preset to configure for this breezer."
-        }
-      },
-      "preset_type": {
-        "data": {
+          "preset_name": "Preset",
           "type": "Preset type"
         },
         "data_description": {
+          "preset_name": "Pick a preset to configure for this breezer.",
           "type": "Auto sets zone auto-mode speed limits; manual sets a fixed speed."
         }
       },

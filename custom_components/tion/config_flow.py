@@ -402,17 +402,15 @@ class TionOptionsFlow(OptionsFlow):
     async def async_step_preset_add(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Select a preset name to add for the breezer."""
-        errors: dict[str, str] = {}
-
+        """Select a preset name and type to add for the breezer."""
         if user_input is not None:
             self._preset_name = user_input[CONF_PRESET_NAME]
-            return await self.async_step_preset_type()
+            self._preset_type = user_input[CONF_PRESET_TYPE]
+            return await self.async_step_preset_config()
 
         configured = self._breezer_presets(self._breezer_guid)
         available = [name for name in SUPPORTED_PRESETS if name not in configured]
         if not available:
-            errors["base"] = "all_presets_configured"
             return await self.async_step_presets()
 
         return self.async_show_form(
@@ -426,22 +424,6 @@ class TionOptionsFlow(OptionsFlow):
                             translation_key="preset_name_selector",
                         )
                     ),
-                }
-            ),
-        )
-
-    async def async_step_preset_type(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Select the type of a new preset."""
-        if user_input is not None:
-            self._preset_type = user_input[CONF_PRESET_TYPE]
-            return await self.async_step_preset_config()
-
-        return self.async_show_form(
-            step_id="preset_type",
-            data_schema=vol.Schema(
-                {
                     vol.Required(
                         CONF_PRESET_TYPE, default=TionPresetType.AUTO.value
                     ): selector.SelectSelector(

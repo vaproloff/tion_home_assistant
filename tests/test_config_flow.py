@@ -355,7 +355,7 @@ def test_options_presets_add_requires_breezer() -> None:
 
 
 def test_options_presets_add_opens_name_form() -> None:
-    """Test add with a breezer opens the preset name selection form."""
+    """Test add with a breezer opens the preset name and type selection form."""
     flow = _flow()
 
     result = asyncio.run(
@@ -428,30 +428,23 @@ def test_options_preset_config_saves_manual_preset() -> None:
     }
 
 
-def test_options_preset_add_opens_type_step() -> None:
-    """Test selecting a preset name opens the type-selection step."""
+def test_options_preset_add_selects_name_and_type_opens_config() -> None:
+    """Test selecting a preset name and type opens the config form."""
     flow = _flow()
     flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
-
-    result = asyncio.run(flow.async_step_preset_add({CONF_PRESET_NAME: "boost"}))
-
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "preset_type"
-    assert flow._preset_name == "boost"  # noqa: SLF001
-
-
-def test_options_preset_type_opens_config() -> None:
-    """Test choosing a type stores it and opens the config form."""
-    flow = _flow()
-    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
-    flow._preset_name = "boost"  # noqa: SLF001
 
     result = asyncio.run(
-        flow.async_step_preset_type({CONF_PRESET_TYPE: TionPresetType.MANUAL.value})
+        flow.async_step_preset_add(
+            {
+                CONF_PRESET_NAME: "boost",
+                CONF_PRESET_TYPE: TionPresetType.MANUAL.value,
+            }
+        )
     )
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "preset_config"
+    assert flow._preset_name == "boost"  # noqa: SLF001
     assert flow._preset_type == TionPresetType.MANUAL.value  # noqa: SLF001
 
 
