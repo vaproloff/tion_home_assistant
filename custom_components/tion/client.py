@@ -192,12 +192,6 @@ API2_PROFILE = TionApiProfile(
         "Accept-Language": "ru-RU",
         "Connection": "Keep-Alive",
         "Host": "api2.magicair.tion.ru",
-        "Origin": "https://magicair.tion.ru",
-        "Referer": "https://magicair.tion.ru/dashboard/overview",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/46.0.2486.0 Safari/537.36 Edge/13.10586"
-        ),
     },
 )
 
