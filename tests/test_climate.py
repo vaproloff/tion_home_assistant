@@ -3,15 +3,12 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from custom_components.tion.climate import TionClimate
 from custom_components.tion.const import TionDeviceType, ZoneMode
-
+from custom_components.tion.presets import ATTR_SAVED_PRESET, TionPresetController
 from homeassistant.components.climate import ATTR_PRESET_MODE, FAN_AUTO, PRESET_NONE
-
-from custom_components.tion.presets import (
-    ATTR_SAVED_PRESET,
-    TionPresetController,
-)
 
 BREEZER_GUID = "breezer-guid"
 PID_BREEZER_GUID = "pid-breezer-guid"
@@ -237,6 +234,44 @@ def test_climate_set_auto_preset_applies_fan_auto_and_limits() -> None:
     # Mode switch sends zone without refresh; the limits send carries the refresh.
     assert zone_calls == [False]
     assert breezer_calls == [True]
+
+
+@pytest.mark.parametrize(
+    ("speed", "min_speed", "max_speed", "expected"),
+    [
+        pytest.param(5, 1, 2, 2, id="clamps_down_to_max"),
+        pytest.param(1, 3, 5, 3, id="clamps_up_to_min"),
+        pytest.param(2, 1, 4, 2, id="within_limits_unchanged"),
+    ],
+)
+def test_climate_auto_preset_clamps_speed_into_limits(
+    speed: int, min_speed: int, max_speed: int, expected: int
+) -> None:
+    """Test applying an auto preset clamps the pushed speed into [min, max]."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={
+            "eco": {"type": "auto", "min_speed": min_speed, "max_speed": max_speed}
+        },
+        speed_min_set=1,
+        speed_max_set=6,
+        speed=speed,
+    )
+    pushed: list[int | None] = []
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        pushed.append(entity.speed)
+        return True
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
+
+    asyncio.run(entity.async_set_preset_mode("eco"))
+
+    assert pushed == [expected]
 
 
 def test_climate_set_manual_preset_applies_speed() -> None:
