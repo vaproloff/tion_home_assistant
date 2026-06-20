@@ -479,3 +479,67 @@ def test_schedule_intent_backgrounds_execution() -> None:
     assert coordinator.commands == [
         {**asdict(_breezer_command()), "request_refresh": False, "track_stale": False}
     ]
+
+
+def test_schedule_intent_eager_start_suspends_on_send() -> None:
+    """Test an eagerly started dispatch suspends on the awaited network send.
+
+    Home Assistant starts background tasks eagerly, running their synchronous
+    prefix inline. This pins the invariant the coordinator's single staleness
+    check relies on: scheduling a dispatch reaches the awaited send and
+    suspends there, so the send cannot complete synchronously and stall the
+    update cycle.
+    """
+
+    class _EagerConfigEntry(FakeConfigEntry):
+        """Config entry that eagerly starts background tasks like Home Assistant."""
+
+        def __init__(self) -> None:
+            """Initialize fake config entry tracking started tasks."""
+            super().__init__()
+            self.tasks: list[asyncio.Task] = []
+
+        def async_create_background_task(
+            self, hass: Any, target: Any, name: str, **kwargs: Any
+        ) -> asyncio.Task:
+            """Start the coroutine eagerly via the running loop."""
+            task = asyncio.get_running_loop().create_task(target)
+            self.tasks.append(task)
+            return task
+
+    class _BlockingCoordinator(FakeCoordinator):
+        """Coordinator whose breezer send blocks until released."""
+
+        def __init__(self, device: TionZoneDevice) -> None:
+            """Initialize coordinator with send-gating events."""
+            super().__init__(device)
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def async_send_breezer(self, **kwargs: Any) -> bool:
+            """Record entry, block until released, then record the command."""
+            self.entered.set()
+            await self.release.wait()
+            return await super().async_send_breezer(**kwargs)
+
+    async def _run() -> None:
+        asyncio.get_running_loop().set_task_factory(asyncio.eager_task_factory)
+        coordinator = _BlockingCoordinator(_device(speed=1))
+        entry = _EagerConfigEntry()
+        manager = TionPidManager(FakeHass("1000"), entry, coordinator)
+        manager.start_breezer_pid(BREEZER_GUID)
+        intent = PidIntent(breezer_guid=BREEZER_GUID, breezer_command=_breezer_command())
+
+        manager.schedule_intent(intent)
+
+        assert coordinator.entered.is_set()
+        assert coordinator.commands == []
+
+        coordinator.release.set()
+        for task in entry.tasks:
+            await task
+        assert coordinator.commands == [
+            {**asdict(_breezer_command()), "request_refresh": False, "track_stale": False}
+        ]
+
+    asyncio.run(_run())

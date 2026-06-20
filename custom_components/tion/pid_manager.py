@@ -10,7 +10,6 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
 from .client import TionError
-from .pid_intent import BreezerCommand, PidIntent, ZoneCommand
 from .const import (
     CONF_CO2_SENSOR_ENTITY_ID,
     CONF_PID_BASE_OUTPUT,
@@ -35,6 +34,7 @@ from .const import (
 )
 from .coordinator import TionData, TionDataUpdateCoordinator
 from .pid import PidCoefficients, PidController
+from .pid_intent import BreezerCommand, PidIntent, ZoneCommand
 
 _LOGGER = logging.getLogger(__name__)
 

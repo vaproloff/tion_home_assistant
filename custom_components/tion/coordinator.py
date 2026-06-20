@@ -112,6 +112,10 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
 
         if self.pid_manager.has_active_pid():
             for intent in self.pid_manager.plan_all(data):
+                # Reflect the command optimistically on the published snapshot,
+                # then dispatch the network send in the background. If that send
+                # later fails the snapshot is briefly ahead of reality; the next
+                # poll reconciles it. Do not add a rollback here.
                 intent.apply(data)
                 self.pid_manager.schedule_intent(intent)
 
