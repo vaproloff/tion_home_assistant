@@ -1,7 +1,7 @@
 """Runtime manager for local Tion CO2 PID control."""
 
-import logging
 from dataclasses import asdict
+import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
