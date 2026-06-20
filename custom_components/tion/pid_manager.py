@@ -233,35 +233,49 @@ class _TionBreezerPidController:
             output.is_on,
             output.speed,
         )
-        try:
-            await self.coordinator.async_send_breezer(
-                guid=device.guid,
-                is_on=output.is_on,
-                t_set=t_set,
-                speed=output.speed,
-                speed_min_set=speed_min,
-                speed_max_set=speed_max,
-                heater_enabled=device.data.heater_enabled,
-                heater_mode=device.data.heater_mode,
-                gate=device.data.gate,
-                request_refresh=False,
-                track_stale=False,
-            )
-        except TionError as err:
-            _LOGGER.warning(
-                "Unable to send local PID command for %s: %s",
-                device.name,
-                err,
-            )
-            self._pause(PID_STATUS_SEND_FAILED)
-            return None
+        send_kwargs = {
+            "guid": device.guid,
+            "is_on": output.is_on,
+            "t_set": t_set,
+            "speed": output.speed,
+            "speed_min_set": speed_min,
+            "speed_max_set": speed_max,
+            "heater_enabled": device.data.heater_enabled,
+            "heater_mode": device.data.heater_mode,
+            "gate": device.data.gate,
+            "request_refresh": False,
+            "track_stale": False,
+        }
 
-        # Optimistically reflect the sent command so the UI updates immediately
-        # and the next cycle's command_changed check compares against it.
+        # Optimistically reflect the command on the snapshot before it is
+        # published (so the UI updates immediately and the next cycle's
+        # command_changed check compares against it), then dispatch the network
+        # send off the update cycle so the cloud round-trip cannot stall the
+        # coordinator refresh.
         device.data.speed = output.speed
         device.data.is_on = output.is_on
 
+        self.entry.async_create_background_task(
+            self.hass,
+            self._async_send_breezer_command(send_kwargs, device.name),
+            f"tion_pid_send_{self.breezer_guid}",
+        )
+
         return output
+
+    async def _async_send_breezer_command(
+        self, send_kwargs: dict[str, Any], device_name: str
+    ) -> None:
+        """Send a queued PID breezer command off the coordinator update cycle."""
+        try:
+            await self.coordinator.async_send_breezer(**send_kwargs)
+        except TionError as err:
+            _LOGGER.warning(
+                "Unable to send local PID command for %s: %s",
+                device_name,
+                err,
+            )
+            self._pause(PID_STATUS_SEND_FAILED)
 
     def _pause(self, status: str) -> None:
         """Pause updates without disarming PID."""

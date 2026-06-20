@@ -215,6 +215,39 @@ def test_update_skips_pid_when_inactive() -> None:
     assert pid_manager.evaluated is None
 
 
+def test_update_discards_data_when_command_completes_during_pid() -> None:
+    """Test fresh data is discarded when a tracked command completes mid-cycle.
+
+    Reproduces the false external-change reconcile: a manual command completes
+    while PID evaluation still holds the freshly fetched (now stale) snapshot,
+    so the stale snapshot must not be published.
+    """
+    cached = TionData([_location(speed=1)])
+
+    class CompletingPidManager(FakePidManager):
+        """PID manager simulating a manual command completing mid-evaluation."""
+
+        coordinator: TionDataUpdateCoordinator
+
+        async def async_evaluate_all(self, data: TionData) -> None:
+            await super().async_evaluate_all(data)
+            self.coordinator._last_command_completed_at = 101.0  # noqa: SLF001
+
+    pid_manager = CompletingPidManager(active=True)
+    coordinator = _make_coordinator(
+        client=FakeClient([_location(speed=9)]),
+        data=cached,
+        pid_manager=pid_manager,
+        now=100.0,
+    )
+    pid_manager.coordinator = coordinator
+
+    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
+
+    assert pid_manager.evaluated is not None
+    assert result is cached
+
+
 def test_update_returns_cached_data_and_skips_pid_when_stale() -> None:
     """Test stale data (recent manual command) is returned and PID is skipped."""
     cached = TionData([_location(speed=1)])

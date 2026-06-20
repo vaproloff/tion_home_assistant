@@ -81,6 +81,17 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             always_update=False,
         )
 
+    def _command_invalidates_fetch(self, request_started_at: float) -> bool:
+        """Return whether a command makes a fetch started at this time stale.
+
+        True when a command is in-flight, or one completed after the fetch
+        began, so the fetched snapshot may predate the command's effect.
+        """
+        return self._current_command_started_at is not None or (
+            self._last_command_completed_at is not None
+            and request_started_at < self._last_command_completed_at
+        )
+
     async def _async_update_data(self) -> TionData:
         """Fetch data from Tion API."""
         request_started_at = self.hass.loop.time()
@@ -91,12 +102,8 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         except (TionApiError, TionConnectionError) as err:
             raise UpdateFailed(str(err)) from err
 
-        if self.data is not None and (
-            self._current_command_started_at is not None
-            or (
-                self._last_command_completed_at is not None
-                and request_started_at < self._last_command_completed_at
-            )
+        if self.data is not None and self._command_invalidates_fetch(
+            request_started_at
         ):
             _LOGGER.debug("Ignoring stale Tion location data")
             return self.data
@@ -105,6 +112,15 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
 
         if self.pid_manager.has_active_pid():
             await self.pid_manager.async_evaluate_all(data)
+
+        # Re-check before publishing: a command may have completed while we were
+        # fetching or evaluating PID, which would make this snapshot stale and
+        # trip a false external-change reconcile in the entities.
+        if self.data is not None and self._command_invalidates_fetch(
+            request_started_at
+        ):
+            _LOGGER.debug("Ignoring stale Tion location data")
+            return self.data
 
         return data
 

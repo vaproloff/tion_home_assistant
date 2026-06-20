@@ -88,16 +88,22 @@ class FakeConfigEntry:
     def __init__(self, options: dict | None = None) -> None:
         """Initialize fake config entry."""
         self.options = options or _pid_options()
+        self.background_tasks: list[Any] = []
+
+    def async_create_background_task(
+        self, hass: Any, target: Any, name: str, **kwargs: Any
+    ) -> SimpleNamespace:
+        """Record a scheduled background coroutine without running it."""
+        self.background_tasks.append(target)
+        return SimpleNamespace(name=name)
 
 
-class FakeDisabledConfigEntry:
+class FakeDisabledConfigEntry(FakeConfigEntry):
     """Fake config entry with stored but disabled PID options."""
-
-    entry_id = "entry-id"
 
     def __init__(self) -> None:
         """Initialize fake config entry."""
-        self.options = _pid_options(enabled=False)
+        super().__init__(_pid_options(enabled=False))
 
 
 class FakeCoordinator:
@@ -184,19 +190,60 @@ def _data(coordinator: FakeCoordinator) -> FakeData:
 
 
 def test_pid_manager_sends_breezer_command_for_changed_output() -> None:
-    """Test a valid PID tick sends a changed speed command and updates locally."""
+    """Test a valid PID tick computes a changed speed and updates locally.
+
+    The actual send is dispatched as a background task; its content is asserted
+    by test_pid_manager_dispatches_breezer_command_in_background.
+    """
     device = _device(speed=1)
     coordinator = FakeCoordinator(device)
-    manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
+    entry = FakeConfigEntry()
+    manager = TionPidManager(FakeHass("1000"), entry, coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
     output = asyncio.run(
         manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator))
     )
+    for coro in entry.background_tasks:
+        coro.close()
 
     assert output is not None
     assert output.speed == 6
     assert coordinator.zone_commands == []
+    # Optimistic local update reflects the dispatched command.
+    assert device.data.speed == 6
+    assert (
+        manager.extra_state_attributes(BREEZER_GUID)["pid_status"] == PID_STATUS_RUNNING
+    )
+
+
+def test_pid_manager_dispatches_breezer_command_in_background() -> None:
+    """Test the PID breezer command is dispatched off the update cycle.
+
+    The send must not be awaited inline (so it cannot stall the coordinator
+    refresh), yet the optimistic local reflection must apply immediately.
+    """
+    device = _device(speed=1)
+    coordinator = FakeCoordinator(device)
+    entry = FakeConfigEntry()
+    manager = TionPidManager(FakeHass("1000"), entry, coordinator)
+    manager.start_breezer_pid(BREEZER_GUID)
+
+    async def _run() -> Any:
+        output = await manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator))
+
+        assert coordinator.commands == []
+        assert len(entry.background_tasks) == 1
+        assert device.data.speed == 6
+        assert device.data.is_on is True
+
+        for coro in entry.background_tasks:
+            await coro
+        return output
+
+    output = asyncio.run(_run())
+
+    assert output is not None
     assert coordinator.commands == [
         {
             "guid": BREEZER_GUID,
@@ -212,12 +259,6 @@ def test_pid_manager_sends_breezer_command_for_changed_output() -> None:
             "track_stale": False,
         }
     ]
-    # Optimistic local update reflects the sent command.
-    assert device.data.speed == 6
-    assert device.data.is_on is True
-    assert (
-        manager.extra_state_attributes(BREEZER_GUID)["pid_status"] == PID_STATUS_RUNNING
-    )
 
 
 def test_pid_manager_arming_requests_immediate_refresh() -> None:
@@ -317,12 +358,15 @@ def test_pid_manager_skips_unchanged_output() -> None:
 def test_pid_manager_disarm_resets_pid_core_state() -> None:
     """Test disarming local PID resets accumulated PID controller state."""
     coordinator = FakeCoordinator(_device(speed=1))
-    manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
+    entry = FakeConfigEntry()
+    manager = TionPidManager(FakeHass("1000"), entry, coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
     output = asyncio.run(
         manager.async_evaluate_breezer(BREEZER_GUID, _data(coordinator))
     )
+    for coro in entry.background_tasks:
+        coro.close()
     controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
     manager.stop_breezer_pid(BREEZER_GUID)
 
