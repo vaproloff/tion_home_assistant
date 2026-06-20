@@ -372,16 +372,6 @@ class TionPidManager:
             "pid_last_update": None,
         }
 
-    async def async_evaluate_all(self, data: TionData) -> None:
-        """Plan and commit local PID for all active breezers.
-
-        Transitional shim preserving the coordinator's current call site; the
-        coordinator inlines plan/apply/schedule in the next task.
-        """
-        for intent in self.plan_all(data):
-            intent.apply(data)
-            self.schedule_intent(intent)
-
     def plan_all(self, data: TionData) -> list[PidIntent]:
         """Plan local PID actuations for all active breezers."""
         intents: list[PidIntent] = []

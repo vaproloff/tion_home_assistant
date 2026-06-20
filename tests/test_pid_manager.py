@@ -353,24 +353,25 @@ def test_plan_breezer_advances_pid_state_and_resets_on_disarm() -> None:
     assert manager.has_active_pid() is False
 
 
-def test_pid_manager_evaluate_all_deactivates_unconfigured() -> None:
-    """Test evaluation deactivates controllers that are no longer configured."""
+def test_plan_all_deactivates_unconfigured() -> None:
+    """Test planning deactivates controllers that are no longer configured."""
     coordinator = FakeCoordinator(_device(speed=1))
     entry = FakeConfigEntry()
     manager = TionPidManager(FakeHass("1000"), entry, coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
     entry.options[CONF_PID_BREEZERS][BREEZER_GUID][CONF_PID_ENABLED] = False
 
-    asyncio.run(manager.async_evaluate_all(_data(coordinator)))
+    intents = manager.plan_all(_data(coordinator))
 
     controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
+    assert intents == []
     assert controller.active is False
     assert controller.status == PID_STATUS_NOT_CONFIGURED
     assert manager.has_active_pid() is False
 
 
-def test_pid_manager_evaluate_all_isolates_per_breezer_failures() -> None:
-    """Test that an unexpected exception in one breezer does not abort the loop."""
+def test_plan_all_isolates_per_breezer_failures() -> None:
+    """Test that an unexpected exception in one breezer does not abort planning."""
 
     class RaisingData(FakeData):
         """Coordinator data whose zone() always raises an unexpected error."""
@@ -382,10 +383,10 @@ def test_pid_manager_evaluate_all_isolates_per_breezer_failures() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    # Must not raise; the exception must be swallowed and logged.
-    asyncio.run(
-        manager.async_evaluate_all(RaisingData(coordinator.device, coordinator.zone))
-    )
+    # Must not raise; the exception must be swallowed and logged, yielding no intents.
+    intents = manager.plan_all(RaisingData(coordinator.device, coordinator.zone))
+
+    assert intents == []
 
 
 def test_async_execute_sends_zone_then_breezer() -> None:

@@ -111,16 +111,9 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         data = TionData(locations)
 
         if self.pid_manager.has_active_pid():
-            await self.pid_manager.async_evaluate_all(data)
-
-        # Re-check before publishing: a command may have completed while we were
-        # fetching or evaluating PID, which would make this snapshot stale and
-        # trip a false external-change reconcile in the entities.
-        if self.data is not None and self._command_invalidates_fetch(
-            request_started_at
-        ):
-            _LOGGER.debug("Ignoring stale Tion location data")
-            return self.data
+            for intent in self.pid_manager.plan_all(data):
+                intent.apply(data)
+                self.pid_manager.schedule_intent(intent)
 
         return data
 
