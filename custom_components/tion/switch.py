@@ -12,10 +12,26 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import TionError, TionZone, TionZoneDevice
-from .const import DOMAIN, Heater, TionDeviceType, ZoneMode
+from .const import BREEZER_TYPES, DOMAIN, Heater, TionDeviceType, ZoneMode
 from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _zone_has_local_pid(
+    coordinator: TionDataUpdateCoordinator, device_guid: str
+) -> bool:
+    """Return if a device zone has at least one breezer with local PID configured."""
+    zone = coordinator.get_device_zone(device_guid)
+    if zone is None:
+        return False
+
+    return any(
+        device.guid
+        and device.type in BREEZER_TYPES
+        and coordinator.pid_manager.is_configured(device.guid)
+        for device in zone.devices
+    )
 
 
 async def async_setup_entry(
@@ -30,11 +46,7 @@ async def async_setup_entry(
         if not device.guid:
             continue
 
-        if device.type in [
-            TionDeviceType.BREEZER_O2,
-            TionDeviceType.BREEZER_3S,
-            TionDeviceType.BREEZER_4S,
-        ]:
+        if device.type in BREEZER_TYPES:
             if device.type in (TionDeviceType.BREEZER_3S, TionDeviceType.BREEZER_4S):
                 entities.append(TionBacklightSwitch(coordinator, device))
                 entities.append(TionBreezerSoundSwitch(coordinator, device))
@@ -46,7 +58,13 @@ async def async_setup_entry(
         ]:
             entities.append(TionBacklightSwitch(coordinator, device))
             if device.type == TionDeviceType.MAGIC_AIR:
-                entities.append(TionAutoModeSwitch(coordinator, device))
+                if _zone_has_local_pid(coordinator, device.guid):
+                    _LOGGER.debug(
+                        "%s: skipped auto mode switch because local PID is configured in the same zone",
+                        device.name,
+                    )
+                else:
+                    entities.append(TionAutoModeSwitch(coordinator, device))
 
     async_add_entities(entities)
     return True

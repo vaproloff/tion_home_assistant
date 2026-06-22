@@ -29,11 +29,136 @@
     "step": {
       "init": {
         "data": {
-          "scan_interval": "Интервал обновления"
+          "scan_interval": "Интервал обновления",
+          "options_action": "Действие"
         },
         "data_description": {
-          "scan_interval": "Минимальный период обновления данных устройств Tion от API."
+          "scan_interval": "Минимальный период обновления данных устройств Tion от API.",
+          "options_action": "Сохранить настройки, открыть локальный PID или настроить пресеты."
         }
+      },
+      "local_pid": {
+        "data": {
+          "breezer_guid": "Бризер для внешнего CO2",
+          "local_pid_action": "Действие Local PID"
+        },
+        "data_description": {
+          "breezer_guid": "Выберите бризер, для которого нужно настроить, обновить или удалить локальный PID-регулятор.",
+          "local_pid_action": "Выберите действие с настройками локального PID для выбранного бризера."
+        }
+      },
+      "breezer": {
+        "data": {
+          "pid_enabled": "Включить локальное управление CO2",
+          "co2_sensor_entity_id": "Внешний датчик CO2",
+          "pid_base_output": "Базовая мощность PID",
+          "pid_kp": "Пропорциональный коэффициент PID",
+          "pid_ki": "Интегральный коэффициент PID",
+          "pid_kd": "Дифференциальный коэффициент PID"
+        },
+        "data_description": {
+          "pid_enabled": "Если включено, режим Auto у climate использует внешний датчик CO2 и держит зону Tion в ручном режиме.",
+          "co2_sensor_entity_id": "Датчик должен отдавать числовое значение CO2 в ppm.",
+          "pid_base_output": "Базовая мощность в процентах до PID-коррекции. По умолчанию: 20.",
+          "pid_kp": "Значение по умолчанию: 0.5.",
+          "pid_ki": "Значение по умолчанию: 0.002.",
+          "pid_kd": "Значение по умолчанию: 0.0."
+        }
+      },
+      "presets": {
+        "data": {
+          "breezer_guid": "Бризер",
+          "presets_action": "Действие с пресетом"
+        },
+        "data_description": {
+          "breezer_guid": "Выберите бризер для добавления, изменения или удаления его пресетов скорости.",
+          "presets_action": "Выберите, что сделать с пресетами выбранного бризера."
+        }
+      },
+      "preset_add": {
+        "data": {
+          "preset_name": "Пресет",
+          "type": "Тип пресета"
+        },
+        "data_description": {
+          "preset_name": "Выберите пресет для настройки этого бризера.",
+          "type": "Авто задаёт лимиты скорости авто-режима зоны; ручной — фиксированную скорость."
+        }
+      },
+      "preset_config": {
+        "title": "Настройка пресета {preset_name}",
+        "data": {
+          "min_speed": "Минимальная скорость",
+          "max_speed": "Максимальная скорость",
+          "speed": "Скорость"
+        },
+        "data_description": {
+          "min_speed": "Нижний предел скорости в авто-режиме зоны.",
+          "max_speed": "Верхний предел скорости в авто-режиме зоны.",
+          "speed": "Фиксированная ручная скорость бризера."
+        }
+      },
+      "preset_edit": {
+        "data": {
+          "preset_name": "Пресет"
+        },
+        "data_description": {
+          "preset_name": "Выберите пресет для изменения."
+        }
+      },
+      "preset_remove": {
+        "data": {
+          "preset_name": "Пресет"
+        },
+        "data_description": {
+          "preset_name": "Выберите пресет для удаления."
+        }
+      }
+    },
+    "error": {
+      "required": "Обязательное поле",
+      "min_above_max": "Минимальная скорость не может быть больше максимальной",
+      "all_presets_configured": "Все возможные пресеты уже добавлены"
+    }
+  },
+  "selector": {
+    "init_menu_selector": {
+      "options": {
+        "configure_local_pid": "Настройка локального PID-контроллера",
+        "configure_presets": "Настроить пресеты",
+        "done": "Сохранить"
+      }
+    },
+    "local_pid_menu_selector": {
+      "options": {
+        "configure_breezer_pid": "Настройка локального PID-контроллера бризера",
+        "remove_breezer_pid": "Удалить локальный PID-контроллер бризера",
+        "done": "Сохранить"
+      }
+    },
+    "presets_menu_selector": {
+      "options": {
+        "add": "Добавить пресет",
+        "edit": "Изменить пресет",
+        "remove": "Удалить пресет",
+        "done": "Готово"
+      }
+    },
+    "preset_name_selector": {
+      "options": {
+        "eco": "Эко",
+        "away": "Нет дома",
+        "boost": "Турбо",
+        "comfort": "Комфорт",
+        "sleep": "Сон",
+        "activity": "Активность",
+        "home": "Дома"
+      }
+    },
+    "preset_type_selector": {
+      "options": {
+        "auto": "Авто (лимиты скорости)",
+        "manual": "Ручной (фиксированная скорость)"
       }
     }
   },
@@ -64,6 +189,9 @@
     "number": {
       "target_co2": {
         "name": "Целевой уровень CO2"
+      },
+      "external_target_co2": {
+        "name": "Целевой уровень внешнего CO2"
       },
       "min_speed_set": {
         "name": "Минимальная скорость"

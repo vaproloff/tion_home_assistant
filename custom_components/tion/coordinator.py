@@ -4,7 +4,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -17,9 +17,14 @@ from .client import (
     TionClient,
     TionConnectionError,
     TionLocation,
+    TionZone,
+    TionZoneDevice,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from .pid_manager import TionPidManager
 
 
 @dataclass
@@ -27,6 +32,28 @@ class TionData:
     """Tion coordinator data."""
 
     locations: list[TionLocation]
+
+    def devices(self) -> list[TionZoneDevice]:
+        """Return all devices across all locations and zones."""
+        return [
+            device
+            for location in self.locations
+            for zone in location.zones
+            for device in zone.devices
+        ]
+
+    def device(self, guid: str) -> TionZoneDevice | None:
+        """Return the device with the given guid, or None."""
+        return next((device for device in self.devices() if device.guid == guid), None)
+
+    def zone(self, guid: str) -> TionZone | None:
+        """Return the zone containing the device with the given guid, or None."""
+        for location in self.locations:
+            for zone in location.zones:
+                if any(device.guid == guid for device in zone.devices):
+                    return zone
+
+        return None
 
 
 class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
@@ -41,6 +68,7 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
     ) -> None:
         """Initialize the coordinator."""
         self.client = client
+        self.pid_manager: TionPidManager
         self._current_command_started_at: float | None = None
         self._last_command_completed_at: float | None = None
 
@@ -53,6 +81,17 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             always_update=False,
         )
 
+    def _command_invalidates_fetch(self, request_started_at: float) -> bool:
+        """Return whether a command makes a fetch started at this time stale.
+
+        True when a command is in-flight, or one completed after the fetch
+        began, so the fetched snapshot may predate the command's effect.
+        """
+        return self._current_command_started_at is not None or (
+            self._last_command_completed_at is not None
+            and request_started_at < self._last_command_completed_at
+        )
+
     async def _async_update_data(self) -> TionData:
         """Fetch data from Tion API."""
         request_started_at = self.hass.loop.time()
@@ -63,29 +102,42 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         except (TionApiError, TionConnectionError) as err:
             raise UpdateFailed(str(err)) from err
 
-        if self.data is not None and (
-            self._current_command_started_at is not None
-            or (
-                self._last_command_completed_at is not None
-                and request_started_at < self._last_command_completed_at
-            )
+        if self.data is not None and self._command_invalidates_fetch(
+            request_started_at
         ):
             _LOGGER.debug("Ignoring stale Tion location data")
             return self.data
 
-        return TionData(locations)
+        data = TionData(locations)
+
+        if self.pid_manager.has_active_pid():
+            for intent in self.pid_manager.plan_all(data):
+                # Reflect the command optimistically on the published snapshot,
+                # then dispatch the network send in the background. If that send
+                # later fails the snapshot is briefly ahead of reality; the next
+                # poll reconciles it. Do not add a rollback here.
+                intent.apply(data)
+                self.pid_manager.schedule_intent(intent)
+
+        return data
 
     async def _async_send_command(
-        self, command: Awaitable[bool], *, request_refresh: bool = True
+        self,
+        command: Awaitable[bool],
+        *,
+        request_refresh: bool = True,
+        track_stale: bool = True,
     ) -> bool:
         """Send a command and refresh coordinator data after it succeeds."""
         command_started_at = self.hass.loop.time()
-        self._current_command_started_at = command_started_at
+        if track_stale:
+            self._current_command_started_at = command_started_at
         try:
             result = await command
-            self._last_command_completed_at = self.hass.loop.time()
+            if track_stale:
+                self._last_command_completed_at = self.hass.loop.time()
         finally:
-            if self._current_command_started_at == command_started_at:
+            if track_stale and self._current_command_started_at == command_started_at:
                 self._current_command_started_at = None
 
         if request_refresh:
@@ -94,19 +146,23 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         return result
 
     async def async_send_breezer(
-        self, *, request_refresh: bool = True, **kwargs: Any
+        self, *, request_refresh: bool = True, track_stale: bool = True, **kwargs: Any
     ) -> bool:
         """Send new breezer data to API."""
         return await self._async_send_command(
-            self.client.send_breezer(**kwargs), request_refresh=request_refresh
+            self.client.send_breezer(**kwargs),
+            request_refresh=request_refresh,
+            track_stale=track_stale,
         )
 
     async def async_send_zone(
-        self, *, request_refresh: bool = True, **kwargs: Any
+        self, *, request_refresh: bool = True, track_stale: bool = True, **kwargs: Any
     ) -> bool:
         """Send new zone data to API."""
         return await self._async_send_command(
-            self.client.send_zone(**kwargs), request_refresh=request_refresh
+            self.client.send_zone(**kwargs),
+            request_refresh=request_refresh,
+            track_stale=track_stale,
         )
 
     async def async_send_settings(
@@ -117,29 +173,14 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             self.client.send_settings(**kwargs), request_refresh=request_refresh
         )
 
-    def get_devices(self):
+    def get_devices(self) -> list[TionZoneDevice]:
         """Get all devices from coordinator data."""
-        return [
-            device
-            for location in self.data.locations
-            for zone in location.zones
-            for device in zone.devices
-        ]
+        return self.data.devices()
 
-    def get_device(self, guid: str):
+    def get_device(self, guid: str) -> TionZoneDevice | None:
         """Get a device by guid from coordinator data."""
-        for device in self.get_devices():
-            if device.guid == guid:
-                return device
+        return self.data.device(guid)
 
-        return None
-
-    def get_device_zone(self, guid: str):
+    def get_device_zone(self, guid: str) -> TionZone | None:
         """Get a device zone by device guid from coordinator data."""
-        for location in self.data.locations:
-            for zone in location.zones:
-                for device in zone.devices:
-                    if device.guid == guid:
-                        return zone
-
-        return None
+        return self.data.zone(guid)

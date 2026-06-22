@@ -9,10 +9,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import TionError, TionZone, TionZoneDevice
-from .const import DOMAIN, TionDeviceType
+from .const import DEFAULT_TARGET_CO2, DOMAIN, TionDeviceType
 from .coordinator import TionDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ async def async_setup_entry(
             ]:
                 entities.append(TionMinSpeed(coordinator, device))
                 entities.append(TionMaxSpeed(coordinator, device))
+                if coordinator.pid_manager.is_configured(device.guid):
+                    entities.append(TionLocalTargetCO2(coordinator, device))
             elif device.type in [
                 TionDeviceType.MAGIC_AIR,
                 TionDeviceType.MODULE_CO2,
@@ -225,6 +228,69 @@ class TionTargetCO2(TionNumber):
         await self._async_send_zone(
             guid=self._zone.guid, mode=self._zone.mode.current, co2=target_co2
         )
+
+
+class TionLocalTargetCO2(TionNumber, RestoreEntity):
+    """Local target CO2 level for an external CO2 PID controller."""
+
+    _attr_icon = "mdi:molecule-co2"
+    _attr_translation_key = "external_target_co2"
+
+    def __init__(
+        self,
+        coordinator: TionDataUpdateCoordinator,
+        device: TionZoneDevice,
+    ) -> None:
+        """Initialize local target CO2 number."""
+        super().__init__(coordinator, device)
+
+        self._attr_device_class = NumberDeviceClass.CO2
+        self._attr_native_min_value = 550
+        self._attr_native_max_value = 1500
+        self._attr_native_step = 10
+
+        self._target_co2: float = DEFAULT_TARGET_CO2
+        self._target_co2 = self.coordinator.pid_manager.get_target_co2(
+            self._device.guid
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return bool(
+            super().available
+            and self.coordinator.pid_manager.is_configured(self._device.guid)
+        )
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique id identifying the entity."""
+        return f"{self._device.guid}_external_target_co2"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the value reported by the number."""
+        return self._target_co2 if self.available else None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore local target CO2."""
+        await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            try:
+                self._target_co2 = float(last_state.state)
+            except TypeError, ValueError:
+                self._target_co2 = DEFAULT_TARGET_CO2
+
+        self.coordinator.pid_manager.set_target_co2(self._device.guid, self._target_co2)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set new local target CO2 value."""
+        self._target_co2 = value
+        self.coordinator.pid_manager.set_target_co2(self._device.guid, value)
+        self.async_write_ha_state()
+
+    async def _send(self) -> None:
+        """No cloud command is needed for local target CO2."""
 
 
 class TionMinSpeed(TionNumber):

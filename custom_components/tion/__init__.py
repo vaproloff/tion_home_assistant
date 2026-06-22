@@ -18,6 +18,7 @@ from .const import (
     PLATFORMS,
 )
 from .coordinator import TionDataUpdateCoordinator
+from .pid_manager import TionPidManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +46,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     client.add_update_listener(update_auth_data)
 
     coordinator = TionDataUpdateCoordinator(hass, entry, client, scan_interval)
+    pid_manager = TionPidManager(hass, entry, coordinator)
+    coordinator.pid_manager = pid_manager
     await coordinator.async_config_entry_first_refresh()
+    entry.async_on_unload(pid_manager.async_start())
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     device_registry = dr.async_get(hass)
