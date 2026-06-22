@@ -153,6 +153,14 @@ class TionApiProfile:
     timeout: int = 10
 
 
+@dataclass(frozen=True)
+class TionApiResult:
+    """Response data and the profile that served it."""
+
+    data: Any
+    profile: TionApiProfile
+
+
 API_PROFILE = TionApiProfile(
     name="api",
     endpoint="https://api.magicair.tion.ru/",
@@ -292,14 +300,16 @@ class TionClient:
         if profile.scope:
             data["scope"] = profile.scope
 
-        response = await self._request(
-            "post",
-            profile.auth_url,
-            data=data,
-            auth_required=False,
-            auth_request=True,
-            profile=profile,
-        )
+        response = (
+            await self._request(
+                "post",
+                profile.auth_url,
+                data=data,
+                auth_required=False,
+                auth_request=True,
+                profile=profile,
+            )
+        ).data
 
         try:
             token = f"{response['token_type']} {response['access_token']}"
@@ -326,34 +336,11 @@ class TionClient:
         retry_auth: bool = True,
         profile: TionApiProfile | None = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> TionApiResult:
         """Make a request, failing over between profiles on connection errors."""
-        result, _profile = await self._request_with_profile(
-            method,
-            url_path,
-            auth_required=auth_required,
-            auth_request=auth_request,
-            retry_auth=retry_auth,
-            profile=profile,
-            **kwargs,
-        )
-        return result
-
-    async def _request_with_profile(
-        self,
-        method: str,
-        url_path: str | Callable[[TionApiProfile], str],
-        *,
-        auth_required: bool = True,
-        auth_request: bool = False,
-        retry_auth: bool = True,
-        profile: TionApiProfile | None = None,
-        **kwargs: Any,
-    ) -> tuple[Any, TionApiProfile]:
-        """Make a request and return the profile that served it."""
         if profile is not None:
-            return (
-                await self._request_profile(
+            return TionApiResult(
+                data=await self._request_profile(
                     profile,
                     method,
                     url_path,
@@ -362,7 +349,7 @@ class TionClient:
                     retry_auth=retry_auth,
                     **kwargs,
                 ),
-                profile,
+                profile=profile,
             )
 
         last_error: TionConnectionError | None = None
@@ -384,7 +371,7 @@ class TionClient:
                 index = (index + 1) % len(self._profiles)
                 continue
             await self._set_active(index)
-            return result, target
+            return TionApiResult(data=result, profile=target)
 
         if last_error is not None:
             raise last_error
@@ -469,7 +456,9 @@ class TionClient:
 
     async def get_locations(self) -> list[TionLocation]:
         """Get locations data from Tion API."""
-        response = await self._request("get", lambda profile: profile.location_url)
+        response = (
+            await self._request("get", lambda profile: profile.location_url)
+        ).data
         if not isinstance(response, list):
             raise TionApiError("Tion API returned invalid location data")
 
@@ -562,7 +551,8 @@ class TionClient:
         return await self._send(f"{device_url}/{guid}/settings", data)
 
     async def _send(self, url_path: str, data: dict[str, Any]) -> bool:
-        response, served = await self._request_with_profile("post", url_path, json=data)
+        result = await self._request("post", url_path, json=data)
+        response = result.data
         if response.get("status") != "queued":
             raise TionApiError(
                 "Tion API did not queue the command: "
@@ -574,7 +564,7 @@ class TionClient:
         except KeyError as err:
             raise TionApiError("Tion API response did not contain a task id") from err
 
-        return await self._wait_for_task(task_id, profile=served)
+        return await self._wait_for_task(task_id, profile=result.profile)
 
     async def _wait_for_task(
         self, task_id: str, *, profile: TionApiProfile, max_time: int = 5
@@ -589,9 +579,11 @@ class TionClient:
                     f"Timed out after {max_time} seconds waiting for Tion task"
                 )
 
-            response = await self._request(
-                "get", f"{profile.task_url}/{task_id}", profile=profile
-            )
+            response = (
+                await self._request(
+                    "get", f"{profile.task_url}/{task_id}", profile=profile
+                )
+            ).data
             task_status = response.get("status")
             if task_status == "completed":
                 return True
