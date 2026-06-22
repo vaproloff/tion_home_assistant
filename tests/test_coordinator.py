@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from custom_components.tion.client import TionLocation
 from custom_components.tion.coordinator import TionData, TionDataUpdateCoordinator
+from custom_components.tion.pid_intent import BreezerCommand, PidIntent
 
 BREEZER_GUID = "breezer-guid"
 
@@ -29,18 +30,27 @@ class FakeClient:
 class FakePidManager:
     """Fake local PID manager for coordinator tests."""
 
-    def __init__(self, *, active: bool) -> None:
+    def __init__(
+        self, *, active: bool, intents: list[PidIntent] | None = None
+    ) -> None:
         """Initialize fake PID manager."""
         self._active = active
-        self.evaluated: TionData | None = None
+        self._intents = intents or []
+        self.planned: TionData | None = None
+        self.scheduled: list[PidIntent] = []
 
     def has_active_pid(self) -> bool:
         """Return whether any PID controller is active."""
         return self._active
 
-    async def async_evaluate_all(self, data: TionData) -> None:
-        """Record the data PID was evaluated on."""
-        self.evaluated = data
+    def plan_all(self, data: TionData) -> list[PidIntent]:
+        """Record the data PID planned on and return canned intents."""
+        self.planned = data
+        return self._intents
+
+    def schedule_intent(self, intent: PidIntent) -> None:
+        """Record a scheduled intent."""
+        self.scheduled.append(intent)
 
 
 def _location(*, speed: int) -> TionLocation:
@@ -187,22 +197,36 @@ def test_get_device_zone_delegates_to_data() -> None:
     assert coordinator.get_device_zone(BREEZER_GUID).guid == "zone"
 
 
-def test_update_runs_pid_on_fresh_data_when_active() -> None:
-    """Test active PID is evaluated on the freshly fetched data."""
-    locations = [_location(speed=3)]
-    pid_manager = FakePidManager(active=True)
+def test_update_plans_and_commits_pid_on_fresh_data_when_active() -> None:
+    """Test active PID plans on fresh data, applies intents, and schedules them."""
+    intent = PidIntent(
+        breezer_guid=BREEZER_GUID,
+        breezer_command=BreezerCommand(
+            guid=BREEZER_GUID,
+            is_on=True,
+            speed=6,
+            t_set=20,
+            speed_min_set=0,
+            speed_max_set=6,
+            heater_enabled=False,
+            heater_mode="maintenance",
+            gate=0,
+        ),
+    )
+    pid_manager = FakePidManager(active=True, intents=[intent])
     coordinator = _make_coordinator(
-        client=FakeClient(locations), pid_manager=pid_manager
+        client=FakeClient([_location(speed=3)]), pid_manager=pid_manager
     )
 
     result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
 
-    assert result.locations == locations
-    assert pid_manager.evaluated is result
+    assert pid_manager.planned is result
+    assert result.device(BREEZER_GUID).data.speed == 6
+    assert pid_manager.scheduled == [intent]
 
 
 def test_update_skips_pid_when_inactive() -> None:
-    """Test PID is not evaluated when no controller is active."""
+    """Test PID is not planned when no controller is active."""
     locations = [_location(speed=3)]
     pid_manager = FakePidManager(active=False)
     coordinator = _make_coordinator(
@@ -212,7 +236,7 @@ def test_update_skips_pid_when_inactive() -> None:
     result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
 
     assert result.locations == locations
-    assert pid_manager.evaluated is None
+    assert pid_manager.planned is None
 
 
 def test_update_returns_cached_data_and_skips_pid_when_stale() -> None:
@@ -230,4 +254,4 @@ def test_update_returns_cached_data_and_skips_pid_when_stale() -> None:
     result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
 
     assert result is cached
-    assert pid_manager.evaluated is None
+    assert pid_manager.planned is None
