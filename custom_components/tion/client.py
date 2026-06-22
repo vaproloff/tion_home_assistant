@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from json import JSONDecodeError
 import logging
 from typing import Any
@@ -132,19 +133,83 @@ class TionLocation:
         ]
 
 
+@dataclass(frozen=True)
+class TionApiProfile:
+    """Connection profile for one Tion cloud endpoint."""
+
+    name: str
+    endpoint: str
+    auth_url: str
+    location_url: str
+    device_url: str
+    zone_url: str
+    task_url: str
+    client_id: str
+    client_secret: str
+    grant_type: str
+    host: str
+    base_headers: dict[str, str]
+    scope: str | None = None
+    timeout: int = 10
+
+
+@dataclass(frozen=True)
+class TionApiResult:
+    """Response data and the profile that served it."""
+
+    data: Any
+    profile: TionApiProfile
+
+
+API_PROFILE = TionApiProfile(
+    name="api",
+    endpoint="https://api.magicair.tion.ru/",
+    auth_url="idsrv/connect/token",
+    location_url="Location",
+    device_url="device",
+    zone_url="zone",
+    task_url="task",
+    client_id="a750d720-e146-47b0-b414-35e3b1dd7862",
+    client_secret="DTT2jJnY3k2H2GyZ",
+    grant_type="extended",
+    scope="offline_access ma-account ma-device ma-firmware",
+    host="api.magicair.tion.ru",
+    base_headers={
+        "Accept": "application/json",
+        "Accept-Language": "ru-RU;q=1, en-RU;q=0.9",
+        "Connection": "Keep-Alive",
+        "Host": "api.magicair.tion.ru",
+    },
+)
+
+API2_PROFILE = TionApiProfile(
+    name="api2",
+    endpoint="https://api2.magicair.tion.ru/",
+    auth_url="idsrv/oauth2/token",
+    location_url="location",
+    device_url="device",
+    zone_url="zone",
+    task_url="task",
+    client_id="cd594955-f5ba-4c20-9583-5990bb29f4ef",
+    client_secret="syRxSrT77P",
+    grant_type="password",
+    scope=None,
+    host="api2.magicair.tion.ru",
+    base_headers={
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ru-RU",
+        "Connection": "Keep-Alive",
+        "Host": "api2.magicair.tion.ru",
+    },
+)
+
+PROFILES: list[TionApiProfile] = [API_PROFILE, API2_PROFILE]
+PROFILES_BY_NAME: dict[str, TionApiProfile] = {p.name: p for p in PROFILES}
+DEFAULT_PROFILE = API_PROFILE
+
+
 class TionClient:
     """Tion API Client."""
-
-    _API_ENDPOINT = "https://api.magicair.tion.ru/"
-    _AUTH_URL = "idsrv/connect/token"
-    _LOCATION_URL = "Location"
-    _DEVICE_URL = "device"
-    _ZONE_URL = "zone"
-    _TASK_URL = "task"
-    _CLIENT_ID = "a750d720-e146-47b0-b414-35e3b1dd7862"
-    _CLIENT_SECRET = "DTT2jJnY3k2H2GyZ"
-    _SCOPE = "offline_access ma-account ma-device ma-firmware"
-    _HOST = "api.magicair.tion.ru"
 
     def __init__(
         self,
@@ -152,100 +217,201 @@ class TionClient:
         username: str,
         password: str,
         min_update_interval_sec=10,
-        auth=None,
+        auth: str | dict[str, str | None] | None = None,
+        active_profile: str | None = None,
     ) -> None:
         """Tion API client initialization."""
         self._session = session
         self._username = username
         self._password = password
         self._min_update_interval = min_update_interval_sec
-        self._authorization = auth
+        self._profiles = PROFILES
+        self._authorization = self._normalize_auth(auth)
+        self._active = self._resolve_active_index(active_profile)
 
         self._locations: list[TionLocation] = []
-        self._auth_update_listeners: list[Callable[[str], Awaitable[None]]] = []
+        self._auth_update_listeners: list[Callable[[str, str], Awaitable[None]]] = []
+        self._active_profile_listeners: list[Callable[[str], Awaitable[None]]] = []
+
+    @staticmethod
+    def _normalize_auth(
+        auth: str | dict[str, str | None] | None,
+    ) -> dict[str, str | None]:
+        """Coerce stored auth (legacy str / dict / None) into a per-profile dict."""
+        if isinstance(auth, str):
+            return {p.name: (auth if p is DEFAULT_PROFILE else None) for p in PROFILES}
+        if isinstance(auth, dict):
+            return {p.name: auth.get(p.name) for p in PROFILES}
+        return {p.name: None for p in PROFILES}
+
+    def _resolve_active_index(self, active_profile: str | None) -> int:
+        """Map a persisted profile name to its index, defaulting to api."""
+        profile = PROFILES_BY_NAME.get(active_profile or "", DEFAULT_PROFILE)
+        return self._profiles.index(profile)
 
     @property
-    def authorization(self) -> str | None:
-        """Return authorization data."""
-        return self._authorization
+    def authorization(self) -> dict[str, str | None]:
+        """Return per-profile authorization data."""
+        return dict(self._authorization)
 
-    def _headers(self) -> dict[str, str]:
-        """Return headers for API request."""
+    @property
+    def active_profile(self) -> str:
+        """Return the name of the currently active profile."""
+        return self._profiles[self._active].name
+
+    def _headers(self, profile: TionApiProfile) -> dict[str, str]:
+        """Return headers for a request on the given profile."""
         return {
-            "Accept": "application/json",
-            "Accept-Language": "ru-RU;q=1, en-RU;q=0.9",
-            "Authorization": self._authorization or "",
-            "Connection": "Keep-Alive",
-            "Host": self._HOST,
+            **profile.base_headers,
+            "Authorization": self._authorization.get(profile.name) or "",
         }
 
-    def add_update_listener(self, coro: Callable[[str], Awaitable[None]]) -> None:
-        """Add entry data update listener function."""
+    def add_update_listener(self, coro: Callable[[str, str], Awaitable[None]]) -> None:
+        """Add a listener notified as (profile_name, token) on re-auth."""
         self._auth_update_listeners.append(coro)
 
-    async def async_validate_auth(self) -> str:
-        """Validate credentials and return authorization data."""
-        await self.async_get_authorization()
+    def add_active_profile_listener(
+        self, coro: Callable[[str], Awaitable[None]]
+    ) -> None:
+        """Add a listener notified with the profile name on a failover switch."""
+        self._active_profile_listeners.append(coro)
+
+    async def async_validate_auth(self) -> dict[str, str | None]:
+        """Validate credentials and return auth data for the serving profile."""
         await self.get_locations()
 
-        if self._authorization is None:
+        if not self._authorization.get(self.active_profile):
             raise TionAuthError("Tion authorization failed")
 
-        return self._authorization
+        return self.authorization
 
-    async def async_get_authorization(self) -> str:
-        """Get a new authorization token."""
+    async def async_get_authorization(
+        self, profile: TionApiProfile | None = None
+    ) -> str:
+        """Get a new authorization token for the given (or active) profile."""
+        profile = profile or self._profiles[self._active]
         data = {
             "username": self._username,
             "password": self._password,
-            "client_id": self._CLIENT_ID,
-            "client_secret": self._CLIENT_SECRET,
-            "grant_type": "extended",
-            "scope": self._SCOPE,
+            "client_id": profile.client_id,
+            "client_secret": profile.client_secret,
+            "grant_type": profile.grant_type,
         }
+        if profile.scope:
+            data["scope"] = profile.scope
 
-        response = await self._request(
-            "post",
-            self._AUTH_URL,
-            data=data,
-            auth_required=False,
-            auth_request=True,
-        )
+        response = (
+            await self._request(
+                "post",
+                profile.auth_url,
+                data=data,
+                auth_required=False,
+                auth_request=True,
+                profile=profile,
+            )
+        ).data
 
         try:
-            self._authorization = f"{response['token_type']} {response['access_token']}"
+            token = f"{response['token_type']} {response['access_token']}"
         except KeyError as err:
             raise TionApiError(
                 "Tion API response did not contain an access token"
             ) from err
 
-        _LOGGER.debug("TionClient: got new authorization token")
+        self._authorization[profile.name] = token
+        _LOGGER.debug("TionClient: got new authorization for profile %s", profile.name)
 
         for coro in self._auth_update_listeners:
-            await coro(self._authorization)
+            await coro(profile.name, token)
 
-        return self._authorization
+        return token
 
     async def _request(
         self,
         method: str,
-        url_path: str,
+        url_path: str | Callable[[TionApiProfile], str],
+        *,
+        auth_required: bool = True,
+        auth_request: bool = False,
+        retry_auth: bool = True,
+        profile: TionApiProfile | None = None,
+        **kwargs: Any,
+    ) -> TionApiResult:
+        """Make a request, failing over between profiles on connection errors."""
+        if profile is not None:
+            return TionApiResult(
+                data=await self._request_profile(
+                    profile,
+                    method,
+                    url_path,
+                    auth_required=auth_required,
+                    auth_request=auth_request,
+                    retry_auth=retry_auth,
+                    **kwargs,
+                ),
+                profile=profile,
+            )
+
+        last_error: TionConnectionError | None = None
+        index = self._active
+        for _attempt in range(len(self._profiles)):
+            target = self._profiles[index]
+            try:
+                result = await self._request_profile(
+                    target,
+                    method,
+                    url_path,
+                    auth_required=auth_required,
+                    auth_request=auth_request,
+                    retry_auth=retry_auth,
+                    **kwargs,
+                )
+            except TionConnectionError as err:
+                last_error = err
+                index = (index + 1) % len(self._profiles)
+                continue
+            await self._set_active(index)
+            return TionApiResult(data=result, profile=target)
+
+        if last_error is not None:
+            raise last_error
+        raise TionConnectionError("Error communicating with Tion API")
+
+    async def _set_active(self, index: int) -> None:
+        """Switch the active profile and notify listeners on change."""
+        if index == self._active:
+            return
+
+        self._active = index
+        name = self._profiles[index].name
+        _LOGGER.warning(
+            "TionClient: switched to profile %s after a connection failure", name
+        )
+        for coro in self._active_profile_listeners:
+            await coro(name)
+
+    async def _request_profile(
+        self,
+        profile: TionApiProfile,
+        method: str,
+        url_path: str | Callable[[TionApiProfile], str],
         *,
         auth_required: bool = True,
         auth_request: bool = False,
         retry_auth: bool = True,
         **kwargs: Any,
     ) -> Any:
-        """Make a request to the Tion API."""
-        if auth_required and self._authorization is None:
-            await self.async_get_authorization()
+        """Make a single request pinned to one profile (no failover)."""
+        if auth_required and not self._authorization.get(profile.name):
+            await self.async_get_authorization(profile)
 
+        path = url_path(profile) if callable(url_path) else url_path
         try:
             async with self._session.request(
                 method,
-                url=f"{self._API_ENDPOINT}{url_path}",
-                headers=self._headers(),
-                timeout=10,
+                url=f"{profile.endpoint}{path}",
+                headers=self._headers(profile),
+                timeout=profile.timeout,
                 **kwargs,
             ) as response:
                 status = response.status
@@ -264,8 +430,9 @@ class TionClient:
         if status == 401 and auth_required:
             if retry_auth:
                 _LOGGER.debug("TionClient: need to get new authorization")
-                await self.async_get_authorization()
-                return await self._request(
+                await self.async_get_authorization(profile)
+                return await self._request_profile(
+                    profile,
                     method,
                     url_path,
                     auth_required=auth_required,
@@ -289,7 +456,9 @@ class TionClient:
 
     async def get_locations(self) -> list[TionLocation]:
         """Get locations data from Tion API."""
-        response = await self._request("get", self._LOCATION_URL)
+        response = (
+            await self._request("get", lambda profile: profile.location_url)
+        ).data
         if not isinstance(response, list):
             raise TionApiError("Tion API returned invalid location data")
 
@@ -363,7 +532,8 @@ class TionClient:
             "gate": gate,
         }
 
-        return await self._send(f"{self._DEVICE_URL}/{guid}/mode", data)
+        device_url = self._profiles[self._active].device_url
+        return await self._send(f"{device_url}/{guid}/mode", data)
 
     async def send_zone(self, guid: str, mode: ZoneMode, co2: int):
         """Send new zone data to API."""
@@ -372,14 +542,17 @@ class TionClient:
             "co2": co2,
         }
 
-        return await self._send(f"{self._ZONE_URL}/{guid}/mode", data)
+        zone_url = self._profiles[self._active].zone_url
+        return await self._send(f"{zone_url}/{guid}/mode", data)
 
     async def send_settings(self, guid: str, data: dict[str, Any]):
         """Send new settings data to API."""
-        return await self._send(f"{self._DEVICE_URL}/{guid}/settings", data)
+        device_url = self._profiles[self._active].device_url
+        return await self._send(f"{device_url}/{guid}/settings", data)
 
     async def _send(self, url_path: str, data: dict[str, Any]) -> bool:
-        response = await self._request("post", url_path, json=data)
+        result = await self._request("post", url_path, json=data)
+        response = result.data
         if response.get("status") != "queued":
             raise TionApiError(
                 "Tion API did not queue the command: "
@@ -391,10 +564,12 @@ class TionClient:
         except KeyError as err:
             raise TionApiError("Tion API response did not contain a task id") from err
 
-        return await self._wait_for_task(task_id)
+        return await self._wait_for_task(task_id, profile=result.profile)
 
-    async def _wait_for_task(self, task_id: str, max_time: int = 5) -> bool:
-        """Wait for task with defined task_id been completed."""
+    async def _wait_for_task(
+        self, task_id: str, *, profile: TionApiProfile, max_time: int = 5
+    ) -> bool:
+        """Wait for the task to complete, pinned to the POST's profile."""
         delay = 0.5
         start_time = asyncio.get_event_loop().time()
         while True:
@@ -404,7 +579,11 @@ class TionClient:
                     f"Timed out after {max_time} seconds waiting for Tion task"
                 )
 
-            response = await self._request("get", f"{self._TASK_URL}/{task_id}")
+            response = (
+                await self._request(
+                    "get", f"{profile.task_url}/{task_id}", profile=profile
+                )
+            ).data
             task_status = response.get("status")
             if task_status == "completed":
                 return True

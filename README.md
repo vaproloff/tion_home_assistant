@@ -3,7 +3,7 @@
 [![HACS validation](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml)
 [![Hassfest](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.1%2B-blue)
-![Version](https://img.shields.io/badge/version-2026.6.1-blue)
+![Version](https://img.shields.io/badge/version-2026.6.2-blue)
 ![HACS](https://img.shields.io/badge/HACS-Custom-orange)
 [![GitHub stars](https://img.shields.io/github/stars/vaproloff/tion_home_assistant?style=social)](https://github.com/vaproloff/tion_home_assistant/stargazers)
 
@@ -17,7 +17,7 @@
 
 ## English summary
 
-This is a custom HomeAssistant integration for Tion Breezer 3S/4S, MagicAir and Module CO2+ devices. It uses the Tion/MagicAir cloud API, exposes native HomeAssistant entities, supports setup through the UI, offers per-breezer speed presets (auto speed-limit or manual fixed-speed profiles), and can run local CO2 PID control from an external HomeAssistant sensor.
+This is a custom HomeAssistant integration for Tion Breezer O2/3S/4S, MagicAir and Module CO2+ devices. It uses the Tion/MagicAir cloud API, exposes native HomeAssistant entities, supports setup through the UI, offers per-breezer speed presets (auto speed-limit or manual fixed-speed profiles), and can run local CO2 PID control from an external HomeAssistant sensor.
 
 ## Что умеет интеграция
 
@@ -33,6 +33,7 @@ This is a custom HomeAssistant integration for Tion Breezer 3S/4S, MagicAir and 
 
 ## Поддерживаемые устройства
 
+- Tion Breezer O2
 - Tion Breezer 3S
 - Tion Breezer 4S
 - Tion MagicAir
@@ -122,13 +123,13 @@ This is a custom HomeAssistant integration for Tion Breezer 3S/4S, MagicAir and 
 1. Откройте `Настройки` -> `Устройства и службы`.
 2. Найдите интеграцию `Tion`.
 3. Нажмите `Настроить`.
-4. На главном шаге опций выберите действие `Configure Local PID`.
+4. На главном шаге опций выберите действие `Configure local PID` (`Настройка локального PID-контроллера` в русском интерфейсе).
 5. На шаге Local PID выберите бризер в поле `Бризер для внешнего CO2`.
-6. Выберите действие `Add or update Local PID`.
+6. Выберите действие `Configure breezer local PID` (`Настройка локального PID-контроллера бризера`).
 7. Включите локальное управление CO2, выберите внешний CO2 sensor и задайте PID-параметры.
 8. После сохранения формы выберите `Done` на шаге Local PID, затем `Done` на главном шаге опций. Изменения записываются в интеграцию только после финального `Done`.
 
-Чтобы полностью удалить настройки local PID для бризера, выберите его на шаге Local PID и используйте действие `Remove Local PID`. Если нужно временно отключить local PID без потери датчика и коэффициентов, откройте `Add or update Local PID` и снимите галочку включения локального управления CO2.
+Чтобы полностью удалить настройки local PID для бризера, выберите его на шаге Local PID и используйте действие `Remove breezer local PID` (`Удалить локальный PID-контроллер бризера`). Если нужно временно отключить local PID без потери датчика и коэффициентов, откройте `Configure breezer local PID` и снимите галочку включения локального управления CO2.
 
 После включения local PID у выбранного бризера режим `Fan Auto` в `climate` меняет смысл: он больше не включает cloud Auto в MagicAir, а запускает локальный PID-регулятор внутри HomeAssistant. Интеграция переводит Tion zone в `manual`, читает внешний CO2 sensor раз в общий интервал обновления и отправляет новую скорость бризера только если рассчитанная команда изменилась.
 
@@ -140,24 +141,14 @@ This is a custom HomeAssistant integration for Tion Breezer 3S/4S, MagicAir and 
 
 Для каждого бризера настройки хранятся отдельно:
 
-- `External CO2 sensor` - внешний датчик CO2 из домена `sensor`. В первой версии ожидается числовое значение в ppm.
+- `External CO2 sensor` - внешний датчик CO2 из домена `sensor`. Ожидается числовое значение CO2 в ppm.
 - `External CO2 Target` - локальная цель CO2 для выбранного бризера. По умолчанию `800 ppm`. Это отдельная restored entity, она не записывает цель в MagicAir.
 - `PID base output` - базовая мощность в процентах до PID-коррекции. По умолчанию `20%`.
 - `PID proportional gain` (`kp`) - реакция на текущую ошибку CO2. По умолчанию `0.5`.
-- `PID integral gain` (`ki`) - накопление долгой ошибки. По умолчанию `0.002`.
+- `PID integral gain` (`ki`) - накопление долгой ошибки. По умолчанию `0.001`. Значение по умолчанию менять не рекомендуется, если вы не настраиваете PID осознанно.
 - `PID derivative gain` (`kd`) - реакция на быстрое изменение CO2. По умолчанию `0.0`; обычно лучше оставить `0`, потому что CO2 sensors часто шумят.
 
 PID считает output как процент мощности бризера `0..100`, переводит его в скорость относительно максимальной скорости устройства и затем ограничивает результат настройками минимальной и максимальной скорости бризера. `base output` помогает не занижать целевой CO2: около цели бризер может продолжать работать на небольшой мощности, а если CO2 уходит ниже цели, отрицательная ошибка всё равно может снизить output до минимума или выключения.
-
-Для диагностики в атрибутах `climate` доступны:
-
-- `pid_active` - включён ли local PID режим.
-- `pid_source_entity_id` - внешний CO2 sensor.
-- `pid_source_co2` - последнее прочитанное значение CO2.
-- `pid_error` - разница `source_co2 - target_co2`.
-- `pid_output_speed` - рассчитанная скорость бризера.
-- `pid_status` - состояние PID (`running`, `inactive`, `paused_sensor_unavailable` и другие).
-- `pid_last_update` - время последнего обновления PID-статуса.
 
 ## Если что-то не работает
 

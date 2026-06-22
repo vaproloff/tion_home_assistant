@@ -59,6 +59,35 @@ def test_pid_adds_base_output_at_target() -> None:
     assert output.is_on is True
 
 
+def test_pid_output_exposes_calculation_terms() -> None:
+    """Test PID output includes terms needed for debug logging."""
+    controller = PidController(
+        PidCoefficients(kp=0.5, ki=0.1, kd=2.0, base_output=5.0)
+    )
+
+    controller.calculate(
+        source_co2=810,
+        target_co2=800,
+        speed_min=0,
+        speed_max=6,
+        device_max_speed=6,
+        now=0,
+    )
+    output = controller.calculate(
+        source_co2=820,
+        target_co2=800,
+        speed_min=0,
+        speed_max=6,
+        device_max_speed=6,
+        now=10,
+    )
+
+    assert output.p_output == 10.0
+    assert output.i_output == 20.0
+    assert output.d_output == 2.0
+    assert output.raw_output == 37.0
+
+
 def test_pid_base_output_can_be_overcome_below_target() -> None:
     """Test negative error can lower output below the base output."""
     controller = PidController(
