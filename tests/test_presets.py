@@ -193,6 +193,9 @@ def test_restore_rehydrates_active_and_saved() -> None:
     assert controller.restore_attributes() == {
         ATTR_SAVED_PRESET: {"type": "manual", "speed": 3}
     }
+    assert controller.reconcile(AutoPreset(2, 5)) is False
+    assert controller.preset_mode == "eco"
+
     assert controller.reconcile(AutoPreset(2, 5)) is True
     assert controller.preset_mode == PRESET_NONE
 

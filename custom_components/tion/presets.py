@@ -141,6 +141,7 @@ class TionPresetController:
         }
         self._active = PRESET_NONE
         self._saved: Preset | None = None
+        self._restored_needs_confirmation = False
 
     @property
     def has_presets(self) -> bool:
@@ -167,11 +168,13 @@ class TionPresetController:
             target = self._saved if self._saved is not None else current
             self._active = PRESET_NONE
             self._saved = None
+            self._restored_needs_confirmation = False
             return target
 
         if self._active == PRESET_NONE:
             self._saved = current
 
+        self._restored_needs_confirmation = False
         self._active = name
         return self._presets[name]
 
@@ -183,11 +186,16 @@ class TionPresetController:
         """
         if self._active == PRESET_NONE or current is None:
             return False
-        if current != self._presets[self._active]:
-            self._active = PRESET_NONE
-            self._saved = None
-            return True
-        return False
+        if current == self._presets[self._active]:
+            self._restored_needs_confirmation = False
+            return False
+        if self._restored_needs_confirmation:
+            self._restored_needs_confirmation = False
+            return False
+
+        self._active = PRESET_NONE
+        self._saved = None
+        return True
 
     def restore(self, active: str, saved: Preset | None) -> None:
         """Rehydrate state after a Home Assistant restart."""
@@ -195,6 +203,7 @@ class TionPresetController:
             return
         self._active = active
         self._saved = saved
+        self._restored_needs_confirmation = active != PRESET_NONE
 
     def restore_attributes(self) -> dict[str, dict[str, int | str] | None]:
         """Return the saved preset for the entity's extra_state_attributes."""

@@ -402,6 +402,12 @@ class TionClimate(
         if preset_mode is None or preset_mode == PRESET_NONE:
             return
         saved = Preset.from_storage(last_state.attributes.get(ATTR_SAVED_PRESET))
+        _LOGGER.debug(
+            "%s: restoring preset '%s' with saved intent %s",
+            self.name,
+            preset_mode,
+            saved,
+        )
         self._presets.restore(preset_mode, saved)
 
     @callback
@@ -409,12 +415,19 @@ class TionClimate(
         """Handle updated data from the coordinator."""
         self._load_zone()
         self._load_breezer()
-        if self._presets.has_presets and self._presets.reconcile(Preset.snapshot(self)):
-            _LOGGER.debug(
-                "%s: preset reset to %s by external change",
-                self.name,
-                self._presets.preset_mode,
-            )
+        if self._presets.has_presets:
+            current_preset = Preset.snapshot(self)
+            active_preset = self._presets.preset_mode
+            expected_preset = self._presets.preset(active_preset)
+            if self._presets.reconcile(current_preset):
+                _LOGGER.debug(
+                    "%s: preset '%s' reset to %s by external change: expected=%s, current=%s",
+                    self.name,
+                    active_preset,
+                    self._presets.preset_mode,
+                    expected_preset,
+                    current_preset,
+                )
         super()._handle_coordinator_update()
 
     async def async_turn_on(self) -> None:

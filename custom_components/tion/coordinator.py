@@ -22,6 +22,7 @@ from .client import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+POST_COMMAND_STALE_GRACE = 10.0
 
 if TYPE_CHECKING:
     from .pid_manager import TionPidManager
@@ -85,11 +86,19 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         """Return whether a command makes a fetch started at this time stale.
 
         True when a command is in-flight, or one completed after the fetch
-        began, so the fetched snapshot may predate the command's effect.
+        began, so the fetched snapshot may predate the command's effect. The
+        Tion cloud can also keep returning the pre-command snapshot briefly
+        after a task reports completion, so keep optimistic local state during
+        that propagation window.
         """
-        return self._current_command_started_at is not None or (
-            self._last_command_completed_at is not None
-            and request_started_at < self._last_command_completed_at
+        if self._current_command_started_at is not None:
+            return True
+        if self._last_command_completed_at is None:
+            return False
+        return (
+            request_started_at < self._last_command_completed_at
+            or request_started_at - self._last_command_completed_at
+            < POST_COMMAND_STALE_GRACE
         )
 
     async def _async_update_data(self) -> TionData:
@@ -105,7 +114,12 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         if self.data is not None and self._command_invalidates_fetch(
             request_started_at
         ):
-            _LOGGER.debug("Ignoring stale Tion location data")
+            _LOGGER.debug(
+                "Ignoring stale Tion location data: request_started_at=%s, "
+                "last_command_completed_at=%s",
+                request_started_at,
+                self._last_command_completed_at,
+            )
             return self.data
 
         data = TionData(locations)
