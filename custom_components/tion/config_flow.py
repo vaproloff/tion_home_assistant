@@ -88,7 +88,11 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         return sha256_hash.hexdigest()
 
     async def _async_get_auth_data(
-        self, user: str, password: str, interval: int, auth_data: str | None = None
+        self,
+        user: str,
+        password: str,
+        interval: int,
+        auth_data: str | dict[str, str | None] | None = None,
     ) -> tuple[dict[str, str | None] | None, str | None]:
         """Get auth data and map client errors to config flow errors."""
         session = async_create_clientsession(self.hass)

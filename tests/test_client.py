@@ -317,6 +317,52 @@ async def test_send_pins_task_poll_to_post_profile() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_pins_task_poll_to_post_profile_when_active_changes() -> None:
+    """Task polling stays on the POST profile even if another request switches back."""
+    switched_to_api2 = asyncio.Event()
+    release_api2_listener = asyncio.Event()
+
+    def api_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
+        if method == "post":
+            raise ClientError("api command down")
+        if url.endswith("/Location"):
+            return FakeResponse(200, [{"guid": "loc"}])
+        return FakeResponse(404, {})
+
+    def api2_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
+        if method == "post":
+            return FakeResponse(200, {"status": "queued", "task_id": "T1"})
+        if url.endswith("/location"):
+            raise ClientError("api2 read down")
+        if "/task/T1" in url:
+            return FakeResponse(200, {"status": "completed"})
+        return FakeResponse(404, {})
+
+    routes = {"api.": api_handler, "api2.": api2_handler}
+    client, session = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    async def on_switch(name: str) -> None:
+        if name == "api2":
+            switched_to_api2.set()
+            await release_api2_listener.wait()
+
+    client.add_active_profile_listener(on_switch)
+
+    send_task = asyncio.create_task(client.send_settings("guid-1", {"backlight": True}))
+    await asyncio.wait_for(switched_to_api2.wait(), timeout=1)
+
+    await client.get_locations()
+    assert client.active_profile == "api"
+
+    release_api2_listener.set()
+    assert await send_task is True
+
+    task_calls = [call for call in session.calls if "/task/T1" in call.url]
+    assert task_calls
+    assert all("//api2." in call.url for call in task_calls)
+
+
+@pytest.mark.asyncio
 async def test_poll_connection_error_does_not_switch_profiles() -> None:
     """A connection error during task polling propagates without failover."""
 
@@ -351,6 +397,29 @@ async def test_validate_auth_returns_dict_for_config_entry() -> None:
 
     assert isinstance(auth, dict)
     assert auth["api"] == "Bearer tok"
+
+
+@pytest.mark.asyncio
+async def test_validate_auth_fails_over_to_api2_when_api_auth_is_down() -> None:
+    """async_validate_auth uses failover when the default auth endpoint is down."""
+
+    def api2_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
+        if "oauth2/token" in url:
+            return FakeResponse(200, {"token_type": "Bearer", "access_token": "api2tok"})
+        if url.endswith("/location"):
+            return FakeResponse(200, [{"guid": "loc"}])
+        return FakeResponse(404, {})
+
+    routes = {
+        "api.": _fail_conn,
+        "api2.": api2_handler,
+    }
+    client, _ = _make_client(routes)
+
+    auth = await client.async_validate_auth()
+
+    assert auth == {"api": None, "api2": "Bearer api2tok"}
+    assert client.active_profile == "api2"
 
 
 @pytest.mark.asyncio

@@ -269,11 +269,10 @@ class TionClient:
         self._active_profile_listeners.append(coro)
 
     async def async_validate_auth(self) -> dict[str, str | None]:
-        """Validate credentials against the default profile and return auth data."""
-        await self.async_get_authorization(DEFAULT_PROFILE)
+        """Validate credentials and return auth data for the serving profile."""
         await self.get_locations()
 
-        if not self._authorization.get(DEFAULT_PROFILE.name):
+        if not self._authorization.get(self.active_profile):
             raise TionAuthError("Tion authorization failed")
 
         return self.authorization
@@ -329,15 +328,41 @@ class TionClient:
         **kwargs: Any,
     ) -> Any:
         """Make a request, failing over between profiles on connection errors."""
+        result, _profile = await self._request_with_profile(
+            method,
+            url_path,
+            auth_required=auth_required,
+            auth_request=auth_request,
+            retry_auth=retry_auth,
+            profile=profile,
+            **kwargs,
+        )
+        return result
+
+    async def _request_with_profile(
+        self,
+        method: str,
+        url_path: str | Callable[[TionApiProfile], str],
+        *,
+        auth_required: bool = True,
+        auth_request: bool = False,
+        retry_auth: bool = True,
+        profile: TionApiProfile | None = None,
+        **kwargs: Any,
+    ) -> tuple[Any, TionApiProfile]:
+        """Make a request and return the profile that served it."""
         if profile is not None:
-            return await self._request_profile(
+            return (
+                await self._request_profile(
+                    profile,
+                    method,
+                    url_path,
+                    auth_required=auth_required,
+                    auth_request=auth_request,
+                    retry_auth=retry_auth,
+                    **kwargs,
+                ),
                 profile,
-                method,
-                url_path,
-                auth_required=auth_required,
-                auth_request=auth_request,
-                retry_auth=retry_auth,
-                **kwargs,
             )
 
         last_error: TionConnectionError | None = None
@@ -359,7 +384,7 @@ class TionClient:
                 index = (index + 1) % len(self._profiles)
                 continue
             await self._set_active(index)
-            return result
+            return result, target
 
         if last_error is not None:
             raise last_error
@@ -537,8 +562,7 @@ class TionClient:
         return await self._send(f"{device_url}/{guid}/settings", data)
 
     async def _send(self, url_path: str, data: dict[str, Any]) -> bool:
-        response = await self._request("post", url_path, json=data)
-        served = self._profiles[self._active]
+        response, served = await self._request_with_profile("post", url_path, json=data)
         if response.get("status") != "queued":
             raise TionApiError(
                 "Tion API did not queue the command: "
