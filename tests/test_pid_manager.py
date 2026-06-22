@@ -1,9 +1,12 @@
 """Tests for Tion local PID runtime manager."""
 
 import asyncio
+import logging
 from dataclasses import asdict
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from custom_components.tion.client import TionError, TionZoneDevice
 from custom_components.tion.const import (
@@ -130,6 +133,10 @@ class FakeCoordinator:
             ),
         )
 
+    def get_device(self, guid: str) -> TionZoneDevice | None:
+        """Return the fake breezer by guid."""
+        return self.device if guid == self.device.guid else None
+
     async def async_send_breezer(self, **kwargs: Any) -> bool:
         """Record a fake breezer command."""
         self.commands.append(kwargs)
@@ -214,6 +221,19 @@ def _armed_manager(coordinator: FakeCoordinator) -> TionPidManager:
     return manager
 
 
+def test_breezer_name_uses_device_and_coordinator_contract() -> None:
+    """Test breezer log names use the explicit device or coordinator lookup."""
+    coordinator = FakeCoordinator(_device(speed=1))
+    manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
+
+    assert manager.breezer_name(BREEZER_GUID, _device(speed=1)) == "Breezer"
+    assert manager.breezer_name(BREEZER_GUID) == "Breezer"
+
+    coordinator.get_device = lambda guid: SimpleNamespace(guid=guid, name=None)  # type: ignore[method-assign]
+
+    assert manager.breezer_name(BREEZER_GUID) == BREEZER_GUID
+
+
 def test_pid_manager_arming_requests_immediate_refresh() -> None:
     """Test arming local PID kicks an immediate coordinator refresh."""
     hass = FakeHass("1000")
@@ -256,18 +276,13 @@ def test_pid_manager_async_stop_disarms_controllers() -> None:
 
 
 def test_pid_manager_extra_attributes_default_for_unconfigured_pid() -> None:
-    """Test PID attributes are stable when no runtime controller exists."""
+    """Test PID attributes stay lightweight when no controller exists."""
     coordinator = FakeCoordinator(_device(speed=1))
     manager = TionPidManager(FakeHass("1000"), FakeDisabledConfigEntry(), coordinator)
 
     assert manager.extra_state_attributes(BREEZER_GUID) == {
         "pid_active": False,
-        "pid_source_entity_id": SENSOR_ENTITY_ID,
-        "pid_source_co2": None,
-        "pid_error": None,
-        "pid_output_speed": None,
         "pid_status": PID_STATUS_INACTIVE,
-        "pid_last_update": None,
     }
 
 
@@ -291,6 +306,40 @@ def test_plan_breezer_returns_breezer_command_for_changed_output() -> None:
     assert (
         manager.extra_state_attributes(BREEZER_GUID)["pid_status"] == PID_STATUS_RUNNING
     )
+
+
+def test_pid_manager_extra_attributes_omit_calculation_details() -> None:
+    """Test PID calculation details stay out of persisted attributes."""
+    coordinator = FakeCoordinator(_device(speed=1))
+    manager = _armed_manager(coordinator)
+
+    manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+
+    assert manager.extra_state_attributes(BREEZER_GUID) == {
+        "pid_active": True,
+        "pid_status": PID_STATUS_RUNNING,
+    }
+
+
+def test_plan_breezer_logs_pid_calculation_with_breezer_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test PID calculation details are logged with the breezer name."""
+    coordinator = FakeCoordinator(_device(speed=1))
+    manager = _armed_manager(coordinator)
+    caplog.set_level(logging.DEBUG, logger="custom_components.tion.pid_manager")
+
+    manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+
+    assert "Breezer: PID calculation" in caplog.text
+    assert BREEZER_GUID not in caplog.text
+    assert "p=100.0" in caplog.text
+    assert "i=0.0" in caplog.text
+    assert "d=0.0" in caplog.text
+    assert "raw_output=120.0" in caplog.text
+    assert "min_speed=0" in caplog.text
+    assert "max_speed=6" in caplog.text
+    assert "pid_output_speed=6" in caplog.text
 
 
 def test_plan_breezer_returns_none_for_unchanged_manual_output() -> None:
@@ -528,7 +577,9 @@ def test_schedule_intent_eager_start_suspends_on_send() -> None:
         entry = _EagerConfigEntry()
         manager = TionPidManager(FakeHass("1000"), entry, coordinator)
         manager.start_breezer_pid(BREEZER_GUID)
-        intent = PidIntent(breezer_guid=BREEZER_GUID, breezer_command=_breezer_command())
+        intent = PidIntent(
+            breezer_guid=BREEZER_GUID, breezer_command=_breezer_command()
+        )
 
         manager.schedule_intent(intent)
 
@@ -539,7 +590,11 @@ def test_schedule_intent_eager_start_suspends_on_send() -> None:
         for task in entry.tasks:
             await task
         assert coordinator.commands == [
-            {**asdict(_breezer_command()), "request_refresh": False, "track_stale": False}
+            {
+                **asdict(_breezer_command()),
+                "request_refresh": False,
+                "track_stale": False,
+            }
         ]
 
     asyncio.run(_run())

@@ -32,6 +32,9 @@ class PidOutput:
     """Calculated PID output mapped to a Tion speed command."""
 
     error: float
+    p_output: float
+    i_output: float
+    d_output: float
     raw_output: float
     speed: int
     is_on: bool
@@ -78,9 +81,8 @@ class PidController:
         if elapsed > 0 and self.state.last_error is not None:
             d_output = self.coefficients.kd * (error - self.state.last_error) / elapsed
 
-        raw_output = (
-            self.coefficients.base_output + p_output + self.state.i_output + d_output
-        )
+        i_output = self.state.i_output
+        raw_output = self.coefficients.base_output + p_output + i_output + d_output
 
         self.state.last_error = error
         self.state.last_time = now
@@ -88,6 +90,9 @@ class PidController:
         if max_allowed == 0:
             return PidOutput(
                 error=error,
+                p_output=p_output,
+                i_output=i_output,
+                d_output=d_output,
                 raw_output=raw_output,
                 speed=0,
                 is_on=False,
@@ -101,6 +106,9 @@ class PidController:
 
         return PidOutput(
             error=error,
+            p_output=p_output,
+            i_output=i_output,
+            d_output=d_output,
             raw_output=raw_output,
             speed=speed,
             is_on=speed > 0,
