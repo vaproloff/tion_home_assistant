@@ -3,7 +3,7 @@
 [![HACS validation](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml)
 [![Hassfest](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.1%2B-blue)
-![Version](https://img.shields.io/badge/version-2026.6.0-blue)
+![Version](https://img.shields.io/badge/version-2026.6.1-blue)
 ![HACS](https://img.shields.io/badge/HACS-Custom-orange)
 [![GitHub stars](https://img.shields.io/github/stars/vaproloff/tion_home_assistant?style=social)](https://github.com/vaproloff/tion_home_assistant/stargazers)
 
@@ -78,7 +78,7 @@ This is a custom HomeAssistant integration for Tion Breezer 3S/4S, MagicAir and 
 
 Интеграция использует стандартные действия HomeAssistant, поэтому её можно подключать к автоматизациям, скриптам, дашбордам и голосовым сценариям без отдельных custom-сервисов.
 
-## Пресеты скорости бризера
+## Пресеты скорости бризера  (Experimental)
 
 Пресеты позволяют сохранить несколько профилей скорости бризера и переключаться между ними одним выбором в карточке бризера. Удобно для типовых сценариев: тихий ночной режим, экономичный режим днём или проветривание на максимуме.
 
@@ -113,7 +113,7 @@ This is a custom HomeAssistant integration for Tion Breezer 3S/4S, MagicAir and 
 - Пресеты и локальный PID независимы: PID считает фактическую скорость по внешнему CO2, а пресеты переключают режим бризера и задают границы или скорость.
 - Если отредактировать значения уже активного пресета, на ближайшем обновлении облако ещё сообщит прежние значения, и пресет сбросится в `Без пресета`. Чтобы применить новые значения, выберите пресет заново.
 
-## Локальный PID по внешнему датчику CO2
+## Локальный PID по внешнему датчику CO2 (Experimental)
 
 Обычный Авто-режим Tion работает через станцию MagicAir: зона переводится в cloud `AUTO`, а скорость бризера выбирает облако Tion. Локальный PID нужен для другого сценария: если у вас есть внешний датчик CO2, уже добавленный в HomeAssistant как `sensor`, интеграция может сама рассчитывать скорость бризера и держать зону MagicAir в ручном режиме.
 
