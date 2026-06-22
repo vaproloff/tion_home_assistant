@@ -3,22 +3,32 @@
   "config": {
     "step": {
       "user": {
-        "title": "Add new Tion configuration",
-        "description": "Please enter your Tion account credentials",
+        "title": "Add Tion account",
+        "description": "Sign in with the same Tion account used in the official app. Home Assistant will validate the credentials and load available locations, zones, and devices.",
         "data": {
           "username": "Username",
           "password": "Password"
+        },
+        "data_description": {
+          "username": "Tion account login, usually an email address.",
+          "password": "Tion account password. It is stored in the integration settings so Home Assistant can refresh auth tokens."
         }
       },
       "reauth_confirm": {
-        "description": "Please enter your Tion account password",
+        "title": "Update Tion credentials",
+        "description": "Home Assistant can no longer authenticate with Tion. Enter the current password for the already configured account; use Add integration to connect a different account.",
         "data": {
           "password": "Password"
+        },
+        "data_description": {
+          "password": "Current password for this Tion account."
         }
       }
     },
     "abort": {
-      "already_configured": "Account is already configured"
+      "already_configured": "This Tion account is already configured.",
+      "reauth_successful": "Tion credentials were updated successfully. The integration has been reloaded.",
+      "wrong_account": "The password belongs to a different Tion account. Enter the password for the account already configured."
     },
     "error": {
       "cannot_connect": "Failed to connect",
@@ -29,26 +39,32 @@
   "options": {
     "step": {
       "init": {
+        "title": "Tion options",
+        "description": "Choose what to configure. Option changes are saved only when you return to this step and select Done.",
         "data": {
           "scan_interval": "API poll interval",
           "options_action": "Action"
         },
         "data_description": {
-          "scan_interval": "Tion devices data minimum update period.",
-          "options_action": "Save options, open local PID settings, or configure presets."
+          "scan_interval": "Minimum time in seconds between Tion cloud API polls. Lower values refresh faster but make more cloud requests.",
+          "options_action": "Open local PID settings, configure speed presets, or select Done to save all pending option changes."
         }
       },
       "local_pid": {
+        "title": "Local CO2 PID",
+        "description": "Local PID lets Home Assistant control one breezer from an external CO2 sensor. Select a breezer and an action; changes are applied after the final Done on the main options step.",
         "data": {
           "breezer_guid": "Breezer for external CO2 control",
           "local_pid_action": "Local PID action"
         },
         "data_description": {
-          "breezer_guid": "Select a breezer to configure, update, or remove its local PID controller.",
-          "local_pid_action": "Choose what to do with local PID settings for the selected breezer."
+          "breezer_guid": "Breezer that should use an external Home Assistant CO2 sensor instead of Tion cloud auto control.",
+          "local_pid_action": "Configure the selected breezer, remove its PID settings, or return without changing local PID settings."
         }
       },
       "breezer": {
+        "title": "Configure local PID",
+        "description": "The default PID coefficients are recommended for typical setups. Change them only if you understand PID tuning. Saving this form returns to the local PID menu; use Done on the main options step to apply changes.",
         "data": {
           "pid_enabled": "Enable local CO2 PID control",
           "co2_sensor_entity_id": "External CO2 sensor",
@@ -58,68 +74,77 @@
           "pid_kd": "PID derivative gain"
         },
         "data_description": {
-          "pid_enabled": "When enabled, climate fan Auto uses the external CO2 sensor and keeps the Tion zone in manual mode.",
-          "co2_sensor_entity_id": "The sensor must expose a numeric CO2 value in ppm.",
-          "pid_base_output": "Base output in percent before PID correction. Default: 20.",
-          "pid_kp": "Default: 0.5.",
-          "pid_ki": "Default: 0.002.",
-          "pid_kd": "Default: 0.0."
+          "pid_enabled": "When enabled, selecting Fan Auto on this breezer starts local PID control and keeps the Tion zone in manual mode.",
+          "co2_sensor_entity_id": "Required when enabled. Select a Home Assistant sensor with CO2 device class and a numeric ppm value.",
+          "pid_base_output": "Baseline output in percent before PID correction. Default: 20. Keep the default unless the breezer under-ventilates near the target.",
+          "pid_kp": "Default: 0.5. Higher values react more strongly to the current CO2 error.",
+          "pid_ki": "Default: 0.001. Integral gain accumulates long-running error; increase carefully to avoid overshoot.",
+          "pid_kd": "Default: 0.0. Usually leave this at 0 because CO2 sensors often produce noisy derivative signals."
         }
       },
       "presets": {
+        "title": "Speed presets",
+        "description": "Configure speed presets separately for each breezer. Preset changes are applied after the final Done on the main options step.",
         "data": {
           "breezer_guid": "Breezer",
           "presets_action": "Preset action"
         },
         "data_description": {
-          "breezer_guid": "Select a breezer to add, edit, or remove its speed presets.",
-          "presets_action": "Choose what to do with presets for the selected breezer."
+          "breezer_guid": "Breezer whose climate preset list should be changed.",
+          "presets_action": "Add a new preset, edit speed values for an existing preset, remove a preset, or return to the main options step."
         }
       },
       "preset_add": {
+        "title": "Add preset",
+        "description": "Choose a Home Assistant preset name and how it should control this breezer. To change a preset type later, remove it and add it again.",
         "data": {
           "preset_name": "Preset",
           "type": "Preset type"
         },
         "data_description": {
-          "preset_name": "Pick a preset to configure for this breezer.",
-          "type": "Auto sets zone auto-mode speed limits; manual sets a fixed speed."
+          "preset_name": "Preset name to expose on this breezer climate entity.",
+          "type": "Auto stores minimum and maximum Auto-mode speeds; Manual stores one fixed fan speed."
         }
       },
       "preset_config": {
         "title": "Configure preset {preset_name}",
+        "description": "Set the speeds for this preset. Available speed range is limited by the selected breezer model.",
         "data": {
           "min_speed": "Minimum speed",
           "max_speed": "Maximum speed",
           "speed": "Speed"
         },
         "data_description": {
-          "min_speed": "Lower speed limit applied in the zone auto mode.",
-          "max_speed": "Upper speed limit applied in the zone auto mode.",
-          "speed": "Fixed manual speed applied to the breezer."
+          "min_speed": "Lower speed limit used when the Auto preset is active.",
+          "max_speed": "Upper speed limit used when the Auto preset is active. It cannot be lower than the minimum speed.",
+          "speed": "Fixed fan speed used when the Manual preset is active."
         }
       },
       "preset_edit": {
+        "title": "Edit preset",
+        "description": "Select an existing preset to edit its speed values. The preset type cannot be changed here.",
         "data": {
           "preset_name": "Preset"
         },
         "data_description": {
-          "preset_name": "Pick a preset to edit."
+          "preset_name": "Preset whose speed values should be edited."
         }
       },
       "preset_remove": {
+        "title": "Remove preset",
+        "description": "Select a preset to remove from this breezer. Removal is saved after the final Done on the main options step.",
         "data": {
           "preset_name": "Preset"
         },
         "data_description": {
-          "preset_name": "Pick a preset to remove."
+          "preset_name": "Preset that should be removed from this breezer."
         }
       }
     },
     "error": {
       "required": "Required",
       "min_above_max": "Minimum speed must not be greater than maximum speed",
-      "all_presets_configured": "All presets already configured"
+      "all_presets_configured": "All supported preset names are already configured for this breezer"
     }
   },
   "selector": {
