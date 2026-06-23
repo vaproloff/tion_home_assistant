@@ -193,11 +193,23 @@ def test_restore_rehydrates_active_and_saved() -> None:
     assert controller.restore_attributes() == {
         ATTR_SAVED_PRESET: {"type": "manual", "speed": 3}
     }
-    assert controller.reconcile(AutoPreset(2, 5)) is False
-    assert controller.preset_mode == "eco"
-
     assert controller.reconcile(AutoPreset(2, 5)) is True
     assert controller.preset_mode == PRESET_NONE
+
+
+def test_checkpoint_restores_active_and_saved() -> None:
+    """Test checkpoint can roll back an optimistic preset transition."""
+    controller = _controller()
+    controller.activate("eco", ManualPreset(3))
+    checkpoint = controller.checkpoint()
+
+    controller.activate("boost", AutoPreset(1, 2))
+    controller.restore_checkpoint(checkpoint)
+
+    assert controller.preset_mode == "eco"
+    assert controller.restore_attributes() == {
+        ATTR_SAVED_PRESET: {"type": "manual", "speed": 3}
+    }
 
 
 def test_restore_without_saved_clears_saved() -> None:

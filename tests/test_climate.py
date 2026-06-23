@@ -1,6 +1,7 @@
 """Tests for Tion climate entities."""
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ from custom_components.tion.climate import TionClimate
 from custom_components.tion.const import TionDeviceType, ZoneMode
 from custom_components.tion.presets import ATTR_SAVED_PRESET, TionPresetController
 from homeassistant.components.climate import ATTR_PRESET_MODE, FAN_AUTO, PRESET_NONE
+from homeassistant.exceptions import HomeAssistantError
 
 BREEZER_GUID = "breezer-guid"
 PID_BREEZER_GUID = "pid-breezer-guid"
@@ -189,6 +191,7 @@ def _preset_climate(
     """Return a minimal climate entity wired with a preset controller."""
     entity = _climate(pid_manager, zone_devices=zone_devices)
     entity._presets = TionPresetController(presets or {})  # noqa: SLF001
+    entity._preset_apply_lock = asyncio.Lock()  # noqa: SLF001
     entity._speed_min_set = speed_min_set  # noqa: SLF001
     entity._speed_max_set = speed_max_set  # noqa: SLF001
     entity._mode = None  # noqa: SLF001
@@ -437,7 +440,115 @@ def test_climate_set_preset_none_restores_saved_intent() -> None:
     asyncio.run(entity.async_set_preset_mode(PRESET_NONE))
 
     assert entity.preset_mode == PRESET_NONE
+
     assert entity.speed == 2
+
+
+def test_climate_rolls_back_preset_when_apply_cancelled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test cancelled preset application restores the previous preset state."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"sleep": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        speed_min_set=1,
+        speed_max_set=4,
+        speed=4,
+    )
+    send_calls = 0
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        nonlocal send_calls
+        send_calls += 1
+        raise asyncio.CancelledError
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
+    caplog.set_level(logging.DEBUG, logger="custom_components.tion.climate")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(entity.async_set_preset_mode("sleep"))
+
+    assert send_calls == 1
+    assert entity.preset_mode == PRESET_NONE
+    assert entity.extra_state_attributes[ATTR_SAVED_PRESET] is None
+    assert "preset apply cancelled before confirmation" in caplog.text
+
+
+def test_climate_rolls_back_preset_when_apply_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test failed preset application restores the previous preset state."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"sleep": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        speed_min_set=1,
+        speed_max_set=4,
+        speed=4,
+    )
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        raise HomeAssistantError("boom")
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+    entity._send_zone = _send_zone  # noqa: SLF001
+    caplog.set_level(logging.DEBUG, logger="custom_components.tion.climate")
+
+    with pytest.raises(HomeAssistantError):
+        asyncio.run(entity.async_set_preset_mode("sleep"))
+
+    assert entity.preset_mode == PRESET_NONE
+    assert entity.extra_state_attributes[ATTR_SAVED_PRESET] is None
+    assert "preset apply failed before confirmation" in caplog.text
+
+
+def test_climate_serializes_preset_apply_and_retries_after_cancellation() -> None:
+    """Test a repeated preset call waits for rollback and sends again."""
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"sleep": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        speed_min_set=1,
+        speed_max_set=4,
+        speed=4,
+    )
+
+    async def _run() -> int:
+        send_started = asyncio.Event()
+        release_send = asyncio.Event()
+        send_calls = 0
+
+        async def _send_breezer(*, request_refresh: bool = True) -> bool:
+            nonlocal send_calls
+            send_calls += 1
+            send_started.set()
+            await release_send.wait()
+            return True
+
+        async def _send_zone(*, request_refresh: bool = True) -> bool:
+            return True
+
+        entity._send_breezer = _send_breezer  # noqa: SLF001
+        entity._send_zone = _send_zone  # noqa: SLF001
+
+        first = asyncio.create_task(entity.async_set_preset_mode("sleep"))
+        await send_started.wait()
+        second = asyncio.create_task(entity.async_set_preset_mode("sleep"))
+        await asyncio.sleep(0)
+        first.cancel()
+        release_send.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await second
+        return send_calls
+
+    assert asyncio.run(_run()) == 2
+    assert entity.preset_mode == "sleep"
 
 
 def test_climate_coordinator_update_resets_preset_on_manual_change() -> None:

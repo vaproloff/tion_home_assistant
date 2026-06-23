@@ -9,11 +9,7 @@ import asyncio
 from types import SimpleNamespace
 
 from custom_components.tion.client import TionLocation
-from custom_components.tion.coordinator import (
-    POST_COMMAND_STALE_GRACE,
-    TionData,
-    TionDataUpdateCoordinator,
-)
+from custom_components.tion.coordinator import TionData, TionDataUpdateCoordinator
 from custom_components.tion.pid_intent import BreezerCommand, PidIntent
 
 BREEZER_GUID = "breezer-guid"
@@ -261,29 +257,13 @@ def test_update_returns_cached_data_and_skips_pid_when_stale() -> None:
     assert pid_manager.planned is None
 
 
-def test_update_returns_cached_data_shortly_after_command_completion() -> None:
-    """Test post-command cloud lag does not overwrite optimistic state."""
+def test_update_accepts_cloud_data_after_command_completed_before_fetch() -> None:
+    """Test a completed command does not stale future fetches."""
     cached = TionData([_location(speed=6)])
     coordinator = _make_coordinator(
         client=FakeClient([_location(speed=1)]),
         data=cached,
         now=101.0,
-        last_completed=100.0,
-    )
-
-    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
-
-    assert result is cached
-    assert result.device(BREEZER_GUID).data.speed == 6
-
-
-def test_update_accepts_cloud_data_after_command_stale_grace() -> None:
-    """Test the post-command stale guard expires."""
-    cached = TionData([_location(speed=6)])
-    coordinator = _make_coordinator(
-        client=FakeClient([_location(speed=1)]),
-        data=cached,
-        now=100.0 + POST_COMMAND_STALE_GRACE,
         last_completed=100.0,
     )
 

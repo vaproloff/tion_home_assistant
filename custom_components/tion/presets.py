@@ -124,6 +124,14 @@ class AutoPreset(Preset):
         }
 
 
+@dataclass(frozen=True)
+class PresetControllerState:
+    """A restorable snapshot of preset controller state."""
+
+    active: str
+    saved: Preset | None
+
+
 class TionPresetController:
     """Manage speed presets for a single breezer.
 
@@ -141,7 +149,6 @@ class TionPresetController:
         }
         self._active = PRESET_NONE
         self._saved: Preset | None = None
-        self._restored_needs_confirmation = False
 
     @property
     def has_presets(self) -> bool:
@@ -162,19 +169,26 @@ class TionPresetController:
         """Return a configured preset by name, or None for PRESET_NONE/unknown."""
         return self._presets.get(name)
 
+    def checkpoint(self) -> PresetControllerState:
+        """Return the current preset state for rollback."""
+        return PresetControllerState(self._active, self._saved)
+
+    def restore_checkpoint(self, state: PresetControllerState) -> None:
+        """Restore a preset state captured before an optimistic transition."""
+        self._active = state.active
+        self._saved = state.saved
+
     def activate(self, name: str, current: Preset | None) -> Preset | None:
         """Switch to a preset (or PRESET_NONE), returning the preset to apply."""
         if name == PRESET_NONE:
             target = self._saved if self._saved is not None else current
             self._active = PRESET_NONE
             self._saved = None
-            self._restored_needs_confirmation = False
             return target
 
         if self._active == PRESET_NONE:
             self._saved = current
 
-        self._restored_needs_confirmation = False
         self._active = name
         return self._presets[name]
 
@@ -186,16 +200,11 @@ class TionPresetController:
         """
         if self._active == PRESET_NONE or current is None:
             return False
-        if current == self._presets[self._active]:
-            self._restored_needs_confirmation = False
-            return False
-        if self._restored_needs_confirmation:
-            self._restored_needs_confirmation = False
-            return False
-
-        self._active = PRESET_NONE
-        self._saved = None
-        return True
+        if current != self._presets[self._active]:
+            self._active = PRESET_NONE
+            self._saved = None
+            return True
+        return False
 
     def restore(self, active: str, saved: Preset | None) -> None:
         """Rehydrate state after a Home Assistant restart."""
@@ -203,7 +212,6 @@ class TionPresetController:
             return
         self._active = active
         self._saved = saved
-        self._restored_needs_confirmation = active != PRESET_NONE
 
     def restore_attributes(self) -> dict[str, dict[str, int | str] | None]:
         """Return the saved preset for the entity's extra_state_attributes."""

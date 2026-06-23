@@ -1,5 +1,6 @@
 """Support for Tion breezer."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -95,6 +96,7 @@ class TionClimate(
                 breezer.guid, {}
             )
         )
+        self._preset_apply_lock = asyncio.Lock()
         self._gate = breezer.data.gate
         self._filter_time_seconds = breezer.data.filter_time_seconds
         self._filter_need_replace = breezer.data.filter_need_replace
@@ -612,29 +614,66 @@ class TionClimate(
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set a preset by applying it (auto limits or manual speed)."""
-        if preset_mode not in self._presets.preset_modes:
-            _LOGGER.warning("%s: unsupported preset mode '%s'", self.name, preset_mode)
-            return
+        async with self._preset_apply_lock:
+            if preset_mode not in self._presets.preset_modes:
+                _LOGGER.warning(
+                    "%s: unsupported preset mode '%s'", self.name, preset_mode
+                )
+                return
 
-        if preset_mode == self._presets.preset_mode:
+            if preset_mode == self._presets.preset_mode:
+                _LOGGER.debug(
+                    "%s: no need to change preset: %s already set",
+                    self.name,
+                    preset_mode,
+                )
+                return
+
+            target = self._presets.preset(preset_mode)
+            if isinstance(target, AutoPreset) and FAN_AUTO not in self.fan_modes:
+                _LOGGER.warning(
+                    "%s: cannot apply auto preset '%s', Fan Auto is unavailable",
+                    self.name,
+                    preset_mode,
+                )
+                return
+
+            checkpoint = self._presets.checkpoint()
+            applied = self._presets.activate(preset_mode, Preset.snapshot(self))
             _LOGGER.debug(
-                "%s: no need to change preset: %s already set", self.name, preset_mode
+                "%s: applying preset '%s' as %s", self.name, preset_mode, applied
             )
-            return
+            try:
+                if applied is not None:
+                    await applied.apply(self)
+            except asyncio.CancelledError:
+                self._presets.restore_checkpoint(checkpoint)
+                self.async_write_ha_state()
+                _LOGGER.debug(
+                    "%s: preset apply cancelled before confirmation: preset=%s, applied=%s",
+                    self.name,
+                    preset_mode,
+                    applied,
+                )
+                raise
+            except Exception:
+                self._presets.restore_checkpoint(checkpoint)
+                self.async_write_ha_state()
+                _LOGGER.debug(
+                    "%s: preset apply failed before confirmation: preset=%s, applied=%s",
+                    self.name,
+                    preset_mode,
+                    applied,
+                    exc_info=True,
+                )
+                raise
 
-        target = self._presets.preset(preset_mode)
-        if isinstance(target, AutoPreset) and FAN_AUTO not in self.fan_modes:
-            _LOGGER.warning(
-                "%s: cannot apply auto preset '%s', Fan Auto is unavailable",
+            _LOGGER.debug(
+                "%s: preset '%s' applied successfully as %s",
                 self.name,
                 preset_mode,
+                applied,
             )
-            return
-
-        applied = self._presets.activate(preset_mode, Preset.snapshot(self))
-        _LOGGER.debug("%s: applying preset '%s' as %s", self.name, preset_mode, applied)
-        if applied is not None:
-            await applied.apply(self)
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set Tion breezer air gate."""
