@@ -201,17 +201,7 @@ def test_update_plans_and_commits_pid_on_fresh_data_when_active() -> None:
     """Test active PID plans on fresh data, applies intents, and schedules them."""
     intent = PidIntent(
         breezer_guid=BREEZER_GUID,
-        breezer_command=BreezerCommand(
-            guid=BREEZER_GUID,
-            is_on=True,
-            speed=6,
-            t_set=20,
-            speed_min_set=0,
-            speed_max_set=6,
-            heater_enabled=False,
-            heater_mode="maintenance",
-            gate=0,
-        ),
+        breezer_command=BreezerCommand(guid=BREEZER_GUID, is_on=True, speed=6),
     )
     pid_manager = FakePidManager(active=True, intents=[intent])
     coordinator = _make_coordinator(

@@ -182,9 +182,11 @@ class TionTargetCO2(TionNumber):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
-        await self._load()
-        self._target_co2 = value
-        await self._send()
+        lock_key = self.coordinator.zone_mode_command_key_for_device(self._device.guid)
+        async with self.coordinator.async_zone_mode_command(lock_key):
+            await self._load()
+            self._target_co2 = value
+            await self._send()
 
     async def _load(self, force=False) -> bool:
         await super()._load(force=force)
@@ -330,9 +332,10 @@ class TionMinSpeed(TionNumber):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
-        await self._load()
-        self._breezer_min_speed = value
-        await self._send()
+        async with self.coordinator.async_breezer_mode_command(self._device.guid):
+            await self._load()
+            self._breezer_min_speed = value
+            await self._send()
 
     async def _load(self, force=False) -> bool:
         if await super()._load(force=force):
@@ -428,9 +431,10 @@ class TionMaxSpeed(TionNumber):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
-        await self._load()
-        self._breezer_max_speed = value
-        await self._send()
+        async with self.coordinator.async_breezer_mode_command(self._device.guid):
+            await self._load()
+            self._breezer_max_speed = value
+            await self._send()
 
     async def _load(self, force=False) -> bool:
         if await super()._load(force=force):

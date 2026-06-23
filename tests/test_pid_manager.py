@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from dataclasses import asdict
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -142,6 +142,18 @@ class FakeCoordinator:
         self.commands.append(kwargs)
         return True
 
+    @asynccontextmanager
+    async def async_breezer_mode_command(self, guid: str):
+        """Provide a fake breezer command critical section."""
+        assert guid == self.device.guid
+        yield
+
+    @asynccontextmanager
+    async def async_zone_mode_command(self, guid: str):
+        """Provide a fake zone command critical section."""
+        assert guid == self.zone.guid
+        yield
+
     async def async_send_zone(self, **kwargs: Any) -> bool:
         """Record a fake zone command."""
         self.zone_commands.append(kwargs)
@@ -200,18 +212,25 @@ def _data(coordinator: FakeCoordinator) -> FakeData:
 
 
 def _breezer_command() -> BreezerCommand:
-    """Build a breezer command matching the fake device."""
-    return BreezerCommand(
-        guid=BREEZER_GUID,
-        is_on=True,
-        speed=6,
-        t_set=20,
-        speed_min_set=0,
-        speed_max_set=6,
-        heater_enabled=False,
-        heater_mode="maintenance",
-        gate=0,
-    )
+    """Build a breezer command with the PID-owned fields."""
+    return BreezerCommand(guid=BREEZER_GUID, is_on=True, speed=6)
+
+
+def _expected_breezer_send(*, speed: int = 6, speed_max_set: int = 6) -> dict[str, Any]:
+    """Build the full breezer payload expected by the cloud API."""
+    return {
+        "guid": BREEZER_GUID,
+        "is_on": True,
+        "speed": speed,
+        "t_set": 20,
+        "speed_min_set": 0,
+        "speed_max_set": speed_max_set,
+        "heater_enabled": False,
+        "heater_mode": "maintenance",
+        "gate": 0,
+        "request_refresh": False,
+        "track_stale": False,
+    }
 
 
 def _armed_manager(coordinator: FakeCoordinator) -> TionPidManager:
@@ -460,8 +479,24 @@ def test_async_execute_sends_zone_then_breezer() -> None:
         }
     ]
     assert coordinator.commands == [
-        {**asdict(_breezer_command()), "request_refresh": False, "track_stale": False}
+        _expected_breezer_send()
     ]
+
+
+def test_async_execute_rebuilds_breezer_payload_from_current_device() -> None:
+    """Test stale PID intents do not overwrite fresher breezer limits."""
+    coordinator = FakeCoordinator(_device(speed=4))
+    coordinator.device.data.speed_max_set = 2
+    manager = _armed_manager(coordinator)
+    intent = PidIntent(
+        breezer_guid=BREEZER_GUID,
+        breezer_command=BreezerCommand(guid=BREEZER_GUID, is_on=True, speed=4),
+    )
+
+    asyncio.run(manager.async_execute(intent))
+
+    assert coordinator.commands[0]["speed"] == 2
+    assert coordinator.commands[0]["speed_max_set"] == 2
 
 
 def test_async_execute_zone_failure_skips_breezer_and_pauses() -> None:
@@ -526,7 +561,7 @@ def test_schedule_intent_backgrounds_execution() -> None:
 
     asyncio.run(_drain())
     assert coordinator.commands == [
-        {**asdict(_breezer_command()), "request_refresh": False, "track_stale": False}
+        _expected_breezer_send()
     ]
 
 
@@ -590,11 +625,7 @@ def test_schedule_intent_eager_start_suspends_on_send() -> None:
         for task in entry.tasks:
             await task
         assert coordinator.commands == [
-            {
-                **asdict(_breezer_command()),
-                "request_refresh": False,
-                "track_stale": False,
-            }
+            _expected_breezer_send()
         ]
 
     asyncio.run(_run())

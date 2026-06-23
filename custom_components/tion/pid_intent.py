@@ -1,7 +1,7 @@
 """Value objects describing a planned local PID actuation."""
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .coordinator import TionData
@@ -17,21 +17,15 @@ class ZoneCommand:
 
 @dataclass(frozen=True)
 class BreezerCommand:
-    """Desired breezer state to send to the cloud.
+    """Breezer actuation requested by local PID.
 
-    Field set matches the kwargs of ``TionClient.send_breezer`` so that
-    ``dataclasses.asdict(command)`` splats straight into ``async_send_breezer``.
+    The PID owns only on/off and speed. Full cloud payload fields are read from
+    the current device state when the command is committed.
     """
 
     guid: str
     is_on: bool
     speed: int
-    t_set: int
-    speed_min_set: int
-    speed_max_set: int
-    heater_enabled: Any
-    heater_mode: Any
-    gate: Any
 
 
 @dataclass(frozen=True)

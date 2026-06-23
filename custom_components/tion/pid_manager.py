@@ -1,6 +1,5 @@
 """Runtime manager for local Tion CO2 PID control."""
 
-from dataclasses import asdict
 import logging
 from typing import Any
 
@@ -230,12 +229,6 @@ class _TionBreezerPidController:
                 guid=device.guid,
                 is_on=output.is_on,
                 speed=output.speed,
-                t_set=t_set,
-                speed_min_set=speed_min,
-                speed_max_set=speed_max,
-                heater_enabled=device.data.heater_enabled,
-                heater_mode=device.data.heater_mode,
-                gate=device.data.gate,
             )
 
         if zone_command is None and breezer_command is None:
@@ -430,13 +423,16 @@ class TionPidManager:
         controller = self._controllers.get(intent.breezer_guid)
         if intent.zone_command is not None:
             try:
-                await self.coordinator.async_send_zone(
-                    guid=intent.zone_command.guid,
-                    mode=ZoneMode.MANUAL,
-                    co2=intent.zone_command.co2,
-                    request_refresh=False,
-                    track_stale=False,
-                )
+                async with self.coordinator.async_zone_mode_command(
+                    intent.zone_command.guid
+                ):
+                    await self.coordinator.async_send_zone(
+                        guid=intent.zone_command.guid,
+                        mode=ZoneMode.MANUAL,
+                        co2=intent.zone_command.co2,
+                        request_refresh=False,
+                        track_stale=False,
+                    )
             except TionError as err:
                 _LOGGER.warning(
                     "%s: unable to disable MagicAir auto mode for local PID: %s",
@@ -448,11 +444,20 @@ class TionPidManager:
                 return
         if intent.breezer_command is not None:
             try:
-                await self.coordinator.async_send_breezer(
-                    **asdict(intent.breezer_command),
-                    request_refresh=False,
-                    track_stale=False,
-                )
+                command = intent.breezer_command
+                async with self.coordinator.async_breezer_mode_command(command.guid):
+                    payload = self._breezer_send_payload(command)
+                    if payload is None:
+                        _LOGGER.debug(
+                            "%s: unable to build local PID breezer payload from current device state",
+                            self.breezer_name(intent.breezer_guid),
+                        )
+                        if controller is not None:
+                            controller.pause(PID_STATUS_PAUSED_INVALID_DEVICE_DATA)
+                        return
+                    await self.coordinator.async_send_breezer(
+                        **payload, request_refresh=False, track_stale=False
+                    )
             except TionError as err:
                 _LOGGER.warning(
                     "%s: unable to send local PID command: %s",
@@ -461,6 +466,36 @@ class TionPidManager:
                 )
                 if controller is not None:
                     controller.pause(PID_STATUS_SEND_FAILED)
+
+    def _breezer_send_payload(self, command: BreezerCommand) -> dict[str, Any] | None:
+        """Build a full breezer payload from a PID command and current state."""
+        device = self.coordinator.get_device(command.guid)
+        if device is None or not device.valid or not device.is_online:
+            return None
+
+        device_max_speed = _int_or_default(device.max_speed, None)
+        t_set = _int_or_default(device.data.t_set, None)
+        speed_min_set = _int_or_default(device.data.speed_min_set, 0)
+        speed_max_set = _int_or_default(device.data.speed_max_set, device_max_speed)
+        if t_set is None or speed_min_set is None or speed_max_set is None:
+            return None
+
+        speed = (
+            max(speed_min_set, min(command.speed, speed_max_set))
+            if command.is_on
+            else 0
+        )
+        return {
+            "guid": command.guid,
+            "is_on": command.is_on,
+            "speed": speed,
+            "t_set": t_set,
+            "speed_min_set": speed_min_set,
+            "speed_max_set": speed_max_set,
+            "heater_enabled": device.data.heater_enabled,
+            "heater_mode": device.data.heater_mode,
+            "gate": device.data.gate,
+        }
 
     def schedule_intent(self, intent: PidIntent) -> None:
         """Background the network dispatch of a planned intent."""

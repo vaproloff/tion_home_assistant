@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -72,6 +73,12 @@ class FakeCoordinator:
     def get_device_zone(self, guid: str) -> SimpleNamespace:
         """Return fake zone for the breezer."""
         return self.zone
+
+    @asynccontextmanager
+    async def async_breezer_mode_command(self, guid: str):
+        """Provide a fake breezer command critical section."""
+        assert guid
+        yield
 
 
 def _device(guid: str) -> SimpleNamespace:

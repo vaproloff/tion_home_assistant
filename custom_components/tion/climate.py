@@ -579,13 +579,15 @@ class TionClimate(
         inline refresh cannot read stale cloud limits and trip reconcile; the
         trailing breezer send carries the single refresh.
         """
-        self._speed_min_set = min_speed
-        self._speed_max_set = max_speed
-        if self.speed is not None:
-            self.speed = max(min_speed, min(self.speed, max_speed))
-        self.async_write_ha_state()
-        await self._enter_auto_mode(request_refresh=False)
-        await self._send_breezer(request_refresh=True)
+        async with self.coordinator.async_breezer_mode_command(self._breezer_guid):
+            self._load_breezer()
+            self._speed_min_set = min_speed
+            self._speed_max_set = max_speed
+            if self.speed is not None:
+                self.speed = max(min_speed, min(self.speed, max_speed))
+            self.async_write_ha_state()
+            await self._enter_auto_mode(request_refresh=False)
+            await self._send_breezer(request_refresh=True)
 
     def _set_pid(self, running: bool) -> bool:
         """Start or stop the breezer's local PID, returning True if it changed."""

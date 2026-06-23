@@ -33,17 +33,11 @@ def _data(*, speed: int, is_on: bool) -> TionData:
 
 
 def _breezer_command(*, speed: int, is_on: bool) -> BreezerCommand:
-    """Build a breezer command with arbitrary but valid fields."""
+    """Build a breezer command with the PID-owned fields."""
     return BreezerCommand(
         guid=BREEZER_GUID,
         is_on=is_on,
         speed=speed,
-        t_set=20,
-        speed_min_set=0,
-        speed_max_set=6,
-        heater_enabled=False,
-        heater_mode="maintenance",
-        gate=0,
     )
 
 

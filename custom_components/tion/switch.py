@@ -1,6 +1,7 @@
 """Platform for switch integration."""
 
 import abc
+from contextlib import AbstractAsyncContextManager, nullcontext
 import logging
 from typing import Any
 
@@ -112,15 +113,21 @@ class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc
 
     async def async_turn_on(self) -> None:
         """Turn on Tion switch."""
-        await self._load()
-        self._is_on = True
-        await self._send()
+        async with self._async_command_lock():
+            await self._load()
+            self._is_on = True
+            await self._send()
 
     async def async_turn_off(self) -> None:
         """Turn off Tion switch."""
-        await self._load()
-        self._is_on = False
-        await self._send()
+        async with self._async_command_lock():
+            await self._load()
+            self._is_on = False
+            await self._send()
+
+    def _async_command_lock(self) -> AbstractAsyncContextManager[None]:
+        """Return the command critical section for this switch."""
+        return nullcontext()
 
     async def _load(self, force=False) -> bool:
         if device_data := self.coordinator.get_device(self._device.guid):
@@ -252,6 +259,11 @@ class TionAutoModeSwitch(TionSwitch):
     def icon(self) -> str:
         """Return the MDI icon."""
         return "mdi:fan-auto" if self._is_on else "mdi:fan"
+
+    def _async_command_lock(self) -> AbstractAsyncContextManager[None]:
+        """Return the zone command critical section."""
+        lock_key = self.coordinator.zone_mode_command_key_for_device(self._device.guid)
+        return self.coordinator.async_zone_mode_command(lock_key)
 
     @property
     def _auto_enabled(self) -> bool | None:
@@ -396,6 +408,10 @@ class TionBreezerHeaterSwitch(TionSwitch):
     def icon(self) -> str:
         """Return the MDI icon."""
         return "mdi:radiator" if self._is_on else "mdi:radiator-disabled"
+
+    def _async_command_lock(self) -> AbstractAsyncContextManager[None]:
+        """Return the breezer command critical section."""
+        return self.coordinator.async_breezer_mode_command(self._device.guid)
 
     @property
     def _heater_enabled(self) -> bool:
