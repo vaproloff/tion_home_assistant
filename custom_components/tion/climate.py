@@ -448,45 +448,64 @@ class TionClimate(
             _LOGGER.warning("%s: unsupported hvac mode '%s'", self.name, hvac_mode)
             return
 
-        if hvac_mode == self.hvac_mode:
+        # OFF also flips the zone into MANUAL, so the whole transition runs under
+        # both resource locks. Order is always breezer-before-zone to match every
+        # other writer and avoid an AB-BA deadlock.
+        zone_key = self.coordinator.zone_mode_command_key_for_device(self._breezer_guid)
+        async with (
+            self.coordinator.async_breezer_mode_command(self._breezer_guid),
+            self.coordinator.async_zone_mode_command(zone_key),
+        ):
+            self._load_breezer()
+            self._load_zone()
+
+            if hvac_mode == self.hvac_mode:
+                _LOGGER.debug(
+                    "%s: no need to change HVAC mode: %s already set",
+                    self.name,
+                    hvac_mode,
+                )
+                return
+
             _LOGGER.debug(
-                "%s: no need to change HVAC mode: %s already set",
+                "%s: changing HVAC mode (%s -> %s)",
                 self.name,
+                self.hvac_mode,
                 hvac_mode,
             )
-            return
+            if hvac_mode == HVACMode.OFF:
+                self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
+                self._mode = ZoneMode.MANUAL
+                self._is_on = False
+                self.async_write_ha_state()
+                await self._send_zone(request_refresh=False)
+            else:
+                was_off = self.hvac_mode == HVACMode.OFF
+                if hvac_mode == HVACMode.HEAT:
+                    self.heater_enabled = True
+                elif hvac_mode == HVACMode.FAN_ONLY:
+                    self.heater_enabled = False
 
-        _LOGGER.debug(
-            "%s: changing HVAC mode (%s -> %s)", self.name, self.hvac_mode, hvac_mode
-        )
-        if hvac_mode == HVACMode.OFF:
-            self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
-            self._mode = ZoneMode.MANUAL
-            self._is_on = False
-            self.async_write_ha_state()
-            await self._send_zone(request_refresh=False)
-        else:
-            if hvac_mode == HVACMode.HEAT:
-                self.heater_enabled = True
-            elif hvac_mode == HVACMode.FAN_ONLY:
-                self.heater_enabled = False
+                if was_off:
+                    self._is_on = True
 
-            if self.hvac_mode == HVACMode.OFF:
-                self._is_on = True
+                self.async_write_ha_state()
 
-            self.async_write_ha_state()
-
-        await self._send_breezer()
+            await self._send_breezer()
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
-        if self._attr_supported_features & ClimateEntityFeature.TARGET_TEMPERATURE:
-            temperature = kwargs.get(ATTR_TEMPERATURE)
+        if not self._attr_supported_features & ClimateEntityFeature.TARGET_TEMPERATURE:
+            _LOGGER.warning("%s: service not supported", self.name)
+            return
 
-            if temperature is None:
-                _LOGGER.warning("%s: undefined target temperature", self.name)
-                return
+        temperature = kwargs.get(ATTR_TEMPERATURE)
+        if temperature is None:
+            _LOGGER.warning("%s: undefined target temperature", self.name)
+            return
 
+        async with self.coordinator.async_breezer_mode_command(self._breezer_guid):
+            self._load_breezer()
             if temperature == self.target_temperature:
                 _LOGGER.debug(
                     "%s: no need to change target temperature: %s already set",
@@ -496,10 +515,8 @@ class TionClimate(
                 return
 
             self._t_set = int(temperature)
+            self.async_write_ha_state()
             await self._send_breezer()
-
-        else:
-            _LOGGER.warning("%s: service not supported", self.name)
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         """Set new target fan mode (cloud/PID auto or a manual speed)."""
@@ -510,8 +527,6 @@ class TionClimate(
         if fan_mode == FAN_AUTO:
             await self._enter_auto_mode()
             return
-
-        self._set_pid(False)
 
         new_speed = None
         try:
@@ -524,53 +539,74 @@ class TionClimate(
                 e,
             )
 
-        mode_changed = self._mode != ZoneMode.MANUAL
-        speed_changed = new_speed is not None and self.speed != new_speed
+        # A manual speed pins the zone to MANUAL and pushes the breezer speed, so
+        # hold both resource locks (breezer before zone) for the whole sequence.
+        zone_key = self.coordinator.zone_mode_command_key_for_device(self._breezer_guid)
+        async with (
+            self.coordinator.async_breezer_mode_command(self._breezer_guid),
+            self.coordinator.async_zone_mode_command(zone_key),
+        ):
+            self._load_breezer()
+            self._load_zone()
+            self._set_pid(False)
 
-        if not mode_changed and not speed_changed:
-            return
+            mode_changed = self._mode != ZoneMode.MANUAL
+            speed_changed = new_speed is not None and self.speed != new_speed
 
-        if mode_changed:
-            _LOGGER.debug(
-                "%s: changing zone mode (%s -> %s)",
-                self.name,
-                self._mode,
-                ZoneMode.MANUAL,
-            )
-            self._mode = ZoneMode.MANUAL
-            self._set_swing_modes()
+            if not mode_changed and not speed_changed:
+                return
 
-        if speed_changed:
-            _LOGGER.debug(
-                "%s: changing breezer speed (%s -> %s)",
-                self.name,
-                self.speed,
-                new_speed,
-            )
-            self.speed = new_speed
+            if mode_changed:
+                _LOGGER.debug(
+                    "%s: changing zone mode (%s -> %s)",
+                    self.name,
+                    self._mode,
+                    ZoneMode.MANUAL,
+                )
+                self._mode = ZoneMode.MANUAL
+                self._set_swing_modes()
 
-        self.async_write_ha_state()
+            if speed_changed:
+                _LOGGER.debug(
+                    "%s: changing breezer speed (%s -> %s)",
+                    self.name,
+                    self.speed,
+                    new_speed,
+                )
+                self.speed = new_speed
 
-        if mode_changed:
-            await self._send_zone(request_refresh=not speed_changed)
+            self.async_write_ha_state()
 
-        if speed_changed:
-            await self._send_breezer()
+            if mode_changed:
+                await self._send_zone(request_refresh=not speed_changed)
+
+            if speed_changed:
+                await self._send_breezer()
 
     async def _enter_auto_mode(self, *, request_refresh: bool = True) -> None:
-        """Switch the breezer into Auto (local PID if configured, else cloud auto)."""
-        if self.coordinator.pid_manager.is_configured(self._breezer_guid):
-            # Local PID drives manual speeds, so the zone itself runs in MANUAL.
-            pid_started = self._set_pid(True)
-            transitioned = await self._transition_zone_mode(
-                ZoneMode.MANUAL, request_refresh=request_refresh
-            )
-            if not transitioned and pid_started:
-                self.async_write_ha_state()
-            return
+        """Switch the breezer into Auto (local PID if configured, else cloud auto).
 
-        self._set_pid(False)
-        await self._transition_zone_mode(ZoneMode.AUTO, request_refresh=request_refresh)
+        Holds the zone command lock so the mode transition is serialized with
+        other zone writers. Callers already holding the breezer lock (auto-limit
+        apply) keep the breezer-before-zone order, so this never deadlocks.
+        """
+        zone_key = self.coordinator.zone_mode_command_key_for_device(self._breezer_guid)
+        async with self.coordinator.async_zone_mode_command(zone_key):
+            self._load_zone()
+            if self.coordinator.pid_manager.is_configured(self._breezer_guid):
+                # Local PID drives manual speeds, so the zone itself runs in MANUAL.
+                pid_started = self._set_pid(True)
+                transitioned = await self._transition_zone_mode(
+                    ZoneMode.MANUAL, request_refresh=request_refresh
+                )
+                if not transitioned and pid_started:
+                    self.async_write_ha_state()
+                return
+
+            self._set_pid(False)
+            await self._transition_zone_mode(
+                ZoneMode.AUTO, request_refresh=request_refresh
+            )
 
     async def async_apply_auto_limits(self, min_speed: int, max_speed: int) -> None:
         """Apply auto-mode speed limits with a single refresh (two-phase write).

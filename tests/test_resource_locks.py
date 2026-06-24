@@ -4,9 +4,11 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 
+from custom_components.tion.climate import TionClimate
 from custom_components.tion.const import TionDeviceType
 from custom_components.tion.number import TionMaxSpeed
 from custom_components.tion.switch import TionBreezerHeaterSwitch
+from homeassistant.components.climate import ATTR_TEMPERATURE, ClimateEntityFeature
 
 BREEZER_GUID = "breezer-guid"
 
@@ -26,6 +28,10 @@ class FakeDeviceData:
     heater_installed = True
     heater_type = "ptc"
     gate = 0
+    t_in = 18
+    t_out = 22
+    filter_time_seconds = 1000
+    filter_need_replace = False
 
 
 class FakeDevice:
@@ -114,6 +120,22 @@ def _heater(coordinator: FakeCoordinator) -> TionBreezerHeaterSwitch:
     return entity
 
 
+def _climate(coordinator: FakeCoordinator) -> TionClimate:
+    """Return a climate entity bound to the fake coordinator."""
+    entity = TionClimate.__new__(TionClimate)
+    entity.coordinator = coordinator
+    entity._breezer_guid = BREEZER_GUID  # noqa: SLF001
+    entity._attr_name = "Breezer"  # noqa: SLF001
+    entity._type = TionDeviceType.BREEZER_4S  # noqa: SLF001
+    entity._attr_supported_features = (  # noqa: SLF001
+        ClimateEntityFeature.TARGET_TEMPERATURE
+    )
+    entity._zone_valid = True  # noqa: SLF001
+    entity.async_write_ha_state = lambda: None
+    entity._load_breezer()  # noqa: SLF001
+    return entity
+
+
 def test_breezer_commands_reload_after_waiting_for_same_device_lock() -> None:
     """Test a second full breezer payload keeps fields changed by the first."""
     coordinator = FakeCoordinator()
@@ -141,3 +163,35 @@ def test_breezer_commands_reload_after_waiting_for_same_device_lock() -> None:
     assert coordinator.commands[1]["heater_mode"] == "heat"
     assert coordinator.device.data.speed_max_set == 2
     assert coordinator.device.data.heater_mode == "heat"
+
+
+def test_climate_temperature_reloads_after_waiting_for_breezer_lock() -> None:
+    """Test a climate temperature send keeps limits changed by a concurrent write."""
+    coordinator = FakeCoordinator()
+    max_speed = _max_speed(coordinator)
+    climate = _climate(coordinator)
+
+    async def _run() -> None:
+        first = asyncio.create_task(max_speed.async_set_native_value(2))
+        await coordinator.send_started.wait()
+
+        second = asyncio.create_task(
+            climate.async_set_temperature(**{ATTR_TEMPERATURE: 25})
+        )
+        await asyncio.sleep(0)
+
+        coordinator.release_first_send.set()
+        await coordinator.second_send_started.wait()
+        coordinator.release_second_send.set()
+
+        await first
+        await second
+
+    asyncio.run(_run())
+
+    assert coordinator.commands[0]["speed_max_set"] == 2
+    # The temperature send waited for the lock, reloaded, and kept the new limit.
+    assert coordinator.commands[1]["speed_max_set"] == 2
+    assert coordinator.commands[1]["t_set"] == 25
+    assert coordinator.device.data.speed_max_set == 2
+    assert coordinator.device.data.t_set == 25

@@ -8,9 +8,16 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.tion.climate import TionClimate
-from custom_components.tion.const import TionDeviceType, ZoneMode
+from custom_components.tion.const import SwingMode, TionDeviceType, ZoneMode
 from custom_components.tion.presets import ATTR_SAVED_PRESET, TionPresetController
-from homeassistant.components.climate import ATTR_PRESET_MODE, FAN_AUTO, PRESET_NONE
+from homeassistant.components.climate import (
+    ATTR_PRESET_MODE,
+    FAN_AUTO,
+    PRESET_NONE,
+    ClimateEntityFeature,
+    HVACMode,
+)
+from homeassistant.const import ATTR_TEMPERATURE
 from homeassistant.exceptions import HomeAssistantError
 
 BREEZER_GUID = "breezer-guid"
@@ -69,16 +76,37 @@ class FakeCoordinator:
         """Initialize fake coordinator."""
         self.pid_manager = pid_manager
         self.zone = SimpleNamespace(devices=zone_devices or [])
+        # Real per-guid locks mirror the coordinator so tests catch a
+        # re-entrant double-acquire or breezer<->zone ordering deadlock.
+        self._breezer_locks: dict[str, asyncio.Lock] = {}
+        self._zone_locks: dict[str, asyncio.Lock] = {}
 
     def get_device_zone(self, guid: str) -> SimpleNamespace:
         """Return fake zone for the breezer."""
         return self.zone
 
+    def zone_mode_command_key_for_device(self, guid: str) -> str:
+        """Return the zone command lock key for a device guid."""
+        if (zone := self.get_device_zone(guid)) is not None and (
+            zone_guid := getattr(zone, "guid", None)
+        ) is not None:
+            return zone_guid
+
+        return guid
+
     @asynccontextmanager
     async def async_breezer_mode_command(self, guid: str):
         """Provide a fake breezer command critical section."""
         assert guid
-        yield
+        async with self._breezer_locks.setdefault(guid, asyncio.Lock()):
+            yield
+
+    @asynccontextmanager
+    async def async_zone_mode_command(self, guid: str):
+        """Provide a fake zone command critical section."""
+        assert guid
+        async with self._zone_locks.setdefault(guid, asyncio.Lock()):
+            yield
 
 
 def _device(guid: str) -> SimpleNamespace:
@@ -584,3 +612,211 @@ def test_climate_coordinator_update_resets_preset_on_manual_change() -> None:
     entity._handle_coordinator_update()  # noqa: SLF001
 
     assert entity.preset_mode == PRESET_NONE
+
+
+def _setter_climate(
+    *,
+    mode: ZoneMode | None = ZoneMode.MANUAL,
+    speed: int = 1,
+    gate: int = 0,
+    is_on: bool = True,
+    t_set: int = 20,
+    heater_mode: str = "maintenance",
+) -> TionClimate:
+    """Return a climate entity wired for direct setter tests."""
+    entity = _climate(FakePidManager())
+    entity._presets = TionPresetController({})  # noqa: SLF001
+    entity._type = TionDeviceType.BREEZER_4S  # noqa: SLF001
+    entity._breezer_valid = True  # noqa: SLF001
+    entity._zone_valid = True  # noqa: SLF001
+    entity._is_on = is_on  # noqa: SLF001
+    entity._mode = mode  # noqa: SLF001
+    entity._speed = speed  # noqa: SLF001
+    entity._gate = gate  # noqa: SLF001
+    entity._t_set = t_set  # noqa: SLF001
+    entity._heater_mode = heater_mode  # noqa: SLF001
+    entity._heater_enabled = None  # noqa: SLF001
+    entity._speed_min_set = 1  # noqa: SLF001
+    entity._speed_max_set = 4  # noqa: SLF001
+    entity._hvac_modes = [  # noqa: SLF001
+        HVACMode.OFF,
+        HVACMode.HEAT,
+        HVACMode.FAN_ONLY,
+    ]
+    entity._swing_modes = [  # noqa: SLF001
+        SwingMode.SWING_OUTSIDE,
+        SwingMode.SWING_INSIDE,
+    ]
+    entity._attr_supported_features = (  # noqa: SLF001
+        ClimateEntityFeature.TARGET_TEMPERATURE
+    )
+    entity.async_write_ha_state = lambda: None
+    entity._load_breezer = lambda *a, **k: None  # noqa: SLF001
+    entity._load_zone = lambda *a, **k: None  # noqa: SLF001
+    return entity
+
+
+def test_climate_set_temperature_sends_breezer() -> None:
+    """Test setting a new target temperature pushes a breezer command."""
+    entity = _setter_climate(t_set=20)
+    breezer_calls = 0
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        nonlocal breezer_calls
+        breezer_calls += 1
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_temperature(**{ATTR_TEMPERATURE: 25}))
+
+    assert entity._t_set == 25  # noqa: SLF001
+    assert breezer_calls == 1
+
+
+def test_climate_set_temperature_noop_when_unchanged() -> None:
+    """Test setting the current target temperature sends nothing."""
+    entity = _setter_climate(t_set=22)
+    breezer_calls = 0
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        nonlocal breezer_calls
+        breezer_calls += 1
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_temperature(**{ATTR_TEMPERATURE: 22}))
+
+    assert breezer_calls == 0
+
+
+def test_climate_set_swing_mode_sends_breezer_gate() -> None:
+    """Test selecting a swing mode pushes the new gate on a breezer command."""
+    entity = _setter_climate(gate=0)
+    breezer_calls = 0
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        nonlocal breezer_calls
+        breezer_calls += 1
+        return True
+
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_swing_mode(SwingMode.SWING_INSIDE))
+
+    assert entity._gate == 1  # noqa: SLF001
+    assert breezer_calls == 1
+
+
+def test_climate_set_hvac_off_sends_zone_and_breezer() -> None:
+    """Test turning the breezer off flips the zone to manual and powers down."""
+    entity = _setter_climate(is_on=True, mode=ZoneMode.AUTO)
+    zone_calls = 0
+    breezer_calls = 0
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        nonlocal zone_calls
+        zone_calls += 1
+        return True
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        nonlocal breezer_calls
+        breezer_calls += 1
+        return True
+
+    entity._send_zone = _send_zone  # noqa: SLF001
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_hvac_mode(HVACMode.OFF))
+
+    assert entity._is_on is False  # noqa: SLF001
+    assert entity._mode == ZoneMode.MANUAL  # noqa: SLF001
+    assert zone_calls == 1
+    assert breezer_calls == 1
+
+
+def test_climate_set_hvac_heat_turns_on_from_off() -> None:
+    """Test selecting heat from off powers up and enables the heater."""
+    entity = _setter_climate(is_on=False)
+    breezer_calls = 0
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        return True
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        nonlocal breezer_calls
+        breezer_calls += 1
+        return True
+
+    entity._send_zone = _send_zone  # noqa: SLF001
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_hvac_mode(HVACMode.HEAT))
+
+    assert entity._is_on is True  # noqa: SLF001
+    assert entity.heater_enabled is True
+    assert breezer_calls == 1
+
+
+def test_climate_set_fan_mode_manual_sends_zone_and_breezer() -> None:
+    """Test a manual fan speed pins the zone to manual and pushes the speed."""
+    entity = _setter_climate(mode=ZoneMode.AUTO, speed=1)
+    zone_calls = 0
+    breezer_calls = 0
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        nonlocal zone_calls
+        zone_calls += 1
+        return True
+
+    async def _send_breezer(*, request_refresh: bool = True) -> bool:
+        nonlocal breezer_calls
+        breezer_calls += 1
+        return True
+
+    entity._send_zone = _send_zone  # noqa: SLF001
+    entity._send_breezer = _send_breezer  # noqa: SLF001
+
+    asyncio.run(entity.async_set_fan_mode("3"))
+
+    assert entity._mode == ZoneMode.MANUAL  # noqa: SLF001
+    assert entity.speed == 3
+    assert zone_calls == 1
+    assert breezer_calls == 1
+
+
+def test_climate_enter_auto_mode_reloads_zone_before_send() -> None:
+    """Test entering auto reloads zone state so it never sends a stale CO2."""
+    entity = _climate(FakePidManager())
+    entity.coordinator.zone = SimpleNamespace(
+        guid="zone-guid",
+        name="Zone",
+        valid=True,
+        mode=SimpleNamespace(
+            current=ZoneMode.MANUAL, auto_set=SimpleNamespace(co2=800)
+        ),
+        devices=[],
+    )
+    entity.coordinator.last_update_success = True
+    entity._mode = None  # noqa: SLF001
+    entity._gate = None  # noqa: SLF001
+    entity._is_online = True  # noqa: SLF001
+    entity._breezer_valid = True  # noqa: SLF001
+    entity._zone_valid = True  # noqa: SLF001
+    entity.async_write_ha_state = lambda: None
+    sent: list[int | None] = []
+
+    async def _send_zone(*, request_refresh: bool = True) -> bool:
+        sent.append(entity._target_co2)  # noqa: SLF001
+        return True
+
+    entity._send_zone = _send_zone  # noqa: SLF001
+
+    # A concurrent writer already pushed a new target CO2 to the cloud.
+    entity.coordinator.zone.mode.auto_set.co2 = 900
+
+    asyncio.run(entity._enter_auto_mode())  # noqa: SLF001
+
+    assert entity._mode == ZoneMode.AUTO  # noqa: SLF001
+    assert sent == [900]
