@@ -77,6 +77,7 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         self._last_command_completed_at: float | None = None
         self._breezer_mode_locks: dict[str, asyncio.Lock] = {}
         self._zone_mode_locks: dict[str, asyncio.Lock] = {}
+        self._settings_locks: dict[str, asyncio.Lock] = {}
 
         super().__init__(
             hass,
@@ -98,6 +99,17 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
     async def async_zone_mode_command(self, guid: str):
         """Serialize read-modify-send commands for one zone mode payload."""
         lock = self._zone_mode_locks.setdefault(guid, asyncio.Lock())
+        async with lock:
+            yield
+
+    @asynccontextmanager
+    async def async_settings_command(self, guid: str):
+        """Serialize settings (backlight/sound) writes for one device.
+
+        Settings live on a separate endpoint from the breezer/zone payload the
+        reconciler drives, so they keep their own lightweight lock.
+        """
+        lock = self._settings_locks.setdefault(guid, asyncio.Lock())
         async with lock:
             yield
 

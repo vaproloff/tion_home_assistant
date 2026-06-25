@@ -159,19 +159,12 @@ class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc
                 f"Unable to update {self.name} settings: {err}"
             ) from err
 
-    async def _async_send_breezer(self, **kwargs) -> None:
-        """Send breezer data and refresh coordinator data."""
-        try:
-            await self.coordinator.async_send_breezer(**kwargs)
-        except TionError as err:
-            raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
-
-    async def _async_send_zone(self, **kwargs) -> None:
-        """Send zone data and refresh coordinator data."""
-        try:
-            await self.coordinator.async_send_zone(**kwargs)
-        except TionError as err:
-            raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
+    async def _push(self) -> None:
+        """Reconcile desired state now (optimistic + dispatch), then refresh."""
+        if self.coordinator.data is not None:
+            self.coordinator.reconciler.reconcile(self.coordinator.data)
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     @abc.abstractmethod
     async def _send(self) -> None:
@@ -202,6 +195,10 @@ class TionBacklightSwitch(TionSwitch):
     def icon(self) -> str:
         """Return the MDI icon."""
         return "mdi:led-on" if self._is_on else "mdi:led-off"
+
+    def _async_command_lock(self) -> AbstractAsyncContextManager[None]:
+        """Serialize backlight writes on the settings endpoint."""
+        return self.coordinator.async_settings_command(self._device.guid)
 
     async def _load(self, force=False) -> bool:
         """Update device data from API."""
@@ -260,11 +257,6 @@ class TionAutoModeSwitch(TionSwitch):
         """Return the MDI icon."""
         return "mdi:fan-auto" if self._is_on else "mdi:fan"
 
-    def _async_command_lock(self) -> AbstractAsyncContextManager[None]:
-        """Return the zone command critical section."""
-        lock_key = self.coordinator.zone_mode_command_key_for_device(self._device.guid)
-        return self.coordinator.async_zone_mode_command(lock_key)
-
     @property
     def _auto_enabled(self) -> bool | None:
         """Return if Auto mode enabled now."""
@@ -299,32 +291,16 @@ class TionAutoModeSwitch(TionSwitch):
         )
 
     async def _send(self) -> None:
-        """Send new switch data to API."""
+        """Write the zone auto/manual mode into the desired state."""
         zone: TionZone | None = self.coordinator.get_device_zone(self._device.guid)
 
         if not self.available or zone is None:
             raise HomeAssistantError(f"{self.name} zone is unavailable")
 
         mode = ZoneMode.AUTO if self._is_on else ZoneMode.MANUAL
-        try:
-            target_co2 = int(zone.mode.auto_set.co2)
-        except (TypeError, ValueError) as err:
-            raise HomeAssistantError(
-                f"Unable to read target CO2 for {self.name}"
-            ) from err
-
-        _LOGGER.debug(
-            "%s: pushing new zone data: mode=%s, target_co2=%s",
-            self.name,
-            mode,
-            target_co2,
-        )
-
-        await self._async_send_zone(
-            guid=zone.guid,
-            mode=mode,
-            co2=target_co2,
-        )
+        _LOGGER.debug("%s: writing desired zone mode=%s", self.name, mode)
+        self.coordinator.reconciler.set_zone(zone.guid, {"mode": mode})
+        await self._push()
 
 
 class TionBreezerSoundSwitch(TionSwitch):
@@ -351,6 +327,10 @@ class TionBreezerSoundSwitch(TionSwitch):
     def icon(self) -> str:
         """Return the MDI icon."""
         return "mdi:music-note" if self._is_on else "mdi:music-note-off"
+
+    def _async_command_lock(self) -> AbstractAsyncContextManager[None]:
+        """Serialize sound writes on the settings endpoint."""
+        return self.coordinator.async_settings_command(self._device.guid)
 
     async def _load(self, force=False) -> bool:
         """Update device data from API."""
@@ -409,10 +389,6 @@ class TionBreezerHeaterSwitch(TionSwitch):
         """Return the MDI icon."""
         return "mdi:radiator" if self._is_on else "mdi:radiator-disabled"
 
-    def _async_command_lock(self) -> AbstractAsyncContextManager[None]:
-        """Return the breezer command critical section."""
-        return self.coordinator.async_breezer_mode_command(self._device.guid)
-
     @property
     def _heater_enabled(self) -> bool:
         """Return if heater active now."""
@@ -440,58 +416,15 @@ class TionBreezerHeaterSwitch(TionSwitch):
         )
 
     async def _send(self) -> None:
-        """Send new switch data to API."""
+        """Write the breezer heater state into the desired state."""
         if not self.available:
             return
 
-        try:
-            breezer_t_set = int(self._device.data.t_set)
-        except (TypeError, ValueError) as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer temperature set value to int: %s. Error: %s",
-                self.name,
-                self._device.data.t_set,
-                e,
-            )
-            return
-
-        try:
-            breezer_speed = int(self._device.data.speed)
-        except (TypeError, ValueError) as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer speed value to int: %s. Error: %s",
-                self.name,
-                self._device.data.speed,
-                e,
-            )
-            return
-
         if self._device.type == TionDeviceType.BREEZER_4S:
-            self._device.data.heater_mode = Heater.ON if self._is_on else Heater.OFF
+            fields = {"heater_mode": Heater.ON if self._is_on else Heater.OFF}
         else:
-            self._device.data.heater_enabled = self._is_on
+            fields = {"heater_enabled": self._is_on}
 
-        _LOGGER.debug(
-            "%s: pushing new breezer data: is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
-            self.name,
-            self._device.data.is_on,
-            breezer_t_set,
-            breezer_speed,
-            self._device.data.speed_min_set,
-            self._device.data.speed_max_set,
-            self._device.data.heater_enabled,
-            self._device.data.heater_mode,
-            self._device.data.gate,
-        )
-
-        await self._async_send_breezer(
-            guid=self._device.guid,
-            is_on=self._device.data.is_on,
-            t_set=breezer_t_set,
-            speed=breezer_speed,
-            speed_min_set=self._device.data.speed_min_set,
-            speed_max_set=self._device.data.speed_max_set,
-            heater_enabled=self._device.data.heater_enabled,
-            heater_mode=self._device.data.heater_mode,
-            gate=self._device.data.gate,
-        )
+        _LOGGER.debug("%s: writing desired heater fields %s", self.name, fields)
+        self.coordinator.reconciler.set_breezer(self._device.guid, fields)
+        await self._push()
