@@ -22,6 +22,7 @@ from .client import (
     TionZone,
     TionZoneDevice,
 )
+from .reconciler import TionReconciler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         """Initialize the coordinator."""
         self.client = client
         self.pid_manager: TionPidManager
+        self.reconciler = TionReconciler(self)
         self._current_command_started_at: float | None = None
         self._last_command_completed_at: float | None = None
         self._breezer_mode_locks: dict[str, asyncio.Lock] = {}
@@ -135,14 +137,11 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
 
         data = TionData(locations)
 
+        # PID writes its desired fields first, then the single reconciler drives
+        # cloud state toward all desired state (PID + manual) in the background.
         if self.pid_manager.has_active_pid():
-            for intent in self.pid_manager.plan_all(data):
-                # Reflect the command optimistically on the published snapshot,
-                # then dispatch the network send in the background. If that send
-                # later fails the snapshot is briefly ahead of reality; the next
-                # poll reconciles it. Do not add a rollback here.
-                intent.apply(data)
-                self.pid_manager.schedule_intent(intent)
+            self.pid_manager.write_all(data)
+        self.reconciler.reconcile(data)
 
         return data
 

@@ -1,14 +1,12 @@
 """Tests for Tion local PID runtime manager."""
 
-import asyncio
 import logging
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from custom_components.tion.client import TionError, TionZoneDevice
+from custom_components.tion.client import TionZoneDevice
 from custom_components.tion.const import (
     CONF_CO2_SENSOR_ENTITY_ID,
     CONF_PID_BASE_OUTPUT,
@@ -19,13 +17,11 @@ from custom_components.tion.const import (
     CONF_PID_KP,
     ZoneMode,
 )
-from custom_components.tion.pid_intent import BreezerCommand, PidIntent, ZoneCommand
 from custom_components.tion.pid_manager import (
     PID_STATUS_INACTIVE,
     PID_STATUS_NOT_CONFIGURED,
     PID_STATUS_PAUSED_SENSOR_UNAVAILABLE,
     PID_STATUS_RUNNING,
-    PID_STATUS_SEND_FAILED,
     TionPidManager,
 )
 
@@ -94,14 +90,6 @@ class FakeConfigEntry:
     def __init__(self, options: dict | None = None) -> None:
         """Initialize fake config entry."""
         self.options = options or _pid_options()
-        self.background_tasks: list[Any] = []
-
-    def async_create_background_task(
-        self, hass: Any, target: Any, name: str, **kwargs: Any
-    ) -> SimpleNamespace:
-        """Record a scheduled background coroutine without running it."""
-        self.background_tasks.append(target)
-        return SimpleNamespace(name=name)
 
 
 class FakeDisabledConfigEntry(FakeConfigEntry):
@@ -112,6 +100,23 @@ class FakeDisabledConfigEntry(FakeConfigEntry):
         super().__init__(_pid_options(enabled=False))
 
 
+class FakeReconciler:
+    """Fake reconciler recording desired-state writes."""
+
+    def __init__(self) -> None:
+        """Initialize the fake reconciler."""
+        self.breezer: dict[str, dict[str, Any]] = {}
+        self.zone: dict[str, dict[str, Any]] = {}
+
+    def set_breezer(self, guid: str, fields: dict[str, Any]) -> None:
+        """Record a breezer desired-state write."""
+        self.breezer[guid] = dict(fields)
+
+    def set_zone(self, guid: str, fields: dict[str, Any]) -> None:
+        """Record a zone desired-state write."""
+        self.zone[guid] = dict(fields)
+
+
 class FakeCoordinator:
     """Fake Tion coordinator."""
 
@@ -120,9 +125,7 @@ class FakeCoordinator:
     ) -> None:
         """Initialize fake coordinator."""
         self.device = device
-        self.commands: list[dict[str, Any]] = []
-        self.zone_commands: list[dict[str, Any]] = []
-        self.refresh_requests = 0
+        self.reconciler = FakeReconciler()
         self.zone = SimpleNamespace(
             guid="zone-guid",
             name="Zone",
@@ -137,32 +140,8 @@ class FakeCoordinator:
         """Return the fake breezer by guid."""
         return self.device if guid == self.device.guid else None
 
-    async def async_send_breezer(self, **kwargs: Any) -> bool:
-        """Record a fake breezer command."""
-        self.commands.append(kwargs)
-        return True
-
-    @asynccontextmanager
-    async def async_breezer_mode_command(self, guid: str):
-        """Provide a fake breezer command critical section."""
-        assert guid == self.device.guid
-        yield
-
-    @asynccontextmanager
-    async def async_zone_mode_command(self, guid: str):
-        """Provide a fake zone command critical section."""
-        assert guid == self.zone.guid
-        yield
-
-    async def async_send_zone(self, **kwargs: Any) -> bool:
-        """Record a fake zone command."""
-        self.zone_commands.append(kwargs)
-        self.zone.mode.current = kwargs["mode"]
-        return True
-
     async def async_request_refresh(self) -> None:
-        """Record a refresh request."""
-        self.refresh_requests += 1
+        """Provide the refresh hook armed PID kicks on start."""
 
 
 class FakeData:
@@ -209,28 +188,6 @@ def _device(*, speed: int = 1, is_on: bool = True) -> TionZoneDevice:
 def _data(coordinator: FakeCoordinator) -> FakeData:
     """Build coordinator data exposing the coordinator's device and zone."""
     return FakeData(coordinator.device, coordinator.zone)
-
-
-def _breezer_command() -> BreezerCommand:
-    """Build a breezer command with the PID-owned fields."""
-    return BreezerCommand(guid=BREEZER_GUID, is_on=True, speed=6)
-
-
-def _expected_breezer_send(*, speed: int = 6, speed_max_set: int = 6) -> dict[str, Any]:
-    """Build the full breezer payload expected by the cloud API."""
-    return {
-        "guid": BREEZER_GUID,
-        "is_on": True,
-        "speed": speed,
-        "t_set": 20,
-        "speed_min_set": 0,
-        "speed_max_set": speed_max_set,
-        "heater_enabled": False,
-        "heater_mode": "maintenance",
-        "gate": 0,
-        "request_refresh": False,
-        "track_stale": False,
-    }
 
 
 def _armed_manager(coordinator: FakeCoordinator) -> TionPidManager:
@@ -305,22 +262,17 @@ def test_pid_manager_extra_attributes_default_for_unconfigured_pid() -> None:
     }
 
 
-def test_plan_breezer_returns_breezer_command_for_changed_output() -> None:
-    """Test a valid tick plans a changed breezer command without side effects."""
+def test_write_all_writes_breezer_desired_for_changed_output() -> None:
+    """Test a valid tick writes the desired breezer state without side effects."""
     device = _device(speed=1)
     coordinator = FakeCoordinator(device)
     manager = _armed_manager(coordinator)
 
-    intent = manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+    manager.write_all(_data(coordinator))
 
-    assert intent is not None
-    assert intent.breezer_command is not None
-    assert intent.breezer_command.speed == 6
-    assert intent.breezer_command.is_on is True
-    assert intent.zone_command is None
-    # Planner is pure: no network I/O and no snapshot mutation.
-    assert coordinator.zone_commands == []
-    assert coordinator.commands == []
+    assert coordinator.reconciler.breezer[BREEZER_GUID] == {"is_on": True, "speed": 6}
+    assert coordinator.reconciler.zone == {}
+    # Planner is pure: no snapshot mutation.
     assert device.data.speed == 1
     assert (
         manager.extra_state_attributes(BREEZER_GUID)["pid_status"] == PID_STATUS_RUNNING
@@ -332,7 +284,7 @@ def test_pid_manager_extra_attributes_omit_calculation_details() -> None:
     coordinator = FakeCoordinator(_device(speed=1))
     manager = _armed_manager(coordinator)
 
-    manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+    manager.write_all(_data(coordinator))
 
     assert manager.extra_state_attributes(BREEZER_GUID) == {
         "pid_active": True,
@@ -340,7 +292,7 @@ def test_pid_manager_extra_attributes_omit_calculation_details() -> None:
     }
 
 
-def test_plan_breezer_logs_pid_calculation_with_breezer_name(
+def test_write_all_logs_pid_calculation_with_breezer_name(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test PID calculation details are logged with the breezer name."""
@@ -348,7 +300,7 @@ def test_plan_breezer_logs_pid_calculation_with_breezer_name(
     manager = _armed_manager(coordinator)
     caplog.set_level(logging.DEBUG, logger="custom_components.tion.pid_manager")
 
-    manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+    manager.write_all(_data(coordinator))
 
     assert "Breezer: PID calculation" in caplog.text
     assert BREEZER_GUID not in caplog.text
@@ -361,85 +313,103 @@ def test_plan_breezer_logs_pid_calculation_with_breezer_name(
     assert "pid_output_speed=6" in caplog.text
 
 
-def test_plan_breezer_returns_none_for_unchanged_manual_output() -> None:
-    """Test an unchanged MANUAL output plans nothing but still reports RUNNING."""
+def test_write_all_still_writes_desired_for_unchanged_output() -> None:
+    """Test an unchanged output still writes desired state; reconciler decides sends."""
     device = _device(speed=6)
     coordinator = FakeCoordinator(device)
     manager = _armed_manager(coordinator)
 
-    intent = manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+    manager.write_all(_data(coordinator))
 
-    assert intent is None
-    assert device.data.speed == 6
+    assert coordinator.reconciler.breezer[BREEZER_GUID] == {"is_on": True, "speed": 6}
     assert (
         manager.extra_state_attributes(BREEZER_GUID)["pid_status"] == PID_STATUS_RUNNING
     )
 
 
-def test_plan_breezer_returns_none_on_invalid_sensor_state() -> None:
-    """Test an unavailable CO2 sensor plans nothing and pauses."""
+def test_write_all_writes_nothing_on_invalid_sensor_state() -> None:
+    """Test an unavailable CO2 sensor writes no desired state and pauses."""
     coordinator = FakeCoordinator(_device(speed=1))
     manager = TionPidManager(FakeHass("unknown"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    intent = manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+    manager.write_all(_data(coordinator))
 
-    assert intent is None
-    assert coordinator.zone_commands == []
+    assert coordinator.reconciler.breezer == {}
+    assert coordinator.reconciler.zone == {}
     assert (
         manager.extra_state_attributes(BREEZER_GUID)["pid_status"]
         == PID_STATUS_PAUSED_SENSOR_UNAVAILABLE
     )
 
 
-def test_plan_breezer_plans_zone_command_for_auto_zone() -> None:
-    """Test an AUTO zone is planned back to MANUAL via a zone command."""
+def test_write_all_writes_zone_manual_for_auto_zone() -> None:
+    """Test an AUTO zone is driven back to MANUAL via a zone desired write."""
     coordinator = FakeCoordinator(_device(speed=6), zone_mode=ZoneMode.AUTO)
     manager = _armed_manager(coordinator)
 
-    intent = manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+    manager.write_all(_data(coordinator))
 
-    assert intent is not None
-    assert intent.zone_command == ZoneCommand(guid="zone-guid", co2=800)
-    # speed unchanged (6 -> 6), so no breezer command and no I/O from the planner.
-    assert intent.breezer_command is None
-    assert coordinator.zone_commands == []
+    assert coordinator.reconciler.zone["zone-guid"] == {
+        "mode": ZoneMode.MANUAL,
+        "co2": 800,
+    }
+    assert coordinator.reconciler.breezer[BREEZER_GUID] == {"is_on": True, "speed": 6}
 
 
-def test_plan_breezer_advances_pid_state_and_resets_on_disarm() -> None:
-    """Test planning advances PID core state, which disarming then resets."""
+def test_write_all_writes_zero_speed_when_pid_turns_off() -> None:
+    """Test PID turning the breezer off writes speed 0 (off implies zero)."""
+    coordinator = FakeCoordinator(_device(speed=4))
+    manager = _armed_manager(coordinator)
+    controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
+    controller.controller.calculate = lambda **kwargs: SimpleNamespace(  # type: ignore[method-assign]
+        error=-50.0,
+        speed=3,
+        is_on=False,
+        p_output=0.0,
+        i_output=0.0,
+        d_output=0.0,
+        raw_output=0.0,
+    )
+
+    manager.write_all(_data(coordinator))
+
+    assert coordinator.reconciler.breezer[BREEZER_GUID] == {"is_on": False, "speed": 0}
+
+
+def test_write_all_advances_pid_state_and_resets_on_disarm() -> None:
+    """Test writing advances PID core state, which disarming then resets."""
     coordinator = FakeCoordinator(_device(speed=1))
     manager = _armed_manager(coordinator)
 
-    intent = manager.plan_breezer(BREEZER_GUID, _data(coordinator))
+    manager.write_all(_data(coordinator))
     controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
     manager.stop_breezer_pid(BREEZER_GUID)
 
-    assert intent is not None
     assert controller.controller.state.last_error is None
     assert controller.controller.state.i_output == 0.0
     assert manager.has_active_pid() is False
 
 
-def test_plan_all_deactivates_unconfigured() -> None:
-    """Test planning deactivates controllers that are no longer configured."""
+def test_write_all_deactivates_unconfigured() -> None:
+    """Test writing deactivates controllers that are no longer configured."""
     coordinator = FakeCoordinator(_device(speed=1))
     entry = FakeConfigEntry()
     manager = TionPidManager(FakeHass("1000"), entry, coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
     entry.options[CONF_PID_BREEZERS][BREEZER_GUID][CONF_PID_ENABLED] = False
 
-    intents = manager.plan_all(_data(coordinator))
+    manager.write_all(_data(coordinator))
 
     controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
-    assert intents == []
+    assert coordinator.reconciler.breezer == {}
     assert controller.active is False
     assert controller.status == PID_STATUS_NOT_CONFIGURED
     assert manager.has_active_pid() is False
 
 
-def test_plan_all_isolates_per_breezer_failures() -> None:
-    """Test that an unexpected exception in one breezer does not abort planning."""
+def test_write_all_isolates_per_breezer_failures() -> None:
+    """Test that an unexpected exception in one breezer does not abort writing."""
 
     class RaisingData(FakeData):
         """Coordinator data whose zone() always raises an unexpected error."""
@@ -451,181 +421,7 @@ def test_plan_all_isolates_per_breezer_failures() -> None:
     manager = TionPidManager(FakeHass("1000"), FakeConfigEntry(), coordinator)
     manager.start_breezer_pid(BREEZER_GUID)
 
-    # Must not raise; the exception must be swallowed and logged, yielding no intents.
-    intents = manager.plan_all(RaisingData(coordinator.device, coordinator.zone))
+    # Must not raise; the exception is swallowed and logged, writing nothing.
+    manager.write_all(RaisingData(coordinator.device, coordinator.zone))
 
-    assert intents == []
-
-
-def test_async_execute_sends_zone_then_breezer() -> None:
-    """Test execute dispatches the zone command before the breezer command."""
-    coordinator = FakeCoordinator(_device(speed=1))
-    manager = _armed_manager(coordinator)
-    intent = PidIntent(
-        breezer_guid=BREEZER_GUID,
-        zone_command=ZoneCommand(guid="zone-guid", co2=800),
-        breezer_command=_breezer_command(),
-    )
-
-    asyncio.run(manager.async_execute(intent))
-
-    assert coordinator.zone_commands == [
-        {
-            "guid": "zone-guid",
-            "mode": ZoneMode.MANUAL,
-            "co2": 800,
-            "request_refresh": False,
-            "track_stale": False,
-        }
-    ]
-    assert coordinator.commands == [
-        _expected_breezer_send()
-    ]
-
-
-def test_async_execute_rebuilds_breezer_payload_from_current_device() -> None:
-    """Test stale PID intents do not overwrite fresher breezer limits."""
-    coordinator = FakeCoordinator(_device(speed=4))
-    coordinator.device.data.speed_max_set = 2
-    manager = _armed_manager(coordinator)
-    intent = PidIntent(
-        breezer_guid=BREEZER_GUID,
-        breezer_command=BreezerCommand(guid=BREEZER_GUID, is_on=True, speed=4),
-    )
-
-    asyncio.run(manager.async_execute(intent))
-
-    assert coordinator.commands[0]["speed"] == 2
-    assert coordinator.commands[0]["speed_max_set"] == 2
-
-
-def test_async_execute_zone_failure_skips_breezer_and_pauses() -> None:
-    """Test a failed zone command stops the breezer send and pauses PID."""
-
-    class _ZoneFailCoordinator(FakeCoordinator):
-        async def async_send_zone(self, **kwargs: Any) -> bool:
-            raise TionError("zone boom")
-
-    coordinator = _ZoneFailCoordinator(_device(speed=1))
-    manager = _armed_manager(coordinator)
-    intent = PidIntent(
-        breezer_guid=BREEZER_GUID,
-        zone_command=ZoneCommand(guid="zone-guid", co2=800),
-        breezer_command=_breezer_command(),
-    )
-
-    asyncio.run(manager.async_execute(intent))
-
-    assert coordinator.commands == []
-    assert (
-        manager.extra_state_attributes(BREEZER_GUID)["pid_status"]
-        == PID_STATUS_SEND_FAILED
-    )
-
-
-def test_async_execute_breezer_failure_pauses() -> None:
-    """Test a failed breezer command pauses PID."""
-
-    class _BreezerFailCoordinator(FakeCoordinator):
-        async def async_send_breezer(self, **kwargs: Any) -> bool:
-            raise TionError("breezer boom")
-
-    coordinator = _BreezerFailCoordinator(_device(speed=1))
-    manager = _armed_manager(coordinator)
-    intent = PidIntent(breezer_guid=BREEZER_GUID, breezer_command=_breezer_command())
-
-    asyncio.run(manager.async_execute(intent))
-
-    assert (
-        manager.extra_state_attributes(BREEZER_GUID)["pid_status"]
-        == PID_STATUS_SEND_FAILED
-    )
-
-
-def test_schedule_intent_backgrounds_execution() -> None:
-    """Test schedule_intent enqueues a background task instead of awaiting."""
-    coordinator = FakeCoordinator(_device(speed=1))
-    entry = FakeConfigEntry()
-    manager = TionPidManager(FakeHass("1000"), entry, coordinator)
-    manager.start_breezer_pid(BREEZER_GUID)
-    intent = PidIntent(breezer_guid=BREEZER_GUID, breezer_command=_breezer_command())
-
-    manager.schedule_intent(intent)
-
-    assert coordinator.commands == []
-    assert len(entry.background_tasks) == 1
-
-    async def _drain() -> None:
-        for coro in entry.background_tasks:
-            await coro
-
-    asyncio.run(_drain())
-    assert coordinator.commands == [
-        _expected_breezer_send()
-    ]
-
-
-def test_schedule_intent_eager_start_suspends_on_send() -> None:
-    """Test an eagerly started dispatch suspends on the awaited network send.
-
-    Home Assistant starts background tasks eagerly, running their synchronous
-    prefix inline. This pins the invariant the coordinator's single staleness
-    check relies on: scheduling a dispatch reaches the awaited send and
-    suspends there, so the send cannot complete synchronously and stall the
-    update cycle.
-    """
-
-    class _EagerConfigEntry(FakeConfigEntry):
-        """Config entry that eagerly starts background tasks like Home Assistant."""
-
-        def __init__(self) -> None:
-            """Initialize fake config entry tracking started tasks."""
-            super().__init__()
-            self.tasks: list[asyncio.Task] = []
-
-        def async_create_background_task(
-            self, hass: Any, target: Any, name: str, **kwargs: Any
-        ) -> asyncio.Task:
-            """Start the coroutine eagerly via the running loop."""
-            task = asyncio.get_running_loop().create_task(target)
-            self.tasks.append(task)
-            return task
-
-    class _BlockingCoordinator(FakeCoordinator):
-        """Coordinator whose breezer send blocks until released."""
-
-        def __init__(self, device: TionZoneDevice) -> None:
-            """Initialize coordinator with send-gating events."""
-            super().__init__(device)
-            self.entered = asyncio.Event()
-            self.release = asyncio.Event()
-
-        async def async_send_breezer(self, **kwargs: Any) -> bool:
-            """Record entry, block until released, then record the command."""
-            self.entered.set()
-            await self.release.wait()
-            return await super().async_send_breezer(**kwargs)
-
-    async def _run() -> None:
-        asyncio.get_running_loop().set_task_factory(asyncio.eager_task_factory)
-        coordinator = _BlockingCoordinator(_device(speed=1))
-        entry = _EagerConfigEntry()
-        manager = TionPidManager(FakeHass("1000"), entry, coordinator)
-        manager.start_breezer_pid(BREEZER_GUID)
-        intent = PidIntent(
-            breezer_guid=BREEZER_GUID, breezer_command=_breezer_command()
-        )
-
-        manager.schedule_intent(intent)
-
-        assert coordinator.entered.is_set()
-        assert coordinator.commands == []
-
-        coordinator.release.set()
-        for task in entry.tasks:
-            await task
-        assert coordinator.commands == [
-            _expected_breezer_send()
-        ]
-
-    asyncio.run(_run())
+    assert coordinator.reconciler.breezer == {}

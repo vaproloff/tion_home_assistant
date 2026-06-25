@@ -8,7 +8,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.util import dt as dt_util
 
-from .client import TionError, TionZoneDevice
+from .client import TionZoneDevice
 from .const import (
     CONF_CO2_SENSOR_ENTITY_ID,
     CONF_PID_BASE_OUTPUT,
@@ -28,12 +28,10 @@ from .const import (
     PID_STATUS_PAUSED_INVALID_DEVICE_DATA,
     PID_STATUS_PAUSED_SENSOR_UNAVAILABLE,
     PID_STATUS_RUNNING,
-    PID_STATUS_SEND_FAILED,
     ZoneMode,
 )
 from .coordinator import TionData, TionDataUpdateCoordinator
 from .pid import PidCoefficients, PidController
-from .pid_intent import BreezerCommand, PidIntent, ZoneCommand
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,8 +115,8 @@ class _TionBreezerPidController:
             "pid_status": self.status,
         }
 
-    def evaluate(self, data: TionData) -> PidIntent | None:
-        """Plan a local PID actuation for this breezer (pure, no I/O)."""
+    def evaluate(self, data: TionData) -> None:
+        """Write this breezer's desired state into the reconciler (no I/O)."""
         options = self.entry.options.get(CONF_PID_BREEZERS, {}).get(
             self.breezer_guid, {}
         )
@@ -135,12 +133,13 @@ class _TionBreezerPidController:
             self.pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
             return None
 
-        zone_command: ZoneCommand | None = None
+        zone_target_co2: int | None = None
         if zone.mode.current == ZoneMode.AUTO:
-            target_co2 = _int_or_default(zone.mode.auto_set.co2, int(self.target_co2))
-            if target_co2 is None:
-                target_co2 = DEFAULT_TARGET_CO2
-            zone_command = ZoneCommand(guid=zone.guid, co2=target_co2)
+            zone_target_co2 = _int_or_default(
+                zone.mode.auto_set.co2, int(self.target_co2)
+            )
+            if zone_target_co2 is None:
+                zone_target_co2 = DEFAULT_TARGET_CO2
 
         source_entity_id = options[CONF_CO2_SENSOR_ENTITY_ID]
         co2_state = self.hass.states.get(source_entity_id)
@@ -208,36 +207,15 @@ class _TionBreezerPidController:
             output.is_on,
         )
 
-        try:
-            current_speed = int(device.data.speed)
-        except TypeError, ValueError:
-            command_changed = True
-        else:
-            command_changed = (
-                current_speed != output.speed or bool(device.data.is_on) != output.is_on
+        # Local PID owns is_on and speed; off implies speed 0. The reconciler
+        # decides whether anything actually needs sending (diff) and dispatches.
+        if zone_target_co2 is not None:
+            self.coordinator.reconciler.set_zone(
+                zone.guid, {"mode": ZoneMode.MANUAL, "co2": zone_target_co2}
             )
-
-        breezer_command: BreezerCommand | None = None
-        if command_changed:
-            _LOGGER.debug(
-                "%s: planning local PID command: is_on=%s speed=%s",
-                breezer_name,
-                output.is_on,
-                output.speed,
-            )
-            breezer_command = BreezerCommand(
-                guid=device.guid,
-                is_on=output.is_on,
-                speed=output.speed,
-            )
-
-        if zone_command is None and breezer_command is None:
-            return None
-
-        return PidIntent(
-            breezer_guid=self.breezer_guid,
-            zone_command=zone_command,
-            breezer_command=breezer_command,
+        speed = output.speed if output.is_on else 0
+        self.coordinator.reconciler.set_breezer(
+            self.breezer_guid, {"is_on": output.is_on, "speed": speed}
         )
 
     def pause(self, status: str) -> None:
@@ -386,17 +364,13 @@ class TionPidManager:
 
         return breezer_guid
 
-    def plan_all(self, data: TionData) -> list[PidIntent]:
-        """Plan local PID actuations for all active breezers."""
-        intents: list[PidIntent] = []
-        breezer_guids = {
-            breezer_guid
-            for breezer_guid, controller in self._controllers.items()
-            if controller.active
-        }
-        for breezer_guid in breezer_guids:
+    def write_all(self, data: TionData) -> None:
+        """Write desired state for all active breezers into the reconciler."""
+        for breezer_guid, controller in list(self._controllers.items()):
+            if not controller.active:
+                continue
             try:
-                intent = self.plan_breezer(breezer_guid, data)
+                controller.evaluate(data)
             except (
                 Exception
             ):  # broad catch is intentional; isolate per-breezer failures
@@ -404,106 +378,6 @@ class TionPidManager:
                     "%s: unexpected error evaluating local PID",
                     self.breezer_name(breezer_guid),
                 )
-                continue
-            if intent is not None:
-                intents.append(intent)
-        return intents
-
-    def plan_breezer(self, breezer_guid: str, data: TionData) -> PidIntent | None:
-        """Plan a local PID actuation for one breezer."""
-        controller = self._controllers.get(breezer_guid)
-        if controller is None:
-            controller = self._controller(breezer_guid)
-        if controller is None:
-            return None
-        return controller.evaluate(data)
-
-    async def async_execute(self, intent: PidIntent) -> None:
-        """Dispatch a planned intent: zone command first, then breezer command."""
-        controller = self._controllers.get(intent.breezer_guid)
-        if intent.zone_command is not None:
-            try:
-                async with self.coordinator.async_zone_mode_command(
-                    intent.zone_command.guid
-                ):
-                    await self.coordinator.async_send_zone(
-                        guid=intent.zone_command.guid,
-                        mode=ZoneMode.MANUAL,
-                        co2=intent.zone_command.co2,
-                        request_refresh=False,
-                        track_stale=False,
-                    )
-            except TionError as err:
-                _LOGGER.warning(
-                    "%s: unable to disable MagicAir auto mode for local PID: %s",
-                    self.breezer_name(intent.breezer_guid),
-                    err,
-                )
-                if controller is not None:
-                    controller.pause(PID_STATUS_SEND_FAILED)
-                return
-        if intent.breezer_command is not None:
-            try:
-                command = intent.breezer_command
-                async with self.coordinator.async_breezer_mode_command(command.guid):
-                    payload = self._breezer_send_payload(command)
-                    if payload is None:
-                        _LOGGER.debug(
-                            "%s: unable to build local PID breezer payload from current device state",
-                            self.breezer_name(intent.breezer_guid),
-                        )
-                        if controller is not None:
-                            controller.pause(PID_STATUS_PAUSED_INVALID_DEVICE_DATA)
-                        return
-                    await self.coordinator.async_send_breezer(
-                        **payload, request_refresh=False, track_stale=False
-                    )
-            except TionError as err:
-                _LOGGER.warning(
-                    "%s: unable to send local PID command: %s",
-                    self.breezer_name(intent.breezer_guid),
-                    err,
-                )
-                if controller is not None:
-                    controller.pause(PID_STATUS_SEND_FAILED)
-
-    def _breezer_send_payload(self, command: BreezerCommand) -> dict[str, Any] | None:
-        """Build a full breezer payload from a PID command and current state."""
-        device = self.coordinator.get_device(command.guid)
-        if device is None or not device.valid or not device.is_online:
-            return None
-
-        device_max_speed = _int_or_default(device.max_speed, None)
-        t_set = _int_or_default(device.data.t_set, None)
-        speed_min_set = _int_or_default(device.data.speed_min_set, 0)
-        speed_max_set = _int_or_default(device.data.speed_max_set, device_max_speed)
-        if t_set is None or speed_min_set is None or speed_max_set is None:
-            return None
-
-        speed = (
-            max(speed_min_set, min(command.speed, speed_max_set))
-            if command.is_on
-            else 0
-        )
-        return {
-            "guid": command.guid,
-            "is_on": command.is_on,
-            "speed": speed,
-            "t_set": t_set,
-            "speed_min_set": speed_min_set,
-            "speed_max_set": speed_max_set,
-            "heater_enabled": device.data.heater_enabled,
-            "heater_mode": device.data.heater_mode,
-            "gate": device.data.gate,
-        }
-
-    def schedule_intent(self, intent: PidIntent) -> None:
-        """Background the network dispatch of a planned intent."""
-        self.entry.async_create_background_task(
-            self.hass,
-            self.async_execute(intent),
-            f"tion_pid_send_{intent.breezer_guid}",
-        )
 
     def _pid_options(self, breezer_guid: str) -> dict[str, Any]:
         """Return stored PID options for a breezer."""
