@@ -122,16 +122,16 @@ class _TionBreezerPidController:
         )
         if not self.active:
             self._set_status(PID_STATUS_INACTIVE)
-            return None
+            return
 
         if not self.manager.is_configured(self.breezer_guid):
             self.stop(PID_STATUS_NOT_CONFIGURED)
-            return None
+            return
 
         zone = data.zone(self.breezer_guid)
         if zone is None or not zone.valid:
             self.pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
-            return None
+            return
 
         zone_target_co2: int | None = None
         if zone.mode.current == ZoneMode.AUTO:
@@ -146,20 +146,20 @@ class _TionBreezerPidController:
         if co2_state is None or co2_state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             self.source_co2 = None
             self.pause(PID_STATUS_PAUSED_SENSOR_UNAVAILABLE)
-            return None
+            return
 
         try:
             source_co2 = float(co2_state.state)
         except TypeError, ValueError:
             self.source_co2 = None
             self.pause(PID_STATUS_PAUSED_SENSOR_UNAVAILABLE)
-            return None
+            return
 
         device = data.device(self.breezer_guid)
         self.source_co2 = source_co2
         if device is None or not device.valid or not device.is_online:
             self.pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
-            return None
+            return
 
         device_max_speed = _int_or_default(device.max_speed, 0)
         speed_min = _int_or_default(device.data.speed_min_set, 0)
@@ -173,7 +173,7 @@ class _TionBreezerPidController:
             or t_set is None
         ):
             self.pause(PID_STATUS_PAUSED_INVALID_DEVICE_DATA)
-            return None
+            return
 
         output = self.controller.calculate(
             source_co2=source_co2,

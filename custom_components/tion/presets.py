@@ -42,7 +42,7 @@ class Preset(ABC):
         """Serialize the preset for persistence in state attributes."""
 
     @classmethod
-    def from_config(cls, cfg: Mapping[str, int | str]) -> "Preset":
+    def from_config(cls, cfg: Mapping[str, int | str]) -> Preset:
         """Build a preset from an options-flow preset dict."""
         if cfg[CONF_PRESET_TYPE] == TionPresetType.MANUAL:
             return ManualPreset(int(cfg[CONF_PRESET_SPEED]))
@@ -51,7 +51,7 @@ class Preset(ABC):
         )
 
     @classmethod
-    def from_storage(cls, data: Mapping[str, int | str] | None) -> "Preset | None":
+    def from_storage(cls, data: Mapping[str, int | str] | None) -> Preset | None:
         """Rebuild a saved preset from restored state attributes."""
         if not data:
             return None
@@ -116,7 +116,7 @@ class PresetBaseline:
         return {"overrides": dict(self.overrides), "was_auto": self.was_auto}
 
     @classmethod
-    def from_storage(cls, data: Mapping[str, Any] | None) -> "PresetBaseline | None":
+    def from_storage(cls, data: Mapping[str, Any] | None) -> PresetBaseline | None:
         """Rebuild a baseline from restored state attributes."""
         if not data:
             return None

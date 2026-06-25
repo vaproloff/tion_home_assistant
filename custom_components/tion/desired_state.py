@@ -45,9 +45,7 @@ class DesiredBreezer:
             return None
         payload: dict[str, Any] = {"guid": reported.guid, "t_set": t_set}
         for key in _BREEZER_FIELDS:
-            payload[key] = (
-                self.fields[key] if key in self.fields else getattr(reported.data, key)
-            )
+            payload[key] = self.fields.get(key, getattr(reported.data, key))
         return payload
 
     def diff(self, reported: TionZoneDevice) -> bool:
@@ -66,7 +64,7 @@ class DesiredZone:
         co2 = _int_or_default(self.fields.get("co2", reported.mode.auto_set.co2), None)
         if co2 is None:
             return None
-        mode = self.fields["mode"] if "mode" in self.fields else reported.mode.current
+        mode = self.fields.get("mode", reported.mode.current)
         return {"guid": reported.guid, "mode": mode, "co2": co2}
 
     def diff(self, reported: TionZone) -> bool:

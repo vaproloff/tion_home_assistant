@@ -8,8 +8,8 @@ diverges *after* it was confirmed is treated as an external change and dropped
 Assistant. Sends are fire-and-forget; the next cycle re-sends if still needed.
 """
 
-import logging
 from collections.abc import Iterable, Mapping
+import logging
 from typing import TYPE_CHECKING, Any
 
 from .client import TionError, TionZone, TionZoneDevice
