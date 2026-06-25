@@ -262,17 +262,26 @@ def test_current_zone_returns_copy_of_desired() -> None:
     assert reconciler.current_zone(ZONE_GUID) == {"mode": ZoneMode.AUTO}
 
 
-def test_holds_true_only_when_all_fields_present() -> None:
-    """Test holds reflects whether every named field is still desired."""
+def test_holds_true_only_when_fields_present_with_matching_values() -> None:
+    """Test holds requires every field present AND unchanged in value.
+
+    Overwriting a managed field with a different value (e.g. the number entity
+    changing max speed) must release the hold, not just dropping the key.
+    """
     coordinator = _FakeCoordinator(_data(speed=3))
     reconciler = TionReconciler(coordinator)
-    reconciler.set_breezer(BREEZER_GUID, {"speed_min_set": 1, "speed_max_set": 2})
+    fields = {"speed_min_set": 1, "speed_max_set": 2}
+    reconciler.set_breezer(BREEZER_GUID, dict(fields))
 
-    assert reconciler.holds(BREEZER_GUID, ["speed_min_set", "speed_max_set"]) is True
+    assert reconciler.holds(BREEZER_GUID, fields) is True
 
-    reconciler.release(BREEZER_GUID, ["speed_min_set"])
+    # Value overwritten -> no longer the preset's value -> not held.
+    reconciler.set_breezer(BREEZER_GUID, {"speed_max_set": 3})
+    assert reconciler.holds(BREEZER_GUID, fields) is False
 
-    assert reconciler.holds(BREEZER_GUID, ["speed_min_set", "speed_max_set"]) is False
+    # Field dropped entirely -> also not held.
+    reconciler.release(BREEZER_GUID, ["speed_max_set"])
+    assert reconciler.holds(BREEZER_GUID, fields) is False
 
 
 def test_release_drops_fields_and_confirmed() -> None:

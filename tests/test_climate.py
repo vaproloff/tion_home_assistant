@@ -96,9 +96,12 @@ class FakeReconciler:
         return dict(self.zone.get(guid, {}))
 
     def holds(self, guid: str, fields: Any) -> bool:
-        """Return whether all fields are still desired for the breezer."""
+        """Return whether all fields are still desired with matching values."""
         desired = self.breezer.get(guid, {})
-        return all(field in desired for field in fields)
+        return all(
+            field in desired and desired[field] == value
+            for field, value in fields.items()
+        )
 
     def release(self, guid: str, fields: Any) -> None:
         """Drop fields from the breezer's desired overlay."""
@@ -470,6 +473,29 @@ def test_climate_coordinator_update_releases_preset_on_external_change() -> None
     entity.coordinator.reconciler.release(
         BREEZER_GUID, ["speed_min_set", "speed_max_set"]
     )
+    entity._handle_coordinator_update()  # noqa: SLF001
+
+    assert entity.preset_mode == PRESET_NONE
+
+
+def test_climate_coordinator_update_releases_preset_when_managed_value_changes() -> None:
+    """Test the preset clears when a managed field is overwritten with a new value.
+
+    Changing the max speed via the number entity rewrites speed_max_set in the
+    desired overlay; the key stays present but its value no longer matches the
+    preset, so the preset must drop to none.
+    """
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"sleep": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        speed=1,
+    )
+
+    asyncio.run(entity.async_set_preset_mode("sleep"))
+    assert entity.preset_mode == "sleep"
+
+    # The number entity overwrites the managed max speed with a different value.
+    entity.coordinator.reconciler.set_breezer(BREEZER_GUID, {"speed_max_set": 3})
     entity._handle_coordinator_update()  # noqa: SLF001
 
     assert entity.preset_mode == PRESET_NONE

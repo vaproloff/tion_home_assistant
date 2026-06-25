@@ -455,7 +455,7 @@ class TionClimate(
                 self._breezer_guid, preset.desired_fields()
             ):
                 _LOGGER.info(
-                    "%s: preset '%s' released by external change",
+                    "%s: preset '%s' released (managed field changed)",
                     self.name,
                     self._presets.preset_mode,
                 )

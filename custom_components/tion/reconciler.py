@@ -61,10 +61,18 @@ class TionReconciler:
         """Return a copy of the zone's current desired overlay."""
         return dict(self._zones.get(guid, {}))
 
-    def holds(self, guid: str, fields: Iterable[str]) -> bool:
-        """Return whether every named field is still desired for the breezer."""
+    def holds(self, guid: str, fields: Mapping[str, Any]) -> bool:
+        """Return whether the breezer's desired overlay still has these values.
+
+        A preset is "held" only while every managed field is both present and
+        unchanged. Overwriting one with a new value (e.g. the number entity
+        changing the max speed) releases the hold, just like dropping the key.
+        """
         desired = self._breezers.get(guid, {})
-        return all(field in desired for field in fields)
+        return all(
+            field in desired and desired[field] == value
+            for field, value in fields.items()
+        )
 
     def release(self, guid: str, fields: Iterable[str]) -> None:
         """Drop the named fields from the breezer's desired overlay."""
