@@ -110,11 +110,15 @@ class FakeReconciler:
 
     def set_breezer(self, guid: str, fields: dict[str, Any]) -> None:
         """Record a breezer desired-state write."""
-        self.breezer[guid] = dict(fields)
+        self.breezer.setdefault(guid, {}).update(fields)
 
     def set_zone(self, guid: str, fields: dict[str, Any]) -> None:
         """Record a zone desired-state write."""
         self.zone[guid] = dict(fields)
+
+    def current_breezer(self, guid: str) -> dict[str, Any]:
+        """Return a copy of the breezer's current desired overlay."""
+        return dict(self.breezer.get(guid, {}))
 
 
 class FakeCoordinator:
@@ -277,6 +281,24 @@ def test_write_all_writes_breezer_desired_for_changed_output() -> None:
     assert (
         manager.extra_state_attributes(BREEZER_GUID)["pid_status"] == PID_STATUS_RUNNING
     )
+
+
+def test_write_all_uses_desired_speed_limits_over_reported() -> None:
+    """Test PID honors the desired auto limits immediately, before cloud confirms.
+
+    A just-changed max speed lives in the desired overlay while the reported
+    device still carries the old limit. PID must clamp against the desired
+    limit so the change takes effect on the next tick, not one cycle later.
+    """
+    device = _device(speed=1)  # reported speed_max_set=6
+    coordinator = FakeCoordinator(device)
+    coordinator.reconciler.set_breezer(BREEZER_GUID, {"speed_max_set": 2})
+    manager = _armed_manager(coordinator)
+
+    manager.write_all(_data(coordinator))
+
+    # High CO2 would peg the speed at 6, but the desired max clamps it to 2.
+    assert coordinator.reconciler.breezer[BREEZER_GUID]["speed"] == 2
 
 
 def test_pid_manager_extra_attributes_omit_calculation_details() -> None:

@@ -161,9 +161,17 @@ class _TionBreezerPidController:
             self.pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
             return
 
+        # Honor just-changed auto limits immediately: the desired overlay holds
+        # the user's new value before the cloud confirms it, so reading it here
+        # avoids a one-cycle lag versus the stale reported limit.
+        desired = self.coordinator.reconciler.current_breezer(self.breezer_guid)
         device_max_speed = _int_or_default(device.max_speed, 0)
-        speed_min = _int_or_default(device.data.speed_min_set, 0)
-        speed_max = _int_or_default(device.data.speed_max_set, device_max_speed)
+        speed_min = _int_or_default(
+            desired.get("speed_min_set", device.data.speed_min_set), 0
+        )
+        speed_max = _int_or_default(
+            desired.get("speed_max_set", device.data.speed_max_set), device_max_speed
+        )
         t_set = _int_or_default(device.data.t_set, None)
         if (
             device_max_speed is None
