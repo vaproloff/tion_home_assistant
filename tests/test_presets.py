@@ -2,8 +2,6 @@
 
 import pytest
 
-from homeassistant.components.climate import PRESET_NONE
-
 from custom_components.tion.const import (
     CONF_PRESET_MAX_SPEED,
     CONF_PRESET_MIN_SPEED,
@@ -19,6 +17,7 @@ from custom_components.tion.presets import (
     PresetBaseline,
     TionPresetController,
 )
+from homeassistant.components.climate import PRESET_NONE
 
 PRESETS = {
     "eco": {"type": "auto", "min_speed": 1, "max_speed": 2},

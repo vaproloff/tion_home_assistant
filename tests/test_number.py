@@ -132,7 +132,7 @@ def test_speed_number_unavailable_raises(number_cls: type) -> None:
     coordinator = FakeCoordinator(device)
     entity = _build(number_cls, coordinator)
 
-    with pytest.raises(Exception):  # noqa: B017, PT011
+    with pytest.raises(Exception):  # noqa: B017
         asyncio.run(entity.async_set_native_value(3))
 
     assert coordinator.reconciler.breezer == {}

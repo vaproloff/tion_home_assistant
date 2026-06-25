@@ -3,10 +3,10 @@
 import asyncio
 from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
-import pytest
 from aiohttp import ClientError
+import pytest
 
 from custom_components.tion.client import (
     API2_PROFILE,
@@ -25,18 +25,22 @@ class FakeResponse:
     """Async-context-manager stand-in for an aiohttp response."""
 
     def __init__(self, status: int, payload: Any) -> None:
+        """Store the canned status and JSON payload (or exception)."""
         self.status = status
         self._payload = payload
 
     async def json(self, content_type: str | None = None) -> Any:
+        """Return the canned payload, raising it if it is an exception."""
         if isinstance(self._payload, Exception):
             raise self._payload
         return self._payload
 
-    async def __aenter__(self) -> "FakeResponse":
+    async def __aenter__(self) -> Self:
+        """Enter the async context."""
         return self
 
     async def __aexit__(self, *exc: object) -> bool:
+        """Exit the async context."""
         return False
 
 
@@ -48,6 +52,7 @@ class FakeSession:
     """
 
     def __init__(self, routes: dict[str, Any]) -> None:
+        """Store the host->handler routes and start an empty call log."""
         self.routes = routes
         self.calls: list[SimpleNamespace] = []
 
@@ -60,6 +65,7 @@ class FakeSession:
         timeout: int,
         **kwargs: Any,
     ) -> FakeResponse:
+        """Route a request to its canned response by endpoint host."""
         self.calls.append(
             SimpleNamespace(method=method, url=url, headers=headers, kwargs=kwargs)
         )
@@ -244,7 +250,7 @@ async def test_concurrent_failover_does_not_skip_healthy_profile() -> None:
     arrivals = {"count": 0}
 
     class GatedFailResponse:
-        async def __aenter__(self) -> "GatedFailResponse":
+        async def __aenter__(self) -> Self:
             arrivals["count"] += 1
             await gate.wait()
             raise ClientError("boom")
@@ -405,7 +411,9 @@ async def test_validate_auth_fails_over_to_api2_when_api_auth_is_down() -> None:
 
     def api2_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
         if "oauth2/token" in url:
-            return FakeResponse(200, {"token_type": "Bearer", "access_token": "api2tok"})
+            return FakeResponse(
+                200, {"token_type": "Bearer", "access_token": "api2tok"}
+            )
         if url.endswith("/location"):
             return FakeResponse(200, [{"guid": "loc"}])
         return FakeResponse(404, {})
