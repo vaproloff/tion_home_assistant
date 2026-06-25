@@ -43,8 +43,14 @@ class FakeCoordinator:
         self.reconciler = FakeReconciler()
         self.last_update_success = True
         self.data = SimpleNamespace()
+        self.applied: Any = None
         self._device = device
         self._zone = zone
+
+    def apply_desired(self, data: Any) -> None:
+        """Mimic the coordinator's apply-desired pipeline (reconcile only)."""
+        self.applied = data
+        self.reconciler.reconcile(data)
 
     async def async_request_refresh(self) -> None:
         """Record a refresh request (no-op)."""
@@ -117,6 +123,21 @@ def test_max_speed_writes_breezer_desired() -> None:
 
     asyncio.run(entity.async_set_native_value(5))
 
+    assert coordinator.reconciler.breezer[DEVICE_GUID] == {"speed_max_set": 5}
+
+
+def test_speed_number_push_routes_through_apply_desired() -> None:
+    """Test a speed change goes through the coordinator's apply-desired pipeline.
+
+    Routing through apply_desired lets local PID recompute the speed against the
+    new limit in the same pass, so one command carries both instead of racing.
+    """
+    coordinator = FakeCoordinator(_device())
+    entity = _build(TionMaxSpeed, coordinator)
+
+    asyncio.run(entity.async_set_native_value(5))
+
+    assert coordinator.applied is coordinator.data
     assert coordinator.reconciler.breezer[DEVICE_GUID] == {"speed_max_set": 5}
 
 

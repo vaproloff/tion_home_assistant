@@ -120,9 +120,15 @@ class TionNumber(CoordinatorEntity[TionDataUpdateCoordinator], NumberEntity, abc
             ) from err
 
     async def _push(self) -> None:
-        """Reconcile desired state now (optimistic + dispatch), then refresh."""
+        """Apply desired state now (PID recompute + reconcile), then refresh.
+
+        A min/max change is a local PID input, so going through ``apply_desired``
+        lets the PID recompute the speed against the new limit in the same pass;
+        a single command then carries both the limit and the new speed, instead
+        of dispatching the old speed now and the recomputed one a cycle later.
+        """
         if self.coordinator.data is not None:
-            self.coordinator.reconciler.reconcile(self.coordinator.data)
+            self.coordinator.apply_desired(self.coordinator.data)
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 

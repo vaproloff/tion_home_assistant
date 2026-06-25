@@ -211,6 +211,36 @@ def test_update_writes_desired_and_reconciles_when_active() -> None:
     assert reconciler.reconciled is result
 
 
+def test_apply_desired_writes_pid_then_reconciles_when_active() -> None:
+    """Test apply_desired recomputes active PID before reconciling the snapshot."""
+    pid_manager = FakePidManager(active=True)
+    reconciler = FakeReconciler()
+    coordinator = _make_coordinator(
+        client=FakeClient([]), pid_manager=pid_manager, reconciler=reconciler
+    )
+    data = TionData([_location(speed=1)])
+
+    coordinator.apply_desired(data)
+
+    assert pid_manager.written is data
+    assert reconciler.reconciled is data
+
+
+def test_apply_desired_skips_pid_when_inactive() -> None:
+    """Test apply_desired reconciles without recomputing PID when inactive."""
+    pid_manager = FakePidManager(active=False)
+    reconciler = FakeReconciler()
+    coordinator = _make_coordinator(
+        client=FakeClient([]), pid_manager=pid_manager, reconciler=reconciler
+    )
+    data = TionData([_location(speed=1)])
+
+    coordinator.apply_desired(data)
+
+    assert pid_manager.written is None
+    assert reconciler.reconciled is data
+
+
 def test_update_reconciles_but_skips_pid_when_inactive() -> None:
     """Test the reconciler always runs, but PID does not write when inactive."""
     pid_manager = FakePidManager(active=False)

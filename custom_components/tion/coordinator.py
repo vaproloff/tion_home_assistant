@@ -125,14 +125,23 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             return self.data
 
         data = TionData(locations)
+        self.apply_desired(data)
+        return data
 
-        # PID writes its desired fields first, then the single reconciler drives
-        # cloud state toward all desired state (PID + manual) in the background.
+    def apply_desired(self, data: TionData) -> None:
+        """Recompute active PID desired state, then reconcile toward all desired.
+
+        This is the single pipeline that turns desired state into background
+        commands: local PID writes its fields first, so a just-changed input
+        (e.g. an auto-speed limit) is reflected in the very same reconcile pass,
+        then the reconciler drives cloud state toward all desired state. Every
+        writer that wants to push state immediately must go through here rather
+        than calling ``reconcile`` directly, otherwise a PID-driven breezer
+        would dispatch a stale speed and need a second command a cycle later.
+        """
         if self.pid_manager.has_active_pid():
             self.pid_manager.write_all(data)
         self.reconciler.reconcile(data)
-
-        return data
 
     async def _async_send_command(
         self,
