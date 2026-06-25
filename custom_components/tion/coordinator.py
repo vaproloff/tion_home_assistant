@@ -75,8 +75,6 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         self.reconciler = TionReconciler(self)
         self._current_command_started_at: float | None = None
         self._last_command_completed_at: float | None = None
-        self._breezer_mode_locks: dict[str, asyncio.Lock] = {}
-        self._zone_mode_locks: dict[str, asyncio.Lock] = {}
         self._settings_locks: dict[str, asyncio.Lock] = {}
 
         super().__init__(
@@ -89,20 +87,6 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         )
 
     @asynccontextmanager
-    async def async_breezer_mode_command(self, guid: str):
-        """Serialize read-modify-send commands for one breezer mode payload."""
-        lock = self._breezer_mode_locks.setdefault(guid, asyncio.Lock())
-        async with lock:
-            yield
-
-    @asynccontextmanager
-    async def async_zone_mode_command(self, guid: str):
-        """Serialize read-modify-send commands for one zone mode payload."""
-        lock = self._zone_mode_locks.setdefault(guid, asyncio.Lock())
-        async with lock:
-            yield
-
-    @asynccontextmanager
     async def async_settings_command(self, guid: str):
         """Serialize settings (backlight/sound) writes for one device.
 
@@ -112,13 +96,6 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         lock = self._settings_locks.setdefault(guid, asyncio.Lock())
         async with lock:
             yield
-
-    def zone_mode_command_key_for_device(self, guid: str) -> str:
-        """Return the zone command lock key for a device guid."""
-        if (zone := self.get_device_zone(guid)) is not None and zone.guid is not None:
-            return zone.guid
-
-        return guid
 
     def _command_invalidates_fetch(self, request_started_at: float) -> bool:
         """Return whether a command makes a fetch started at this time stale.
