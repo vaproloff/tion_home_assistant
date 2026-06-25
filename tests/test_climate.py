@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
-from custom_components.tion.climate import TionClimate
+from custom_components.tion.climate import (
+    ATTR_DESIRED_BREEZER,
+    ATTR_DESIRED_ZONE,
+    TionClimate,
+)
 from custom_components.tion.const import Heater, SwingMode, TionDeviceType, ZoneMode
 from custom_components.tion.presets import (
     ATTR_SAVED_PRESET,
@@ -87,6 +91,10 @@ class FakeReconciler:
     def current_breezer(self, guid: str) -> dict[str, Any]:
         """Return a copy of the breezer's desired overlay."""
         return dict(self.breezer.get(guid, {}))
+
+    def current_zone(self, guid: str) -> dict[str, Any]:
+        """Return a copy of the zone's desired overlay."""
+        return dict(self.zone.get(guid, {}))
 
     def holds(self, guid: str, fields: Any) -> bool:
         """Return whether all fields are still desired for the breezer."""
@@ -685,3 +693,41 @@ def test_climate_rejects_hidden_fan_auto_writes_nothing() -> None:
 
     assert entity.coordinator.reconciler.zone == {}
     assert pid_manager.active_calls == []
+
+
+def test_climate_persists_desired_overlays() -> None:
+    """Test the desired breezer/zone overlays are exposed for state restore."""
+    entity = _preset_climate(FakePidManager(), presets={})
+    entity.coordinator.reconciler.set_breezer(BREEZER_GUID, {"speed": 3})
+    entity.coordinator.reconciler.set_zone("zone-guid", {"mode": ZoneMode.MANUAL})
+
+    attrs = entity.extra_state_attributes
+
+    assert attrs[ATTR_DESIRED_BREEZER] == {"speed": 3}
+    assert attrs[ATTR_DESIRED_ZONE] == {"mode": ZoneMode.MANUAL}
+
+
+def test_climate_omits_empty_desired_overlays() -> None:
+    """Test empty desired overlays are not written into the state attributes."""
+    entity = _preset_climate(FakePidManager(), presets={})
+
+    attrs = entity.extra_state_attributes
+
+    assert ATTR_DESIRED_BREEZER not in attrs
+    assert ATTR_DESIRED_ZONE not in attrs
+
+
+def test_climate_restores_desired_overlays() -> None:
+    """Test the desired overlays are rehydrated into the reconciler on restart."""
+    entity = _preset_climate(FakePidManager(), presets={})
+    last_state = SimpleNamespace(
+        attributes={
+            ATTR_DESIRED_BREEZER: {"speed": 3},
+            ATTR_DESIRED_ZONE: {"mode": ZoneMode.MANUAL},
+        }
+    )
+
+    entity._restore_desired(last_state)  # noqa: SLF001
+
+    assert entity.coordinator.reconciler.breezer[BREEZER_GUID] == {"speed": 3}
+    assert entity.coordinator.reconciler.zone["zone-guid"] == {"mode": ZoneMode.MANUAL}

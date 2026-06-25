@@ -46,6 +46,9 @@ from .presets import (
 
 _LOGGER = logging.getLogger(__name__)
 
+ATTR_DESIRED_BREEZER = "desired_breezer"
+ATTR_DESIRED_ZONE = "desired_zone"
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
@@ -178,6 +181,17 @@ class TionClimate(
 
         if self._presets.has_presets:
             attrs.update(self._presets.restore_attributes())
+
+        # Persist the desired overlays so the reconciler's intent survives a
+        # restart and keeps driving the device toward it.
+        if desired_breezer := self.coordinator.reconciler.current_breezer(
+            self._breezer_guid
+        ):
+            attrs[ATTR_DESIRED_BREEZER] = desired_breezer
+        if self._zone_guid is not None and (
+            desired_zone := self.coordinator.reconciler.current_zone(self._zone_guid)
+        ):
+            attrs[ATTR_DESIRED_ZONE] = desired_zone
 
         return attrs
 
@@ -386,7 +400,20 @@ class TionClimate(
         await super().async_added_to_hass()
         if (last_state := await self.async_get_last_state()) is not None:
             self._restore_local_pid(last_state)
+            self._restore_desired(last_state)
             self._restore_preset(last_state)
+
+    @callback
+    def _restore_desired(self, last_state: State) -> None:
+        """Rehydrate the reconciler's desired overlays after a restart."""
+        if desired_breezer := last_state.attributes.get(ATTR_DESIRED_BREEZER):
+            self.coordinator.reconciler.set_breezer(
+                self._breezer_guid, dict(desired_breezer)
+            )
+        if self._zone_guid is not None and (
+            desired_zone := last_state.attributes.get(ATTR_DESIRED_ZONE)
+        ):
+            self.coordinator.reconciler.set_zone(self._zone_guid, dict(desired_zone))
 
     @callback
     def _restore_local_pid(self, last_state: State) -> None:
