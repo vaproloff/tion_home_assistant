@@ -213,6 +213,43 @@ def test_zone_precondition_sent_before_breezer_in_one_task() -> None:
     asyncio.run(_run())
 
 
+def test_current_breezer_returns_copy_of_desired() -> None:
+    """Test current_breezer returns a copy that cannot mutate internal state."""
+    coordinator = _FakeCoordinator(_data(speed=3))
+    reconciler = TionReconciler(coordinator)
+    reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+    snap = reconciler.current_breezer(BREEZER_GUID)
+    assert snap == {"speed": 5}
+
+    snap["speed"] = 9
+    assert reconciler.current_breezer(BREEZER_GUID) == {"speed": 5}
+
+
+def test_holds_true_only_when_all_fields_present() -> None:
+    """Test holds reflects whether every named field is still desired."""
+    coordinator = _FakeCoordinator(_data(speed=3))
+    reconciler = TionReconciler(coordinator)
+    reconciler.set_breezer(BREEZER_GUID, {"speed_min_set": 1, "speed_max_set": 2})
+
+    assert reconciler.holds(BREEZER_GUID, ["speed_min_set", "speed_max_set"]) is True
+
+    reconciler.release(BREEZER_GUID, ["speed_min_set"])
+
+    assert reconciler.holds(BREEZER_GUID, ["speed_min_set", "speed_max_set"]) is False
+
+
+def test_release_drops_fields_and_confirmed() -> None:
+    """Test release removes fields from the desired overlay."""
+    coordinator = _FakeCoordinator(_data(speed=3))
+    reconciler = TionReconciler(coordinator)
+    reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+    reconciler.release(BREEZER_GUID, ["speed"])
+
+    assert reconciler.current_breezer(BREEZER_GUID) == {}
+
+
 def test_zone_only_desired_is_dispatched() -> None:
     """Test a zone-only desire (cloud auto, no breezer write) still sends."""
 

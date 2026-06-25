@@ -9,7 +9,7 @@ Assistant. Sends are fire-and-forget; the next cycle re-sends if still needed.
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from .client import TionError, TionZone, TionZoneDevice
@@ -52,6 +52,35 @@ class TionReconciler:
         """Merge fields into a zone's desired state (an explicit intent)."""
         self._zones.setdefault(guid, {}).update(fields)
         self._confirmed.setdefault(guid, set()).difference_update(fields)
+
+    def current_breezer(self, guid: str) -> dict[str, Any]:
+        """Return a copy of the breezer's current desired overlay."""
+        return dict(self._breezers.get(guid, {}))
+
+    def holds(self, guid: str, fields: Iterable[str]) -> bool:
+        """Return whether every named field is still desired for the breezer."""
+        desired = self._breezers.get(guid, {})
+        return all(field in desired for field in fields)
+
+    def release(self, guid: str, fields: Iterable[str]) -> None:
+        """Drop the named fields from the breezer's desired overlay."""
+        self._release(self._breezers.get(guid), self._confirmed.get(guid), fields)
+
+    def release_zone(self, guid: str, fields: Iterable[str]) -> None:
+        """Drop the named fields from the zone's desired overlay."""
+        self._release(self._zones.get(guid), self._confirmed.get(guid), fields)
+
+    @staticmethod
+    def _release(
+        desired: dict[str, Any] | None,
+        confirmed: set[str] | None,
+        fields: Iterable[str],
+    ) -> None:
+        for field in fields:
+            if desired is not None:
+                desired.pop(field, None)
+            if confirmed is not None:
+                confirmed.discard(field)
 
     def reconcile(self, data: TionData) -> None:
         """Send commands to converge reported state toward desired state."""
