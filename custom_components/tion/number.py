@@ -12,7 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import TionError, TionZone, TionZoneDevice
+from .client import TionZone, TionZoneDevice
 from .const import DEFAULT_TARGET_CO2, DOMAIN, TionDeviceType
 from .coordinator import TionDataUpdateCoordinator
 
@@ -119,23 +119,12 @@ class TionNumber(CoordinatorEntity[TionDataUpdateCoordinator], NumberEntity, abc
                 f"Unable to convert {description} value for {self.name}: {value}"
             ) from err
 
-    async def _async_send_zone(self, guid: str, mode, co2: int) -> None:
-        """Send zone data and refresh coordinator data."""
-        try:
-            await self.coordinator.async_send_zone(guid=guid, mode=mode, co2=co2)
-        except TionError as err:
-            raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
-
-    async def _async_send_breezer(self, **kwargs) -> None:
-        """Send breezer data and refresh coordinator data."""
-        try:
-            await self.coordinator.async_send_breezer(**kwargs)
-        except TionError as err:
-            raise HomeAssistantError(f"Unable to update {self.name}: {err}") from err
-
-    @abc.abstractmethod
-    async def _send(self) -> None:
-        """Push new data to API."""
+    async def _push(self) -> None:
+        """Reconcile desired state now (optimistic + dispatch), then refresh."""
+        if self.coordinator.data is not None:
+            self.coordinator.reconciler.reconcile(self.coordinator.data)
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
 
 class TionTargetCO2(TionNumber):
@@ -181,12 +170,14 @@ class TionTargetCO2(TionNumber):
         )
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set new value."""
-        lock_key = self.coordinator.zone_mode_command_key_for_device(self._device.guid)
-        async with self.coordinator.async_zone_mode_command(lock_key):
-            await self._load()
-            self._target_co2 = value
-            await self._send()
+        """Write the zone target CO2 into the desired state."""
+        zone = self.coordinator.get_device_zone(self._device.guid)
+        if not self.available or zone is None:
+            raise HomeAssistantError(f"{self.name} is unavailable")
+
+        self._target_co2 = value
+        self.coordinator.reconciler.set_zone(zone.guid, {"co2": int(value)})
+        await self._push()
 
     async def _load(self, force=False) -> bool:
         await super()._load(force=force)
@@ -212,24 +203,6 @@ class TionTargetCO2(TionNumber):
                 e,
             )
             self._target_co2 = None
-
-    async def _send(self) -> None:
-        """Send new switch data to API."""
-        if not self.available or self._zone is None:
-            raise HomeAssistantError(f"{self.name} is unavailable")
-
-        target_co2 = self._int_or_raise(self._target_co2, "target CO2")
-
-        _LOGGER.debug(
-            "%s: pushing new zone data: mode=%s, target_co2=%s",
-            self.name,
-            self._zone.mode.current,
-            target_co2,
-        )
-
-        await self._async_send_zone(
-            guid=self._zone.guid, mode=self._zone.mode.current, co2=target_co2
-        )
 
 
 class TionLocalTargetCO2(TionNumber, RestoreEntity):
@@ -291,9 +264,6 @@ class TionLocalTargetCO2(TionNumber, RestoreEntity):
         self.coordinator.pid_manager.set_target_co2(self._device.guid, value)
         self.async_write_ha_state()
 
-    async def _send(self) -> None:
-        """No cloud command is needed for local target CO2."""
-
 
 class TionMinSpeed(TionNumber):
     """Tion Minimum Speed Number for Breezer Auto Mode."""
@@ -331,11 +301,15 @@ class TionMinSpeed(TionNumber):
         )
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set new value."""
-        async with self.coordinator.async_breezer_mode_command(self._device.guid):
-            await self._load()
-            self._breezer_min_speed = value
-            await self._send()
+        """Write the breezer lower auto-speed limit into the desired state."""
+        if not self.available:
+            raise HomeAssistantError(f"{self.name} is unavailable")
+
+        self._breezer_min_speed = value
+        self.coordinator.reconciler.set_breezer(
+            self._device.guid, {"speed_min_set": int(value)}
+        )
+        await self._push()
 
     async def _load(self, force=False) -> bool:
         if await super()._load(force=force):
@@ -356,42 +330,6 @@ class TionMinSpeed(TionNumber):
                 e,
             )
             self._breezer_min_speed = None
-
-    async def _send(self) -> None:
-        """Send new switch data to API."""
-        if not self.available:
-            raise HomeAssistantError(f"{self.name} is unavailable")
-
-        breezer_min_speed = self._int_or_raise(self._breezer_min_speed, "min speed")
-        breezer_t_set = self._int_or_raise(
-            self._device.data.t_set, "target temperature"
-        )
-        breezer_speed = self._int_or_raise(self._device.data.speed, "speed")
-
-        _LOGGER.debug(
-            "%s: pushing new breezer data: is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
-            self.name,
-            self._device.data.is_on,
-            breezer_t_set,
-            breezer_speed,
-            breezer_min_speed,
-            self._device.data.speed_max_set,
-            self._device.data.heater_enabled,
-            self._device.data.heater_mode,
-            self._device.data.gate,
-        )
-
-        await self._async_send_breezer(
-            guid=self._device.guid,
-            is_on=self._device.data.is_on,
-            t_set=breezer_t_set,
-            speed=breezer_speed,
-            speed_min_set=breezer_min_speed,
-            speed_max_set=self._device.data.speed_max_set,
-            heater_enabled=self._device.data.heater_enabled,
-            heater_mode=self._device.data.heater_mode,
-            gate=self._device.data.gate,
-        )
 
 
 class TionMaxSpeed(TionNumber):
@@ -430,11 +368,15 @@ class TionMaxSpeed(TionNumber):
         )
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set new value."""
-        async with self.coordinator.async_breezer_mode_command(self._device.guid):
-            await self._load()
-            self._breezer_max_speed = value
-            await self._send()
+        """Write the breezer upper auto-speed limit into the desired state."""
+        if not self.available:
+            raise HomeAssistantError(f"{self.name} is unavailable")
+
+        self._breezer_max_speed = value
+        self.coordinator.reconciler.set_breezer(
+            self._device.guid, {"speed_max_set": int(value)}
+        )
+        await self._push()
 
     async def _load(self, force=False) -> bool:
         if await super()._load(force=force):
@@ -455,39 +397,3 @@ class TionMaxSpeed(TionNumber):
                 e,
             )
             self._breezer_max_speed = None
-
-    async def _send(self) -> None:
-        """Send new switch data to API."""
-        if not self.available:
-            raise HomeAssistantError(f"{self.name} is unavailable")
-
-        breezer_max_speed = self._int_or_raise(self._breezer_max_speed, "max speed")
-        breezer_t_set = self._int_or_raise(
-            self._device.data.t_set, "target temperature"
-        )
-        breezer_speed = self._int_or_raise(self._device.data.speed, "speed")
-
-        _LOGGER.debug(
-            "%s: pushing new breezer data: is_on=%s, t_set=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, gate=%s",
-            self.name,
-            self._device.data.is_on,
-            breezer_t_set,
-            breezer_speed,
-            self._device.data.speed_min_set,
-            breezer_max_speed,
-            self._device.data.heater_enabled,
-            self._device.data.heater_mode,
-            self._device.data.gate,
-        )
-
-        await self._async_send_breezer(
-            guid=self._device.guid,
-            is_on=self._device.data.is_on,
-            t_set=breezer_t_set,
-            speed=breezer_speed,
-            speed_min_set=self._device.data.speed_min_set,
-            speed_max_set=breezer_max_speed,
-            heater_enabled=self._device.data.heater_enabled,
-            heater_mode=self._device.data.heater_mode,
-            gate=self._device.data.gate,
-        )
