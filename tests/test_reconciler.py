@@ -1,0 +1,231 @@
+"""Tests for the Tion desired-state reconciler."""
+
+import asyncio
+from types import SimpleNamespace
+from typing import Any
+
+from custom_components.tion.client import TionLocation
+from custom_components.tion.const import ZoneMode
+from custom_components.tion.coordinator import TionData
+from custom_components.tion.reconciler import TionReconciler
+
+BREEZER_GUID = "breezer-guid"
+ZONE_GUID = "zone"
+
+
+class _FakeEntry:
+    """Config entry double that records background coroutines."""
+
+    def __init__(self) -> None:
+        self.tasks: list[Any] = []
+
+    def async_create_background_task(self, hass: Any, coro: Any, name: str) -> Any:
+        self.tasks.append(coro)
+        return SimpleNamespace(name=name)
+
+
+class _FakeCoordinator:
+    """Coordinator double recording sends in order."""
+
+    def __init__(self, data: TionData) -> None:
+        self.data = data
+        self.hass = SimpleNamespace()
+        self.config_entry = _FakeEntry()
+        self.breezer_sends: list[dict[str, Any]] = []
+        self.zone_sends: list[dict[str, Any]] = []
+        self.order: list[str] = []
+
+    async def async_send_breezer(self, **kwargs: Any) -> bool:
+        self.breezer_sends.append(kwargs)
+        self.order.append("breezer")
+        return True
+
+    async def async_send_zone(self, **kwargs: Any) -> bool:
+        self.zone_sends.append(kwargs)
+        self.order.append("zone")
+        return True
+
+
+def _data(*, speed: int = 3, zone_mode: ZoneMode = ZoneMode.MANUAL) -> TionData:
+    """Build coordinator data with one valid, online breezer in one zone."""
+    return TionData(
+        [
+            TionLocation(
+                {
+                    "guid": "loc",
+                    "zones": [
+                        {
+                            "guid": ZONE_GUID,
+                            "mode": {"current": zone_mode, "auto_set": {"co2": 800}},
+                            "devices": [
+                                {
+                                    "guid": BREEZER_GUID,
+                                    "name": "Breezer",
+                                    "max_speed": 6,
+                                    "is_online": True,
+                                    "data": {
+                                        "data_valid": True,
+                                        "is_on": True,
+                                        "speed": speed,
+                                        "speed_min_set": 1,
+                                        "speed_max_set": 6,
+                                        "t_set": 20,
+                                        "heater_enabled": False,
+                                        "heater_mode": "maintenance",
+                                        "gate": 0,
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+        ]
+    )
+
+
+async def _drain(coordinator: _FakeCoordinator) -> None:
+    """Run and clear all scheduled background coroutines."""
+    for coro in coordinator.config_entry.tasks:
+        await coro
+    coordinator.config_entry.tasks.clear()
+
+
+def test_reconcile_schedules_send_and_optimistically_mutates() -> None:
+    """Test a divergent desired field updates the snapshot and schedules a send."""
+
+    async def _run() -> None:
+        data = _data(speed=3)
+        coordinator = _FakeCoordinator(data)
+        reconciler = TionReconciler(coordinator)
+        reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+        reconciler.reconcile(data)
+
+        assert data.device(BREEZER_GUID).data.speed == 5  # optimistic
+        await _drain(coordinator)
+        assert coordinator.breezer_sends[0]["speed"] == 5
+
+    asyncio.run(_run())
+
+
+def test_reconcile_noop_when_reported_matches() -> None:
+    """Test no send is scheduled when desired already matches reported."""
+    data = _data(speed=5)
+    coordinator = _FakeCoordinator(data)
+    reconciler = TionReconciler(coordinator)
+    reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+    reconciler.reconcile(data)
+
+    assert coordinator.config_entry.tasks == []
+
+
+def test_reconcile_inflight_suppresses_duplicate_send() -> None:
+    """Test a second reconcile does not double-schedule while a send is in flight."""
+    coordinator = _FakeCoordinator(_data(speed=3))
+    reconciler = TionReconciler(coordinator)
+    reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+    reconciler.reconcile(_data(speed=3))
+    reconciler.reconcile(_data(speed=3))  # still in flight, not drained
+
+    assert len(coordinator.config_entry.tasks) == 1
+    for coro in coordinator.config_entry.tasks:
+        coro.close()
+
+
+def test_unconfirmed_field_resends_until_confirmed() -> None:
+    """Test an unconfirmed field is re-sent next cycle while still divergent."""
+
+    async def _run() -> None:
+        coordinator = _FakeCoordinator(_data(speed=3))
+        reconciler = TionReconciler(coordinator)
+        reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+        reconciler.reconcile(_data(speed=3))
+        await _drain(coordinator)
+        reconciler.reconcile(_data(speed=3))  # fresh fetch, cloud still 3
+        await _drain(coordinator)
+
+        assert len(coordinator.breezer_sends) == 2
+
+    asyncio.run(_run())
+
+
+def test_external_change_releases_confirmed_field() -> None:
+    """Test a confirmed field that later diverges is dropped (external change)."""
+
+    async def _run() -> None:
+        coordinator = _FakeCoordinator(_data(speed=3))
+        reconciler = TionReconciler(coordinator)
+        reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+        reconciler.reconcile(_data(speed=3))  # schedule 5
+        await _drain(coordinator)
+        reconciler.reconcile(_data(speed=5))  # cloud now 5 -> confirmed
+        reconciler.reconcile(_data(speed=2))  # external change -> release
+
+        assert coordinator.config_entry.tasks == []  # nothing re-sent
+
+    asyncio.run(_run())
+
+
+def test_external_change_releases_only_diverged_field() -> None:
+    """Test an external change to one field drops only it, keeping other intents."""
+
+    async def _run() -> None:
+        coordinator = _FakeCoordinator(_data(speed=3))
+        reconciler = TionReconciler(coordinator)
+        reconciler.set_breezer(BREEZER_GUID, {"speed": 5, "t_set": 22})
+
+        reconciler.reconcile(_data(speed=3))  # send both (pending)
+        await _drain(coordinator)
+        confirmed = _data(speed=5)
+        confirmed.device(BREEZER_GUID).data.t_set = 22
+        reconciler.reconcile(confirmed)  # both confirmed
+        external = _data(speed=2)
+        external.device(BREEZER_GUID).data.t_set = 22
+        reconciler.reconcile(external)  # speed diverged -> release speed only
+
+        desired = reconciler._breezers[BREEZER_GUID]  # noqa: SLF001
+        assert "speed" not in desired
+        assert desired["t_set"] == 22
+
+    asyncio.run(_run())
+
+
+def test_zone_precondition_sent_before_breezer_in_one_task() -> None:
+    """Test zone MANUAL precondition is sent before the breezer speed, in order."""
+
+    async def _run() -> None:
+        data = _data(speed=3, zone_mode=ZoneMode.AUTO)
+        coordinator = _FakeCoordinator(data)
+        reconciler = TionReconciler(coordinator)
+        reconciler.set_zone(ZONE_GUID, {"mode": ZoneMode.MANUAL})
+        reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+        reconciler.reconcile(data)
+        await _drain(coordinator)
+
+        assert coordinator.order == ["zone", "breezer"]
+
+    asyncio.run(_run())
+
+
+def test_zone_only_desired_is_dispatched() -> None:
+    """Test a zone-only desire (cloud auto, no breezer write) still sends."""
+
+    async def _run() -> None:
+        data = _data(speed=3, zone_mode=ZoneMode.MANUAL)
+        coordinator = _FakeCoordinator(data)
+        reconciler = TionReconciler(coordinator)
+        reconciler.set_zone(ZONE_GUID, {"mode": ZoneMode.AUTO})
+
+        reconciler.reconcile(data)
+        await _drain(coordinator)
+
+        assert coordinator.zone_sends[0]["mode"] == ZoneMode.AUTO
+        assert coordinator.breezer_sends == []
+
+    asyncio.run(_run())
