@@ -6,11 +6,7 @@ from typing import Any
 
 import pytest
 
-from custom_components.tion.climate import (
-    ATTR_DESIRED_BREEZER,
-    ATTR_DESIRED_ZONE,
-    TionClimate,
-)
+from custom_components.tion.climate import TionClimate
 from custom_components.tion.const import Heater, SwingMode, TionDeviceType, ZoneMode
 from custom_components.tion.presets import (
     ATTR_SAVED_PRESET,
@@ -651,7 +647,7 @@ def test_climate_enter_auto_mode_writes_cloud_auto() -> None:
     """Test entering auto without local PID writes the cloud-auto zone desired."""
     entity = _setter_climate(mode=ZoneMode.MANUAL)
 
-    asyncio.run(entity._enter_auto_mode())  # noqa: SLF001
+    asyncio.run(entity.async_set_fan_mode(FAN_AUTO))
 
     assert entity.coordinator.reconciler.zone["zone-guid"] == {"mode": ZoneMode.AUTO}
 
@@ -661,21 +657,10 @@ def test_climate_enter_auto_mode_arms_pid_when_configured() -> None:
     entity = _setter_climate(mode=ZoneMode.MANUAL)
     entity.coordinator.pid_manager.configured_guids.add(BREEZER_GUID)
 
-    asyncio.run(entity._enter_auto_mode())  # noqa: SLF001
+    asyncio.run(entity.async_set_fan_mode(FAN_AUTO))
 
     assert (BREEZER_GUID, True) in entity.coordinator.pid_manager.active_calls
     assert entity.coordinator.reconciler.zone == {}
-
-
-def test_climate_apply_auto_limits_writes_desired_and_enters_auto() -> None:
-    """Test applying auto limits writes the limits and enters cloud auto."""
-    entity = _setter_climate(mode=ZoneMode.MANUAL)
-
-    asyncio.run(entity.async_apply_auto_limits(1, 4))
-
-    reconciler = entity.coordinator.reconciler
-    assert reconciler.breezer[BREEZER_GUID] == {"speed_min_set": 1, "speed_max_set": 4}
-    assert reconciler.zone["zone-guid"] == {"mode": ZoneMode.AUTO}
 
 
 def test_climate_rejects_hidden_fan_auto_writes_nothing() -> None:
@@ -693,39 +678,22 @@ def test_climate_rejects_hidden_fan_auto_writes_nothing() -> None:
     assert pid_manager.active_calls == []
 
 
-def test_climate_persists_desired_overlays() -> None:
-    """Test the desired breezer/zone overlays are exposed for state restore."""
-    entity = _preset_climate(FakePidManager(), presets={})
-    entity.coordinator.reconciler.set_breezer(BREEZER_GUID, {"speed": 3})
-    entity.coordinator.reconciler.set_zone("zone-guid", {"mode": ZoneMode.MANUAL})
+def test_climate_restore_rederives_preset_desired() -> None:
+    """Test restoring a preset re-applies its desired fields into the reconciler.
 
-    attrs = entity.extra_state_attributes
-
-    assert attrs[ATTR_DESIRED_BREEZER] == {"speed": 3}
-    assert attrs[ATTR_DESIRED_ZONE] == {"mode": ZoneMode.MANUAL}
-
-
-def test_climate_omits_empty_desired_overlays() -> None:
-    """Test empty desired overlays are not written into the state attributes."""
-    entity = _preset_climate(FakePidManager(), presets={})
-
-    attrs = entity.extra_state_attributes
-
-    assert ATTR_DESIRED_BREEZER not in attrs
-    assert ATTR_DESIRED_ZONE not in attrs
-
-
-def test_climate_restores_desired_overlays() -> None:
-    """Test the desired overlays are rehydrated into the reconciler on restart."""
-    entity = _preset_climate(FakePidManager(), presets={})
-    last_state = SimpleNamespace(
-        attributes={
-            ATTR_DESIRED_BREEZER: {"speed": 3},
-            ATTR_DESIRED_ZONE: {"mode": ZoneMode.MANUAL},
-        }
+    The desired overlay is not persisted, so restore must re-derive it from the
+    preset definition; otherwise holds() would release the preset immediately.
+    """
+    entity = _preset_climate(
+        FakePidManager(),
+        presets={"boost": {"type": "manual", "speed": 3}},
     )
+    last_state = SimpleNamespace(attributes={ATTR_PRESET_MODE: "boost"})
 
-    entity._restore_desired(last_state)  # noqa: SLF001
+    entity._restore_preset(last_state)  # noqa: SLF001
 
-    assert entity.coordinator.reconciler.breezer[BREEZER_GUID] == {"speed": 3}
-    assert entity.coordinator.reconciler.zone["zone-guid"] == {"mode": ZoneMode.MANUAL}
+    assert entity.preset_mode == "boost"
+    assert entity.coordinator.reconciler.breezer[BREEZER_GUID] == {
+        "is_on": True,
+        "speed": 3,
+    }

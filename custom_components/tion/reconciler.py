@@ -57,10 +57,6 @@ class TionReconciler:
         """Return a copy of the breezer's current desired overlay."""
         return dict(self._breezers.get(guid, {}))
 
-    def current_zone(self, guid: str) -> dict[str, Any]:
-        """Return a copy of the zone's current desired overlay."""
-        return dict(self._zones.get(guid, {}))
-
     def holds(self, guid: str, fields: Mapping[str, Any]) -> bool:
         """Return whether the breezer's desired overlay still has these values.
 

@@ -249,19 +249,6 @@ def test_current_breezer_returns_copy_of_desired() -> None:
     assert reconciler.current_breezer(BREEZER_GUID) == {"speed": 5}
 
 
-def test_current_zone_returns_copy_of_desired() -> None:
-    """Test current_zone returns a copy that cannot mutate internal state."""
-    coordinator = _FakeCoordinator(_data(speed=3))
-    reconciler = TionReconciler(coordinator)
-    reconciler.set_zone(ZONE_GUID, {"mode": ZoneMode.AUTO})
-
-    snap = reconciler.current_zone(ZONE_GUID)
-    assert snap == {"mode": ZoneMode.AUTO}
-
-    snap["mode"] = ZoneMode.MANUAL
-    assert reconciler.current_zone(ZONE_GUID) == {"mode": ZoneMode.AUTO}
-
-
 def test_holds_true_only_when_fields_present_with_matching_values() -> None:
     """Test holds requires every field present AND unchanged in value.
 

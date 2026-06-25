@@ -46,9 +46,6 @@ from .presets import (
 
 _LOGGER = logging.getLogger(__name__)
 
-ATTR_DESIRED_BREEZER = "desired_breezer"
-ATTR_DESIRED_ZONE = "desired_zone"
-
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
@@ -181,17 +178,6 @@ class TionClimate(
 
         if self._presets.has_presets:
             attrs.update(self._presets.restore_attributes())
-
-        # Persist the desired overlays so the reconciler's intent survives a
-        # restart and keeps driving the device toward it.
-        if desired_breezer := self.coordinator.reconciler.current_breezer(
-            self._breezer_guid
-        ):
-            attrs[ATTR_DESIRED_BREEZER] = desired_breezer
-        if self._zone_guid is not None and (
-            desired_zone := self.coordinator.reconciler.current_zone(self._zone_guid)
-        ):
-            attrs[ATTR_DESIRED_ZONE] = desired_zone
 
         return attrs
 
@@ -400,20 +386,7 @@ class TionClimate(
         await super().async_added_to_hass()
         if (last_state := await self.async_get_last_state()) is not None:
             self._restore_local_pid(last_state)
-            self._restore_desired(last_state)
             self._restore_preset(last_state)
-
-    @callback
-    def _restore_desired(self, last_state: State) -> None:
-        """Rehydrate the reconciler's desired overlays after a restart."""
-        if desired_breezer := last_state.attributes.get(ATTR_DESIRED_BREEZER):
-            self.coordinator.reconciler.set_breezer(
-                self._breezer_guid, dict(desired_breezer)
-            )
-        if self._zone_guid is not None and (
-            desired_zone := last_state.attributes.get(ATTR_DESIRED_ZONE)
-        ):
-            self.coordinator.reconciler.set_zone(self._zone_guid, dict(desired_zone))
 
     @callback
     def _restore_local_pid(self, last_state: State) -> None:
@@ -443,6 +416,11 @@ class TionClimate(
             saved,
         )
         self._presets.restore(preset_mode, saved)
+        # Re-derive the preset's desired fields from its definition (they are
+        # not persisted) so the reconciler holds them and the preset is not
+        # released on the first coordinator update after restart.
+        if (preset := self._presets.active_preset()) is not None:
+            self._write_preset_desired(preset)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -552,7 +530,9 @@ class TionClimate(
             return
 
         if fan_mode == FAN_AUTO:
-            await self._enter_auto_mode()
+            self._release_active_preset()
+            self._enter_auto_desired()
+            await self._push()
             return
 
         try:
@@ -586,22 +566,6 @@ class TionClimate(
         self.coordinator.reconciler.set_breezer(
             self._breezer_guid, {"speed": new_speed}
         )
-        await self._push()
-
-    async def _enter_auto_mode(self) -> None:
-        """Switch the breezer into Auto by writing the desired mode, then push."""
-        self._release_active_preset()
-        self._enter_auto_desired()
-        await self._push()
-
-    async def async_apply_auto_limits(self, min_speed: int, max_speed: int) -> None:
-        """Write the auto-mode speed limits and enter auto, then push once."""
-        self._release_active_preset()
-        self.coordinator.reconciler.set_breezer(
-            self._breezer_guid,
-            {"speed_min_set": min_speed, "speed_max_set": max_speed},
-        )
-        self._enter_auto_desired()
         await self._push()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
