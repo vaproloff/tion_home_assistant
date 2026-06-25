@@ -1,7 +1,6 @@
 """Tests for Tion climate entities."""
 
 import asyncio
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 
@@ -125,10 +124,6 @@ class FakeCoordinator:
         self.reconciler = FakeReconciler()
         self.data: SimpleNamespace | None = None
         self.zone = SimpleNamespace(devices=zone_devices or [])
-        # Real per-guid locks mirror the coordinator so tests catch a
-        # re-entrant double-acquire or breezer<->zone ordering deadlock.
-        self._breezer_locks: dict[str, asyncio.Lock] = {}
-        self._zone_locks: dict[str, asyncio.Lock] = {}
 
     async def async_request_refresh(self) -> None:
         """Record a refresh request (no-op)."""
@@ -136,29 +131,6 @@ class FakeCoordinator:
     def get_device_zone(self, guid: str) -> SimpleNamespace:
         """Return fake zone for the breezer."""
         return self.zone
-
-    def zone_mode_command_key_for_device(self, guid: str) -> str:
-        """Return the zone command lock key for a device guid."""
-        if (zone := self.get_device_zone(guid)) is not None and (
-            zone_guid := getattr(zone, "guid", None)
-        ) is not None:
-            return zone_guid
-
-        return guid
-
-    @asynccontextmanager
-    async def async_breezer_mode_command(self, guid: str):
-        """Provide a fake breezer command critical section."""
-        assert guid
-        async with self._breezer_locks.setdefault(guid, asyncio.Lock()):
-            yield
-
-    @asynccontextmanager
-    async def async_zone_mode_command(self, guid: str):
-        """Provide a fake zone command critical section."""
-        assert guid
-        async with self._zone_locks.setdefault(guid, asyncio.Lock()):
-            yield
 
 
 def _device(guid: str) -> SimpleNamespace:
