@@ -100,9 +100,16 @@ class TionReconciler:
 
     def _reconcile_breezer(self, guid: str, data: TionData) -> None:
         device = data.device(guid)
-        if device is None or guid in self._inflight:
+        if device is None:
             return
         breezer_payload = self._resolve_breezer(guid, device)
+        if breezer_payload is not None:
+            # Re-apply the optimistic value on every cycle, even while a prior
+            # send is still in flight: a refresh can land before the cloud
+            # reflects the command, and skipping this would briefly revert the
+            # entity to the stale reported value.
+            self._apply_breezer(device, breezer_payload)
+
         zone = data.zone(guid)
         zone_payload = None
         if (
@@ -111,11 +118,14 @@ class TionReconciler:
             and zone.guid not in self._inflight
         ):
             zone_payload = self._resolve_zone(zone.guid, zone)
+
+        # The optimistic overlay above is unconditional; in-flight only gates
+        # dispatching a duplicate command for the same key.
+        if guid in self._inflight:
+            breezer_payload = None
         if breezer_payload is None and zone_payload is None:
             return
-        if breezer_payload is not None:
-            self._apply_breezer(device, breezer_payload)
-        keys = [guid]
+        keys = [guid] if breezer_payload is not None else []
         if zone_payload is not None:
             keys.append(zone_payload["guid"])
         self._dispatch(guid, keys, zone_payload, breezer_payload)

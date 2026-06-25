@@ -135,6 +135,29 @@ def test_reconcile_inflight_suppresses_duplicate_send() -> None:
         coro.close()
 
 
+def test_inflight_keeps_optimistic_overlay_on_fresh_fetch() -> None:
+    """Test a refresh landing mid-send keeps the optimistic value, not stale cloud.
+
+    A refresh can complete before the cloud reflects an in-flight command. The
+    reconciler must re-apply the desired overlay to the fresh snapshot so the
+    entity keeps showing the desired value instead of reverting to the stale
+    reported one, while not scheduling a duplicate send.
+    """
+    coordinator = _FakeCoordinator(_data(speed=3))
+    reconciler = TionReconciler(coordinator)
+    reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+    reconciler.reconcile(_data(speed=3))  # schedules send 5; guid now in flight
+
+    fresh = _data(speed=1)  # refresh landed before the command propagated
+    reconciler.reconcile(fresh)
+
+    assert fresh.device(BREEZER_GUID).data.speed == 5  # optimistic value kept
+    assert len(coordinator.config_entry.tasks) == 1  # no duplicate send
+    for coro in coordinator.config_entry.tasks:
+        coro.close()
+
+
 def test_unconfirmed_field_resends_until_confirmed() -> None:
     """Test an unconfirmed field is re-sent next cycle while still divergent."""
 
