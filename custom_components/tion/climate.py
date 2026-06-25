@@ -1,6 +1,5 @@
 """Support for Tion breezer."""
 
-import asyncio
 import logging
 from typing import Any
 
@@ -38,7 +37,13 @@ from .const import (
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .presets import ATTR_SAVED_PRESET, AutoPreset, Preset, TionPresetController
+from .presets import (
+    ATTR_SAVED_PRESET,
+    AutoPreset,
+    Preset,
+    PresetBaseline,
+    TionPresetController,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -96,7 +101,6 @@ class TionClimate(
                 breezer.guid, {}
             )
         )
-        self._preset_apply_lock = asyncio.Lock()
         self._gate = breezer.data.gate
         self._filter_time_seconds = breezer.data.filter_time_seconds
         self._filter_need_replace = breezer.data.filter_need_replace
@@ -403,9 +407,11 @@ class TionClimate(
         preset_mode = last_state.attributes.get(ATTR_PRESET_MODE)
         if preset_mode is None or preset_mode == PRESET_NONE:
             return
-        saved = Preset.from_storage(last_state.attributes.get(ATTR_SAVED_PRESET))
+        saved = PresetBaseline.from_storage(
+            last_state.attributes.get(ATTR_SAVED_PRESET)
+        )
         _LOGGER.debug(
-            "%s: restoring preset '%s' with saved intent %s",
+            "%s: restoring preset '%s' with saved baseline %s",
             self.name,
             preset_mode,
             saved,
@@ -417,19 +423,17 @@ class TionClimate(
         """Handle updated data from the coordinator."""
         self._load_zone()
         self._load_breezer()
-        if self._presets.has_presets:
-            current_preset = Preset.snapshot(self)
-            active_preset = self._presets.preset_mode
-            expected_preset = self._presets.preset(active_preset)
-            if self._presets.reconcile(current_preset):
-                _LOGGER.debug(
-                    "%s: preset '%s' reset to %s by external change: expected=%s, current=%s",
+        if self._presets.preset_mode != PRESET_NONE:
+            preset = self._presets.active_preset()
+            if preset is not None and not self.coordinator.reconciler.holds(
+                self._breezer_guid, preset.desired_fields()
+            ):
+                _LOGGER.info(
+                    "%s: preset '%s' released by external change",
                     self.name,
-                    active_preset,
                     self._presets.preset_mode,
-                    expected_preset,
-                    current_preset,
                 )
+                self._presets.deactivate()
         super()._handle_coordinator_update()
 
     async def async_turn_on(self) -> None:
@@ -651,67 +655,102 @@ class TionClimate(
         return True
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Set a preset by applying it (auto limits or manual speed)."""
-        async with self._preset_apply_lock:
-            if preset_mode not in self._presets.preset_modes:
-                _LOGGER.warning(
-                    "%s: unsupported preset mode '%s'", self.name, preset_mode
-                )
-                return
+        """Set a preset by writing its desired state (synchronous, no rollback)."""
+        if preset_mode not in self._presets.preset_modes:
+            _LOGGER.warning("%s: unsupported preset mode '%s'", self.name, preset_mode)
+            return
 
-            if preset_mode == self._presets.preset_mode:
-                _LOGGER.debug(
-                    "%s: no need to change preset: %s already set",
-                    self.name,
-                    preset_mode,
-                )
-                return
-
-            target = self._presets.preset(preset_mode)
-            if isinstance(target, AutoPreset) and FAN_AUTO not in self.fan_modes:
-                _LOGGER.warning(
-                    "%s: cannot apply auto preset '%s', Fan Auto is unavailable",
-                    self.name,
-                    preset_mode,
-                )
-                return
-
-            checkpoint = self._presets.checkpoint()
-            applied = self._presets.activate(preset_mode, Preset.snapshot(self))
+        if preset_mode == self._presets.preset_mode:
             _LOGGER.debug(
-                "%s: applying preset '%s' as %s", self.name, preset_mode, applied
+                "%s: no need to change preset: %s already set", self.name, preset_mode
             )
-            try:
-                if applied is not None:
-                    await applied.apply(self)
-            except asyncio.CancelledError:
-                self._presets.restore_checkpoint(checkpoint)
-                self.async_write_ha_state()
-                _LOGGER.debug(
-                    "%s: preset apply cancelled before confirmation: preset=%s, applied=%s",
-                    self.name,
-                    preset_mode,
-                    applied,
-                )
-                raise
-            except Exception:
-                self._presets.restore_checkpoint(checkpoint)
-                self.async_write_ha_state()
-                _LOGGER.debug(
-                    "%s: preset apply failed before confirmation: preset=%s, applied=%s",
-                    self.name,
-                    preset_mode,
-                    applied,
-                    exc_info=True,
-                )
-                raise
+            return
 
-            _LOGGER.debug(
-                "%s: preset '%s' applied successfully as %s",
+        target = self._presets.preset(preset_mode)
+        if isinstance(target, AutoPreset) and FAN_AUTO not in self.fan_modes:
+            _LOGGER.warning(
+                "%s: cannot apply auto preset '%s', Fan Auto is unavailable",
                 self.name,
                 preset_mode,
-                applied,
             )
+            return
+
+        # The baseline comes from the desired overlay (not a live snapshot) and the
+        # desired write is synchronous: there is no await before it, so a
+        # restart-mode cancellation cannot interleave and pollute the baseline.
+        if preset_mode == PRESET_NONE:
+            self._restore_preset_baseline(self._presets.saved)
+            self._presets.deactivate()
+        else:
+            baseline = PresetBaseline(
+                overrides=self._managed_overrides(),
+                was_auto=self.fan_mode == FAN_AUTO,
+            )
+            self._presets.activate(preset_mode, baseline)
+            self._write_preset_desired(target)
+
+        _LOGGER.debug("%s: applied preset '%s'", self.name, preset_mode)
+        await self._push()
+
+    def _managed_overrides(self) -> dict[str, Any]:
+        """Return the current desired overlay restricted to preset-managed fields."""
+        current = self.coordinator.reconciler.current_breezer(self._breezer_guid)
+        return {
+            field: current[field]
+            for field in self._presets.managed_fields
+            if field in current
+        }
+
+    def _write_preset_desired(self, preset: Preset) -> None:
+        """Write a preset's desired fields and arm/disarm its mode."""
+        self.coordinator.reconciler.set_breezer(
+            self._breezer_guid, preset.desired_fields()
+        )
+        if preset.is_auto():
+            self._enter_auto_desired()
+        else:
+            self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
+            if self._zone_guid is not None:
+                self.coordinator.reconciler.set_zone(
+                    self._zone_guid, {"mode": ZoneMode.MANUAL}
+                )
+
+    def _restore_preset_baseline(self, baseline: PresetBaseline | None) -> None:
+        """Restore the desired overlay and mode saved before a preset."""
+        if baseline is None:
+            return
+        if baseline.overrides:
+            self.coordinator.reconciler.set_breezer(
+                self._breezer_guid, baseline.overrides
+            )
+        else:
+            self.coordinator.reconciler.release(
+                self._breezer_guid, self._presets.managed_fields
+            )
+        if baseline.was_auto:
+            self._enter_auto_desired()
+        else:
+            self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
+            if self._zone_guid is not None:
+                self.coordinator.reconciler.set_zone(
+                    self._zone_guid, {"mode": ZoneMode.MANUAL}
+                )
+
+    def _enter_auto_desired(self) -> None:
+        """Write desired auto mode (local PID if configured, else cloud auto)."""
+        if self.coordinator.pid_manager.is_configured(self._breezer_guid):
+            self.coordinator.pid_manager.start_breezer_pid(self._breezer_guid)
+        elif self._zone_guid is not None:
+            self.coordinator.reconciler.set_zone(
+                self._zone_guid, {"mode": ZoneMode.AUTO}
+            )
+
+    async def _push(self) -> None:
+        """Reconcile desired state now (optimistic + dispatch), then refresh."""
+        if self.coordinator.data is not None:
+            self.coordinator.reconciler.reconcile(self.coordinator.data)
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set Tion breezer air gate."""
