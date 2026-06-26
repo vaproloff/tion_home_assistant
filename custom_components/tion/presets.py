@@ -37,10 +37,6 @@ class Preset(ABC):
     def is_auto(self) -> bool:
         """Return whether this preset runs the breezer in auto mode."""
 
-    @abstractmethod
-    def to_storage(self) -> dict[str, int | str]:
-        """Serialize the preset for persistence in state attributes."""
-
     @classmethod
     def from_config(cls, cfg: Mapping[str, int | str]) -> Preset:
         """Build a preset from an options-flow preset dict."""
@@ -49,13 +45,6 @@ class Preset(ABC):
         return AutoPreset(
             int(cfg[CONF_PRESET_MIN_SPEED]), int(cfg[CONF_PRESET_MAX_SPEED])
         )
-
-    @classmethod
-    def from_storage(cls, data: Mapping[str, int | str] | None) -> Preset | None:
-        """Rebuild a saved preset from restored state attributes."""
-        if not data:
-            return None
-        return cls.from_config(data)
 
 
 @dataclass(frozen=True)
@@ -72,13 +61,6 @@ class ManualPreset(Preset):
         """A manual preset does not run in auto."""
         return False
 
-    def to_storage(self) -> dict[str, int | str]:
-        """Serialize the manual preset."""
-        return {
-            CONF_PRESET_TYPE: TionPresetType.MANUAL.value,
-            CONF_PRESET_SPEED: self.speed,
-        }
-
 
 @dataclass(frozen=True)
 class AutoPreset(Preset):
@@ -94,14 +76,6 @@ class AutoPreset(Preset):
     def is_auto(self) -> bool:
         """An auto preset runs in auto."""
         return True
-
-    def to_storage(self) -> dict[str, int | str]:
-        """Serialize the auto preset."""
-        return {
-            CONF_PRESET_TYPE: TionPresetType.AUTO.value,
-            CONF_PRESET_MIN_SPEED: self.min_speed,
-            CONF_PRESET_MAX_SPEED: self.max_speed,
-        }
 
 
 @dataclass(frozen=True)

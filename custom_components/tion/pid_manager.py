@@ -275,18 +275,6 @@ class TionPidManager:
         for controller in self._controllers.values():
             controller.active = False
 
-    def configured_breezers(self) -> set[str]:
-        """Return breezers that have local PID control enabled."""
-        return {
-            breezer_guid
-            for breezer_guid in self.entry.options.get(CONF_PID_BREEZERS, {})
-            if self.is_configured(breezer_guid)
-        }
-
-    def has_enabled_pid(self) -> bool:
-        """Return if at least one breezer has local PID control enabled."""
-        return bool(self.configured_breezers())
-
     def has_active_pid(self) -> bool:
         """Return if at least one breezer has active local PID control."""
         return any(controller.active for controller in self._controllers.values())

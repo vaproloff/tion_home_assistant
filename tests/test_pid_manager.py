@@ -227,15 +227,13 @@ def test_pid_manager_arming_requests_immediate_refresh() -> None:
 
 
 def test_pid_manager_does_not_arm_without_enabled_pid() -> None:
-    """Test disabled PID options do not arm a controller and report no enabled PID."""
+    """Test disabled PID options do not arm a controller."""
     coordinator = FakeCoordinator(_device(speed=1))
     manager = TionPidManager(FakeHass("1000"), FakeDisabledConfigEntry(), coordinator)
 
     unsubscribe = manager.async_start()
 
-    assert manager.has_enabled_pid() is False
     assert manager.has_active_pid() is False
-    assert manager.configured_breezers() == set()
     assert manager.start_breezer_pid(BREEZER_GUID) is False
     assert manager._controllers == {}  # noqa: SLF001
 

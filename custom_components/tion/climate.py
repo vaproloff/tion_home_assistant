@@ -76,7 +76,6 @@ class TionClimate(
     ) -> None:
         """Initialize climate device for Tion Breezer."""
         super().__init__(coordinator)
-        self._breezer_data = breezer
 
         self._breezer_guid = breezer.guid
         self._attr_name = breezer.name
@@ -341,18 +340,6 @@ class TionClimate(
 
         return None
 
-    @speed.setter
-    def speed(self, new_speed: float) -> None:
-        try:
-            self._speed = float(new_speed)
-        except (TypeError, ValueError) as e:
-            _LOGGER.warning(
-                "%s: unable to convert new breezer speed value to float: %s. Error: %s",
-                self.name,
-                new_speed,
-                e,
-            )
-
     @property
     def speed_min_set(self) -> int | None:
         """Return the breezer's lower auto-speed limit."""
@@ -370,13 +357,6 @@ class TionClimate(
             return self._heater_mode == Heater.ON
 
         return self._heater_enabled or False
-
-    @heater_enabled.setter
-    def heater_enabled(self, enabled: bool = False) -> None:
-        if self._type == TionDeviceType.BREEZER_4S:
-            self._heater_mode = Heater.ON if enabled else Heater.OFF
-        else:
-            self._heater_enabled = enabled
 
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
@@ -709,11 +689,7 @@ class TionClimate(
             if self._type == TionDeviceType.BREEZER_3S:
                 self._swing_modes.append(SwingMode.SWING_MIXED)
 
-    async def async_update(self):
-        """Fetch new state data for the breezer."""
-        await super().async_update()
-
-    def _load_breezer(self, force=False):
+    def _load_breezer(self):
         """Update breezer data from API."""
         if device_data := self.coordinator.get_device(self._breezer_guid):
             self._attr_name = device_data.name
@@ -756,7 +732,7 @@ class TionClimate(
 
         return self.available
 
-    def _load_zone(self, force=False) -> bool:
+    def _load_zone(self) -> bool:
         """Update zone data from API."""
         if zone_data := self.coordinator.get_device_zone(self._breezer_guid):
             old_mode = self._mode

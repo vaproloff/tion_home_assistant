@@ -129,7 +129,7 @@ class TionSwitch(CoordinatorEntity[TionDataUpdateCoordinator], SwitchEntity, abc
         """Return the command critical section for this switch."""
         return nullcontext()
 
-    async def _load(self, force=False) -> bool:
+    async def _load(self) -> bool:
         if device_data := self.coordinator.get_device(self._device.guid):
             self._device = device_data
             return True
@@ -200,9 +200,9 @@ class TionBacklightSwitch(TionSwitch):
         """Serialize backlight writes on the settings endpoint."""
         return self.coordinator.async_settings_command(self._device.guid)
 
-    async def _load(self, force=False) -> bool:
+    async def _load(self) -> bool:
         """Update device data from API."""
-        if await super()._load(force=force):
+        if await super()._load():
             self._handle_device_update()
 
         return self.available
@@ -266,9 +266,9 @@ class TionAutoModeSwitch(TionSwitch):
 
         return None
 
-    async def _load(self, force=False) -> bool:
+    async def _load(self) -> bool:
         """Update device and zone data from API."""
-        await super()._load(force=force)
+        await super()._load()
         self._handle_device_update()
 
         return self.available
@@ -332,9 +332,9 @@ class TionBreezerSoundSwitch(TionSwitch):
         """Serialize sound writes on the settings endpoint."""
         return self.coordinator.async_settings_command(self._device.guid)
 
-    async def _load(self, force=False) -> bool:
+    async def _load(self) -> bool:
         """Update device data from API."""
-        if await super()._load(force=force):
+        if await super()._load():
             self._handle_device_update()
 
         return self.available
@@ -397,9 +397,9 @@ class TionBreezerHeaterSwitch(TionSwitch):
 
         return bool(self._device.data.heater_enabled)
 
-    async def _load(self, force=False) -> bool:
+    async def _load(self) -> bool:
         """Update device data from API."""
-        if await super()._load(force=force):
+        if await super()._load():
             self._handle_device_update()
 
         return self.available

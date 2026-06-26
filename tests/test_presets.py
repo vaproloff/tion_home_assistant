@@ -184,21 +184,6 @@ def test_from_config_auto() -> None:
     assert preset == AutoPreset(1, 4)
 
 
-@pytest.mark.parametrize(
-    "preset",
-    [ManualPreset(3), AutoPreset(1, 4)],
-    ids=["manual", "auto"],
-)
-def test_storage_roundtrip(preset: Preset) -> None:
-    """Test to_storage/from_storage round-trips each preset type."""
-    assert Preset.from_storage(preset.to_storage()) == preset
-
-
-def test_from_storage_none() -> None:
-    """Test from_storage returns None for a missing saved preset."""
-    assert Preset.from_storage(None) is None
-
-
 def test_equality_across_types() -> None:
     """Test manual and auto presets are never equal even with matching numbers."""
     assert ManualPreset(3) != AutoPreset(3, 3)

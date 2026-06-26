@@ -48,10 +48,6 @@ class DesiredBreezer:
             payload[key] = self.fields.get(key, getattr(reported.data, key))
         return payload
 
-    def diff(self, reported: TionZoneDevice) -> bool:
-        """Return whether desired changes anything versus untouched reported."""
-        return self.merge(reported) != DesiredBreezer({}).merge(reported)
-
 
 @dataclass(frozen=True)
 class DesiredZone:
@@ -66,7 +62,3 @@ class DesiredZone:
             return None
         mode = self.fields.get("mode", reported.mode.current)
         return {"guid": reported.guid, "mode": mode, "co2": co2}
-
-    def diff(self, reported: TionZone) -> bool:
-        """Return whether desired changes anything versus untouched reported."""
-        return self.merge(reported) != DesiredZone({}).merge(reported)

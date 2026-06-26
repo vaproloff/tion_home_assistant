@@ -90,7 +90,7 @@ class TionNumber(CoordinatorEntity[TionDataUpdateCoordinator], NumberEntity, abc
     async def async_set_native_value(self, value: float) -> None:
         """Set new value."""
 
-    async def _load(self, force=False) -> bool:
+    async def _load(self) -> bool:
         """Update device data from API."""
         if device_data := self.coordinator.get_device(self._device.guid):
             self._device = device_data
@@ -185,8 +185,8 @@ class TionTargetCO2(TionNumber):
         self.coordinator.reconciler.set_zone(zone.guid, {"co2": int(value)})
         await self._push()
 
-    async def _load(self, force=False) -> bool:
-        await super()._load(force=force)
+    async def _load(self) -> bool:
+        await super()._load()
         self._handle_device_update()
 
         return self.available
@@ -317,8 +317,8 @@ class TionMinSpeed(TionNumber):
         )
         await self._push()
 
-    async def _load(self, force=False) -> bool:
-        if await super()._load(force=force):
+    async def _load(self) -> bool:
+        if await super()._load():
             self._handle_device_update()
 
         return self.available
@@ -384,8 +384,8 @@ class TionMaxSpeed(TionNumber):
         )
         await self._push()
 
-    async def _load(self, force=False) -> bool:
-        if await super()._load(force=force):
+    async def _load(self) -> bool:
+        if await super()._load():
             self._handle_device_update()
 
         return self.available

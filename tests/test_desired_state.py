@@ -88,16 +88,6 @@ def test_breezer_merge_preserves_explicit_none() -> None:
     assert payload["heater_enabled"] is None
 
 
-def test_breezer_diff_true_when_field_differs() -> None:
-    """Test diff is True when a desired field differs from reported."""
-    assert DesiredBreezer({"speed": 5}).diff(_device()) is True
-
-
-def test_breezer_diff_false_when_matches_reported() -> None:
-    """Test diff is False when the desired field already matches reported."""
-    assert DesiredBreezer({"speed": 3}).diff(_device()) is False
-
-
 def test_breezer_merge_none_on_invalid_reported() -> None:
     """Test merge returns None when a required numeric field is unreadable."""
     device = _device()
@@ -111,13 +101,3 @@ def test_zone_merge_overlays_mode_and_keeps_co2() -> None:
     payload = DesiredZone({"mode": ZoneMode.AUTO}).merge(_zone())
 
     assert payload == {"guid": "zone", "mode": ZoneMode.AUTO, "co2": 800}
-
-
-def test_zone_diff_true_when_mode_differs() -> None:
-    """Test zone diff is True when the desired mode differs from reported."""
-    assert DesiredZone({"mode": ZoneMode.AUTO}).diff(_zone()) is True
-
-
-def test_zone_diff_false_when_mode_matches() -> None:
-    """Test zone diff is False when the desired mode already matches reported."""
-    assert DesiredZone({"mode": ZoneMode.MANUAL}).diff(_zone()) is False

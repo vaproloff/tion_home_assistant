@@ -74,10 +74,6 @@ class TionReconciler:
         """Drop the named fields from the breezer's desired overlay."""
         self._release(self._breezers.get(guid), self._confirmed.get(guid), fields)
 
-    def release_zone(self, guid: str, fields: Iterable[str]) -> None:
-        """Drop the named fields from the zone's desired overlay."""
-        self._release(self._zones.get(guid), self._confirmed.get(guid), fields)
-
     @staticmethod
     def _release(
         desired: dict[str, Any] | None,
