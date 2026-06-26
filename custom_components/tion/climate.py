@@ -36,13 +36,7 @@ from .const import (
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .presets import (
-    ATTR_SAVED_PRESET,
-    AutoPreset,
-    Preset,
-    PresetBaseline,
-    TionPresetController,
-)
+from .presets import ATTR_SAVED_PRESET, Preset, PresetBaseline, TionPresetController
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -561,7 +555,7 @@ class TionClimate(
             return
 
         target = self._presets.preset(preset_mode)
-        if isinstance(target, AutoPreset) and FAN_AUTO not in self.fan_modes:
+        if target is not None and target.is_auto() and FAN_AUTO not in self.fan_modes:
             _LOGGER.warning(
                 "%s: cannot apply auto preset '%s', Fan Auto is unavailable",
                 self.name,

@@ -154,9 +154,6 @@ class TionPresetController:
         The baseline is supplied by the caller from the current desired overlay
         (not a live snapshot), and is preserved across preset-to-preset switches.
         """
-        if name == PRESET_NONE:
-            self._active = PRESET_NONE
-            return
         if self._active == PRESET_NONE:
             self._saved = baseline
         self._active = name
