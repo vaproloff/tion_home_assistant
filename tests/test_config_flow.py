@@ -4,9 +4,6 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
-from homeassistant.const import CONF_SCAN_INTERVAL
-from homeassistant.data_entry_flow import FlowResultType
-
 from custom_components.tion.config_flow import (
     CONF_LOCAL_PID_ACTION,
     CONF_OPTIONS_ACTION,
@@ -42,6 +39,8 @@ from custom_components.tion.const import (
     TionDeviceType,
     TionPresetType,
 )
+from homeassistant.const import CONF_SCAN_INTERVAL
+from homeassistant.data_entry_flow import FlowResultType
 
 BREEZER_GUID = "breezer-guid"
 SECOND_BREEZER_GUID = "second-breezer-guid"

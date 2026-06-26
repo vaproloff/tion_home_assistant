@@ -1,0 +1,4 @@
+# Inherit Home Assistant core's Ruff configuration verbatim so this custom
+# component is linted with exactly the same rules as core. The devcontainer
+# always has homeassistant-core checked out alongside this repo.
+extend = "../homeassistant-core/pyproject.toml"

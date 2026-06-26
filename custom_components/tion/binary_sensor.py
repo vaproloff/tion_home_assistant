@@ -91,7 +91,7 @@ class TionBinarySensor(
         self._handle_device_update()
         super()._handle_coordinator_update()
 
-    async def _load(self, force=False) -> bool:
+    async def _load(self) -> bool:
         if device_data := self.coordinator.get_device(self._device.guid):
             self._device = device_data
             return True

@@ -61,9 +61,7 @@ def test_pid_adds_base_output_at_target() -> None:
 
 def test_pid_output_exposes_calculation_terms() -> None:
     """Test PID output includes terms needed for debug logging."""
-    controller = PidController(
-        PidCoefficients(kp=0.5, ki=0.1, kd=2.0, base_output=5.0)
-    )
+    controller = PidController(PidCoefficients(kp=0.5, ki=0.1, kd=2.0, base_output=5.0))
 
     controller.calculate(
         source_co2=810,

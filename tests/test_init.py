@@ -4,11 +4,11 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 import pytest
 
 from custom_components import tion
 from custom_components.tion.const import AUTH_DATA
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 
 
 class FakeConfigEntries:
@@ -19,14 +19,14 @@ class FakeConfigEntries:
         self.updated_data: dict[str, Any] | None = None
 
     def async_update_entry(
-        self, entry: "FakeConfigEntry", *, data: dict[str, Any]
+        self, entry: FakeConfigEntry, *, data: dict[str, Any]
     ) -> None:
         """Record and apply updated entry data."""
         self.updated_data = data
         entry.data = data
 
     async def async_forward_entry_setups(
-        self, entry: "FakeConfigEntry", platforms: list[str]
+        self, entry: FakeConfigEntry, platforms: list[str]
     ) -> None:
         """Pretend platform setup succeeded."""
 
@@ -66,7 +66,7 @@ class FakeConfigEntry:
 class FakeTionClient:
     """Fake Tion client capturing setup listeners."""
 
-    instances: list["FakeTionClient"] = []
+    instances: list[FakeTionClient] = []
 
     def __init__(
         self,

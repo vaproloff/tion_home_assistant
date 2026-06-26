@@ -1,11 +1,18 @@
-"""Per-breezer speed preset controller for Tion breezers."""
+"""Per-breezer speed preset controller for Tion breezers.
+
+A preset is a named set of desired breezer fields. Applying a preset writes
+those fields into the reconciler; returning to ``PRESET_NONE`` restores the
+baseline (the desired overlay and mode that were in effect before the preset).
+The baseline is captured from the desired overlay, never from a live snapshot,
+so a cancelled-then-retried apply cannot pollute it.
+"""
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any
 
-from homeassistant.components.climate import FAN_AUTO, PRESET_NONE
+from homeassistant.components.climate import PRESET_NONE
 
 from .const import (
     CONF_PRESET_MAX_SPEED,
@@ -18,39 +25,17 @@ from .const import (
 ATTR_SAVED_PRESET = "preset_saved"
 
 
-class PresetTarget(Protocol):
-    """The narrow entity surface a preset needs to apply and snapshot itself."""
-
-    @property
-    def fan_mode(self) -> str | None:
-        """The breezer's current fan mode, or None if unknown."""
-
-    @property
-    def speed_min_set(self) -> int | None:
-        """The configured minimum auto speed."""
-
-    @property
-    def speed_max_set(self) -> int | None:
-        """The configured maximum auto speed."""
-
-    async def async_set_fan_mode(self, fan_mode: str) -> None:
-        """Set the breezer's fan mode."""
-
-    async def async_apply_auto_limits(self, min_speed: int, max_speed: int) -> None:
-        """Switch to auto mode and apply the given speed limits."""
-
-
 @dataclass(frozen=True)
 class Preset(ABC):
-    """A speed intent that knows how to apply, serialize, and compare itself."""
+    """A speed intent that knows its desired fields, mode, and serialization."""
 
     @abstractmethod
-    async def apply(self, target: PresetTarget) -> None:
-        """Apply this preset's intent to the breezer."""
+    def desired_fields(self) -> dict[str, Any]:
+        """Return the breezer desired fields this preset overlays."""
 
     @abstractmethod
-    def to_storage(self) -> dict[str, int | str]:
-        """Serialize the preset for persistence in state attributes."""
+    def is_auto(self) -> bool:
+        """Return whether this preset runs the breezer in auto mode."""
 
     @classmethod
     def from_config(cls, cfg: Mapping[str, int | str]) -> Preset:
@@ -61,30 +46,6 @@ class Preset(ABC):
             int(cfg[CONF_PRESET_MIN_SPEED]), int(cfg[CONF_PRESET_MAX_SPEED])
         )
 
-    @classmethod
-    def from_storage(cls, data: Mapping[str, int | str] | None) -> Preset | None:
-        """Rebuild a saved preset from restored state attributes."""
-        if not data:
-            return None
-        return cls.from_config(data)
-
-    @classmethod
-    def snapshot(cls, target: PresetTarget) -> Preset | None:
-        """Capture the breezer's current speed intent, or None if unreadable.
-
-        A single try/except so any unreadable field (None or non-numeric
-        min/max/speed) yields None instead of raising.
-        """
-        fan_mode = target.fan_mode
-        if fan_mode is None:
-            return None
-        try:
-            if fan_mode == FAN_AUTO:
-                return AutoPreset(int(target.speed_min_set), int(target.speed_max_set))
-            return ManualPreset(int(fan_mode))
-        except TypeError, ValueError:
-            return None
-
 
 @dataclass(frozen=True)
 class ManualPreset(Preset):
@@ -92,16 +53,13 @@ class ManualPreset(Preset):
 
     speed: int
 
-    async def apply(self, target: PresetTarget) -> None:
-        """Apply the manual speed via the breezer's fan mode."""
-        await target.async_set_fan_mode(str(self.speed))
+    def desired_fields(self) -> dict[str, Any]:
+        """Pin the breezer on at the fixed speed."""
+        return {"is_on": True, "speed": self.speed}
 
-    def to_storage(self) -> dict[str, int | str]:
-        """Serialize the manual preset."""
-        return {
-            CONF_PRESET_TYPE: TionPresetType.MANUAL.value,
-            CONF_PRESET_SPEED: self.speed,
-        }
+    def is_auto(self) -> bool:
+        """A manual preset does not run in auto."""
+        return False
 
 
 @dataclass(frozen=True)
@@ -111,27 +69,39 @@ class AutoPreset(Preset):
     min_speed: int
     max_speed: int
 
-    async def apply(self, target: PresetTarget) -> None:
-        """Apply the auto-mode speed limits to the breezer."""
-        await target.async_apply_auto_limits(self.min_speed, self.max_speed)
+    def desired_fields(self) -> dict[str, Any]:
+        """Overlay the auto-mode speed limits."""
+        return {"speed_min_set": self.min_speed, "speed_max_set": self.max_speed}
 
-    def to_storage(self) -> dict[str, int | str]:
-        """Serialize the auto preset."""
-        return {
-            CONF_PRESET_TYPE: TionPresetType.AUTO.value,
-            CONF_PRESET_MIN_SPEED: self.min_speed,
-            CONF_PRESET_MAX_SPEED: self.max_speed,
-        }
+    def is_auto(self) -> bool:
+        """An auto preset runs in auto."""
+        return True
+
+
+@dataclass(frozen=True)
+class PresetBaseline:
+    """The desired overlay and mode in effect before a preset was activated."""
+
+    overrides: dict[str, Any]
+    was_auto: bool
+
+    def to_storage(self) -> dict[str, Any]:
+        """Serialize the baseline for persistence."""
+        return {"overrides": dict(self.overrides), "was_auto": self.was_auto}
+
+    @classmethod
+    def from_storage(cls, data: Mapping[str, Any] | None) -> PresetBaseline | None:
+        """Rebuild a baseline from restored state attributes."""
+        if not data:
+            return None
+        return cls(overrides=dict(data["overrides"]), was_auto=bool(data["was_auto"]))
 
 
 class TionPresetController:
     """Manage speed presets for a single breezer.
 
     Pure logic with no Home Assistant dependencies so it can be unit-tested in
-    isolation. The owning climate entity performs all I/O.
-
-    Each preset is a :class:`Preset`; reconciliation is value equality between the
-    breezer's current snapshot and the active preset.
+    isolation. The owning climate entity performs all I/O and reconciler writes.
     """
 
     def __init__(self, presets: dict[str, dict[str, int | str]]) -> None:
@@ -140,7 +110,7 @@ class TionPresetController:
             name: Preset.from_config(cfg) for name, cfg in presets.items()
         }
         self._active = PRESET_NONE
-        self._saved: Preset | None = None
+        self._saved: PresetBaseline | None = None
 
     @property
     def has_presets(self) -> bool:
@@ -157,45 +127,49 @@ class TionPresetController:
         """Return the active preset mode."""
         return self._active
 
+    @property
+    def saved(self) -> PresetBaseline | None:
+        """Return the baseline saved before the active preset, if any."""
+        return self._saved
+
+    @property
+    def managed_fields(self) -> set[str]:
+        """Return the union of breezer fields any configured preset overlays."""
+        fields: set[str] = set()
+        for preset in self._presets.values():
+            fields.update(preset.desired_fields())
+        return fields
+
     def preset(self, name: str) -> Preset | None:
         """Return a configured preset by name, or None for PRESET_NONE/unknown."""
         return self._presets.get(name)
 
-    def activate(self, name: str, current: Preset | None) -> Preset | None:
-        """Switch to a preset (or PRESET_NONE), returning the preset to apply."""
-        if name == PRESET_NONE:
-            target = self._saved if self._saved is not None else current
-            self._active = PRESET_NONE
-            self._saved = None
-            return target
+    def active_preset(self) -> Preset | None:
+        """Return the active Preset object, or None when PRESET_NONE."""
+        return self._presets.get(self._active)
 
-        if self._active == PRESET_NONE:
-            self._saved = current
+    def activate(self, name: str, baseline: PresetBaseline) -> None:
+        """Switch to a preset, capturing the baseline on the first activation.
 
-        self._active = name
-        return self._presets[name]
-
-    def reconcile(self, current: Preset | None) -> bool:
-        """Reset to PRESET_NONE when the breezer diverged from the active preset.
-
-        Returns True when the preset state changed. An unreadable snapshot
-        (``current is None``) is never treated as divergence.
+        The baseline is supplied by the caller from the current desired overlay
+        (not a live snapshot), and is preserved across preset-to-preset switches.
         """
-        if self._active == PRESET_NONE or current is None:
-            return False
-        if current != self._presets[self._active]:
-            self._active = PRESET_NONE
-            self._saved = None
-            return True
-        return False
+        if self._active == PRESET_NONE:
+            self._saved = baseline
+        self._active = name
 
-    def restore(self, active: str, saved: Preset | None) -> None:
+    def deactivate(self) -> None:
+        """Drop back to PRESET_NONE and clear the saved baseline."""
+        self._active = PRESET_NONE
+        self._saved = None
+
+    def restore(self, active: str, saved: PresetBaseline | None) -> None:
         """Rehydrate state after a Home Assistant restart."""
         if active not in self.preset_modes:
             return
         self._active = active
         self._saved = saved
 
-    def restore_attributes(self) -> dict[str, dict[str, int | str] | None]:
-        """Return the saved preset for the entity's extra_state_attributes."""
+    def restore_attributes(self) -> dict[str, dict[str, Any] | None]:
+        """Return the saved baseline for the entity's extra_state_attributes."""
         return {ATTR_SAVED_PRESET: self._saved.to_storage() if self._saved else None}

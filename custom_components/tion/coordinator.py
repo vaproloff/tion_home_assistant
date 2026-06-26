@@ -1,6 +1,8 @@
 """Coordinator for Tion integration."""
 
+import asyncio
 from collections.abc import Awaitable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 import logging
@@ -20,6 +22,7 @@ from .client import (
     TionZone,
     TionZoneDevice,
 )
+from .reconciler import TionReconciler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,8 +72,10 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
         """Initialize the coordinator."""
         self.client = client
         self.pid_manager: TionPidManager
+        self.reconciler = TionReconciler(self)
         self._current_command_started_at: float | None = None
         self._last_command_completed_at: float | None = None
+        self._settings_locks: dict[str, asyncio.Lock] = {}
 
         super().__init__(
             hass,
@@ -80,6 +85,17 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             update_interval=timedelta(seconds=scan_interval),
             always_update=False,
         )
+
+    @asynccontextmanager
+    async def async_settings_command(self, guid: str):
+        """Serialize settings (backlight/sound) writes for one device.
+
+        Settings live on a separate endpoint from the breezer/zone payload the
+        reconciler drives, so they keep their own lightweight lock.
+        """
+        lock = self._settings_locks.setdefault(guid, asyncio.Lock())
+        async with lock:
+            yield
 
     def _command_invalidates_fetch(self, request_started_at: float) -> bool:
         """Return whether a command makes a fetch started at this time stale.
@@ -109,17 +125,23 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             return self.data
 
         data = TionData(locations)
-
-        if self.pid_manager.has_active_pid():
-            for intent in self.pid_manager.plan_all(data):
-                # Reflect the command optimistically on the published snapshot,
-                # then dispatch the network send in the background. If that send
-                # later fails the snapshot is briefly ahead of reality; the next
-                # poll reconciles it. Do not add a rollback here.
-                intent.apply(data)
-                self.pid_manager.schedule_intent(intent)
-
+        self.apply_desired(data)
         return data
+
+    def apply_desired(self, data: TionData) -> None:
+        """Recompute active PID desired state, then reconcile toward all desired.
+
+        This is the single pipeline that turns desired state into background
+        commands: local PID writes its fields first, so a just-changed input
+        (e.g. an auto-speed limit) is reflected in the very same reconcile pass,
+        then the reconciler drives cloud state toward all desired state. Every
+        writer that wants to push state immediately must go through here rather
+        than calling ``reconcile`` directly, otherwise a PID-driven breezer
+        would dispatch a stale speed and need a second command a cycle later.
+        """
+        if self.pid_manager.has_active_pid():
+            self.pid_manager.write_all(data)
+        self.reconciler.reconcile(data)
 
     async def _async_send_command(
         self,
