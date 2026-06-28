@@ -231,7 +231,6 @@ class TionClient:
 
         self._locations: list[TionLocation] = []
         self._auth_update_listeners: list[Callable[[str, str], Awaitable[None]]] = []
-        self._active_profile_listeners: list[Callable[[str], Awaitable[None]]] = []
 
     @staticmethod
     def _normalize_auth(
@@ -269,12 +268,6 @@ class TionClient:
     def add_update_listener(self, coro: Callable[[str, str], Awaitable[None]]) -> None:
         """Add a listener notified as (profile_name, token) on re-auth."""
         self._auth_update_listeners.append(coro)
-
-    def add_active_profile_listener(
-        self, coro: Callable[[str], Awaitable[None]]
-    ) -> None:
-        """Add a listener notified with the profile name on a failover switch."""
-        self._active_profile_listeners.append(coro)
 
     async def async_validate_auth(self) -> dict[str, str | None]:
         """Validate credentials and return auth data for the serving profile."""
@@ -370,15 +363,15 @@ class TionClient:
                 last_error = err
                 index = (index + 1) % len(self._profiles)
                 continue
-            await self._set_active(index)
+            self._set_active(index)
             return TionApiResult(data=result, profile=target)
 
         if last_error is not None:
             raise last_error
         raise TionConnectionError("Error communicating with Tion API")
 
-    async def _set_active(self, index: int) -> None:
-        """Switch the active profile and notify listeners on change."""
+    def _set_active(self, index: int) -> None:
+        """Switch the active profile after a connection failover."""
         if index == self._active:
             return
 
@@ -387,8 +380,6 @@ class TionClient:
         _LOGGER.warning(
             "TionClient: switched to profile %s after a connection failure", name
         )
-        for coro in self._active_profile_listeners:
-            await coro(name)
 
     async def _request_profile(
         self,

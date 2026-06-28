@@ -185,22 +185,14 @@ async def test_request_fails_over_to_second_profile_and_sticks() -> None:
         "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
     }
     client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
-    switches: list[str] = []
-
-    async def _on_switch(name: str) -> None:
-        switches.append(name)
-
-    client.add_active_profile_listener(_on_switch)
 
     await client.get_locations()
 
     assert client.active_profile == "api2"
-    assert switches == ["api2"]
 
     # Subsequent request stays on api2 without touching api again.
     await client.get_locations()
     assert client.active_profile == "api2"
-    assert switches == ["api2"]
 
 
 @pytest.mark.asyncio
@@ -325,8 +317,24 @@ async def test_send_pins_task_poll_to_post_profile() -> None:
 @pytest.mark.asyncio
 async def test_send_pins_task_poll_to_post_profile_when_active_changes() -> None:
     """Task polling stays on the POST profile even if another request switches back."""
-    switched_to_api2 = asyncio.Event()
-    release_api2_listener = asyncio.Event()
+    polling_api2 = asyncio.Event()
+    release_poll = asyncio.Event()
+
+    class GatedTaskResponse:
+        """Task-poll response that pauses until released, then completes."""
+
+        status = 200
+
+        async def __aenter__(self) -> Self:
+            polling_api2.set()
+            await release_poll.wait()
+            return self
+
+        async def json(self, content_type: str | None = None) -> Any:
+            return {"status": "completed"}
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
 
     def api_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
         if method == "post":
@@ -335,32 +343,29 @@ async def test_send_pins_task_poll_to_post_profile_when_active_changes() -> None
             return FakeResponse(200, [{"guid": "loc"}])
         return FakeResponse(404, {})
 
-    def api2_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
+    def api2_handler(
+        method: str, url: str, kwargs: dict[str, Any]
+    ) -> FakeResponse | GatedTaskResponse:
         if method == "post":
             return FakeResponse(200, {"status": "queued", "task_id": "T1"})
         if url.endswith("/location"):
             raise ClientError("api2 read down")
         if "/task/T1" in url:
-            return FakeResponse(200, {"status": "completed"})
+            return GatedTaskResponse()
         return FakeResponse(404, {})
 
     routes = {"api.": api_handler, "api2.": api2_handler}
     client, session = _make_client(routes, auth={"api": "t", "api2": "t2"})
 
-    async def on_switch(name: str) -> None:
-        if name == "api2":
-            switched_to_api2.set()
-            await release_api2_listener.wait()
-
-    client.add_active_profile_listener(on_switch)
-
     send_task = asyncio.create_task(client.send_settings("guid-1", {"backlight": True}))
-    await asyncio.wait_for(switched_to_api2.wait(), timeout=1)
+    # The POST failed over to api2 (now active) and the task poll is in flight.
+    await asyncio.wait_for(polling_api2.wait(), timeout=1)
 
+    # A concurrent read fails over api2->api, flipping the active profile back.
     await client.get_locations()
     assert client.active_profile == "api"
 
-    release_api2_listener.set()
+    release_poll.set()
     assert await send_task is True
 
     task_calls = [call for call in session.calls if "/task/T1" in call.url]
@@ -428,25 +433,3 @@ async def test_validate_auth_fails_over_to_api2_when_api_auth_is_down() -> None:
 
     assert auth == {"api": None, "api2": "Bearer api2tok"}
     assert client.active_profile == "api2"
-
-
-@pytest.mark.asyncio
-async def test_switch_listener_reports_new_active_profile() -> None:
-    """A failover switch notifies the active-profile listener with the new name."""
-    stored: dict[str, str] = {"active_profile": "api"}
-
-    async def on_switch(name: str) -> None:
-        stored["active_profile"] = name
-
-    routes = {
-        "api.": _fail_conn,
-        "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
-    }
-    client, _ = _make_client(
-        routes, auth={"api": "t", "api2": "t2"}, active_profile="api"
-    )
-    client.add_active_profile_listener(on_switch)
-
-    await client.get_locations()
-
-    assert stored["active_profile"] == "api2"
