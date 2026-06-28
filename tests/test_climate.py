@@ -10,13 +10,8 @@ from custom_components.tion.client import TionLocation
 from custom_components.tion.climate import TionClimate
 from custom_components.tion.const import Heater, SwingMode, TionDeviceType, ZoneMode
 from custom_components.tion.coordinator import TionData
-from custom_components.tion.presets import (
-    ATTR_SAVED_PRESET,
-    PresetBaseline,
-    TionPresetController,
-)
+from custom_components.tion.presets import PresetBaseline, TionPresetController
 from homeassistant.components.climate import (
-    ATTR_PRESET_MODE,
     FAN_AUTO,
     PRESET_NONE,
     ClimateEntityFeature,
@@ -210,23 +205,21 @@ def test_available_true_when_gateway_online() -> None:
 
 
 def test_climate_restores_active_local_pid() -> None:
-    """Test local PID is restored from previous pid_active attribute."""
+    """Test local PID is restored when the saved pid_active was True."""
     pid_manager = FakePidManager(configured=True)
     entity = _climate(pid_manager)
-    last_state = SimpleNamespace(attributes={"pid_active": True})
 
-    entity._restore_local_pid(last_state)  # noqa: SLF001
+    entity._restore_local_pid(True)  # noqa: SLF001
 
     assert pid_manager.active_calls == [(BREEZER_GUID, True)]
 
 
-def test_climate_does_not_restore_from_fan_auto_without_pid_active() -> None:
-    """Test MagicAir auto is not restored as local PID."""
+def test_climate_does_not_restore_without_pid_active() -> None:
+    """Test local PID is not restored when the saved pid_active was False."""
     pid_manager = FakePidManager(configured=True)
     entity = _climate(pid_manager)
-    last_state = SimpleNamespace(attributes={"fan_mode": FAN_AUTO})
 
-    entity._restore_local_pid(last_state)  # noqa: SLF001
+    entity._restore_local_pid(False)  # noqa: SLF001
 
     assert pid_manager.active_calls == []
 
@@ -235,9 +228,8 @@ def test_climate_does_not_restore_unconfigured_local_pid() -> None:
     """Test local PID restore is ignored when PID options are not configured."""
     pid_manager = FakePidManager(configured=False)
     entity = _climate(pid_manager)
-    last_state = SimpleNamespace(attributes={"pid_active": True})
 
-    entity._restore_local_pid(last_state)  # noqa: SLF001
+    entity._restore_local_pid(True)  # noqa: SLF001
 
     assert pid_manager.active_calls == []
 
@@ -450,23 +442,18 @@ def test_climate_restores_preset() -> None:
         FakePidManager(),
         presets={"boost": {"type": "manual", "speed": 3}},
     )
-    last_state = SimpleNamespace(
-        attributes={
-            ATTR_PRESET_MODE: "boost",
-            ATTR_SAVED_PRESET: {
-                "overrides": {"speed_min_set": 1, "speed_max_set": 3},
-                "was_auto": True,
-            },
-        }
+    entity._restore_preset(  # noqa: SLF001
+        "boost",
+        {
+            "overrides": {"speed_min_set": 1, "speed_max_set": 3},
+            "was_auto": True,
+        },
     )
 
-    entity._restore_preset(last_state)  # noqa: SLF001
-
     assert entity.preset_mode == "boost"
-    assert entity.extra_state_attributes[ATTR_SAVED_PRESET] == {
-        "overrides": {"speed_min_set": 1, "speed_max_set": 3},
-        "was_auto": True,
-    }
+    assert entity._presets.saved == PresetBaseline(  # noqa: SLF001
+        overrides={"speed_min_set": 1, "speed_max_set": 3}, was_auto=True
+    )
 
 
 def test_climate_restore_ignores_none_preset() -> None:
@@ -475,9 +462,7 @@ def test_climate_restore_ignores_none_preset() -> None:
         FakePidManager(),
         presets={"boost": {"type": "manual", "speed": 3}},
     )
-    last_state = SimpleNamespace(attributes={ATTR_PRESET_MODE: PRESET_NONE})
-
-    entity._restore_preset(last_state)  # noqa: SLF001
+    entity._restore_preset(PRESET_NONE, None)  # noqa: SLF001
 
     assert entity.preset_mode == PRESET_NONE
 
@@ -745,12 +730,35 @@ def test_climate_restore_rederives_preset_desired() -> None:
         FakePidManager(),
         presets={"boost": {"type": "manual", "speed": 3}},
     )
-    last_state = SimpleNamespace(attributes={ATTR_PRESET_MODE: "boost"})
-
-    entity._restore_preset(last_state)  # noqa: SLF001
+    entity._restore_preset("boost", None)  # noqa: SLF001
 
     assert entity.preset_mode == "boost"
     assert entity.coordinator.reconciler.breezer[BREEZER_GUID] == {
         "is_on": True,
         "speed": 3,
+    }
+
+
+def test_extra_restore_state_data_captures_pid_preset_and_baseline() -> None:
+    """Test the restore payload carries pid_active, preset and saved baseline.
+
+    This payload is persisted via extra_restore_state_data, which survives the
+    entity being unavailable (unlike state attributes), so restore is robust.
+    """
+    pid_manager = FakePidManager(configured=True)
+    entity = _preset_climate(
+        pid_manager,
+        presets={"boost": {"type": "manual", "speed": 3}},
+    )
+    pid_manager.start_breezer_pid(BREEZER_GUID)
+    entity._presets.activate(  # noqa: SLF001
+        "boost", PresetBaseline(overrides={"speed_max_set": 4}, was_auto=True)
+    )
+
+    restored = entity.extra_restore_state_data.as_dict()
+
+    assert restored == {
+        "pid_active": True,
+        "preset_mode": "boost",
+        "preset_saved": {"overrides": {"speed_max_set": 4}, "was_auto": True},
     }

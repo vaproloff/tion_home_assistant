@@ -10,7 +10,6 @@ from custom_components.tion.const import (
     TionPresetType,
 )
 from custom_components.tion.presets import (
-    ATTR_SAVED_PRESET,
     AutoPreset,
     ManualPreset,
     Preset,
@@ -129,7 +128,6 @@ def test_deactivate_clears_active_and_saved() -> None:
 
     assert controller.preset_mode == PRESET_NONE
     assert controller.saved is None
-    assert controller.restore_attributes() == {ATTR_SAVED_PRESET: None}
 
 
 def test_restore_rehydrates_active_and_saved() -> None:
@@ -150,7 +148,7 @@ def test_restore_without_saved_clears_saved() -> None:
     controller.restore("boost", None)
 
     assert controller.preset_mode == "boost"
-    assert controller.restore_attributes() == {ATTR_SAVED_PRESET: None}
+    assert controller.saved is None
 
 
 def test_restore_ignores_unknown_preset() -> None:

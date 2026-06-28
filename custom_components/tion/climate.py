@@ -1,10 +1,11 @@
 """Support for Tion breezer."""
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 import logging
-from typing import Any
+from typing import Any, Self
 
 from homeassistant.components.climate import (
-    ATTR_PRESET_MODE,
     FAN_AUTO,
     PRESET_NONE,
     ClimateEntity,
@@ -20,9 +21,9 @@ from homeassistant.const import (
     PRECISION_WHOLE,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import TionZoneDevice
@@ -36,9 +37,41 @@ from .const import (
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .presets import ATTR_SAVED_PRESET, Preset, PresetBaseline, TionPresetController
+from .presets import Preset, PresetBaseline, TionPresetController
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class TionRestoreData(ExtraStoredData):
+    """Climate state restored across restarts and reloads.
+
+    Persisted through ``extra_restore_state_data``, which Home Assistant captures
+    even while the entity is unavailable -- unlike state attributes, which are
+    dropped for an unavailable entity. This keeps local PID and the active preset
+    across a reload that lands while the breezer's gateway is offline.
+    """
+
+    pid_active: bool
+    preset_mode: str | None
+    preset_saved: dict[str, Any] | None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the payload to persist."""
+        return {
+            "pid_active": self.pid_active,
+            "preset_mode": self.preset_mode,
+            "preset_saved": self.preset_saved,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        """Rebuild restore data from a persisted payload."""
+        return cls(
+            pid_active=bool(data.get("pid_active")),
+            preset_mode=data.get("preset_mode"),
+            preset_saved=data.get("preset_saved"),
+        )
 
 
 async def async_setup_entry(
@@ -174,9 +207,6 @@ class TionClimate(
         attrs.update(
             self.coordinator.pid_manager.extra_state_attributes(self._breezer_guid)
         )
-
-        if self._presets.has_presets:
-            attrs.update(self._presets.restore_attributes())
 
         return attrs
 
@@ -377,18 +407,28 @@ class TionClimate(
         self._load_breezer()
         self._set_swing_modes()
         await super().async_added_to_hass()
-        if (last_state := await self.async_get_last_state()) is not None:
-            self._restore_local_pid(last_state)
-            self._restore_preset(last_state)
+        if (restored := await self.async_get_last_extra_data()) is not None:
+            data = TionRestoreData.from_dict(restored.as_dict())
+            self._restore_local_pid(data.pid_active)
+            self._restore_preset(data.preset_mode, data.preset_saved)
+
+    @property
+    def extra_restore_state_data(self) -> TionRestoreData:
+        """Return state to restore that must survive entity unavailability."""
+        saved = self._presets.saved
+        return TionRestoreData(
+            pid_active=self.coordinator.pid_manager.is_active(self._breezer_guid),
+            preset_mode=self.preset_mode,
+            preset_saved=saved.to_storage() if saved else None,
+        )
 
     @callback
-    def _restore_local_pid(self, last_state: State) -> None:
+    def _restore_local_pid(self, pid_active: bool) -> None:
         """Restore local PID active state after Home Assistant restart."""
         pid_manager = self.coordinator.pid_manager
         if not pid_manager.is_configured(self._breezer_guid):
             return
-        pid_active = last_state.attributes.get("pid_active")
-        if pid_active is True:
+        if pid_active:
             _LOGGER.debug("%s: restoring active local PID", self.name)
             pid_manager.start_breezer_pid(self._breezer_guid)
         else:
@@ -399,11 +439,12 @@ class TionClimate(
             )
 
     @callback
-    def _restore_preset(self, last_state: State) -> None:
+    def _restore_preset(
+        self, preset_mode: str | None, preset_saved: dict[str, Any] | None
+    ) -> None:
         """Restore active preset and saved preset after Home Assistant restart."""
         if not self._presets.has_presets:
             return
-        preset_mode = last_state.attributes.get(ATTR_PRESET_MODE)
         if preset_mode is None or preset_mode == PRESET_NONE:
             _LOGGER.debug(
                 "%s: no preset to restore (restored preset_mode=%s)",
@@ -411,9 +452,7 @@ class TionClimate(
                 preset_mode,
             )
             return
-        saved = PresetBaseline.from_storage(
-            last_state.attributes.get(ATTR_SAVED_PRESET)
-        )
+        saved = PresetBaseline.from_storage(preset_saved)
         _LOGGER.debug(
             "%s: restoring preset '%s' with saved baseline %s",
             self.name,

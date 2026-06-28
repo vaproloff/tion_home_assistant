@@ -22,8 +22,6 @@ from .const import (
     TionPresetType,
 )
 
-ATTR_SAVED_PRESET = "preset_saved"
-
 
 @dataclass(frozen=True)
 class Preset(ABC):
@@ -169,7 +167,3 @@ class TionPresetController:
             return
         self._active = active
         self._saved = saved
-
-    def restore_attributes(self) -> dict[str, dict[str, Any] | None]:
-        """Return the saved baseline for the entity's extra_state_attributes."""
-        return {ATTR_SAVED_PRESET: self._saved.to_storage() if self._saved else None}
