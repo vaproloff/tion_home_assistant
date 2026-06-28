@@ -279,6 +279,19 @@ class TionClimate(
 
         return str(self.speed) if self.speed is not None else None
 
+    def _exact_fan_mode(self) -> str:
+        """Return a log-friendly label for the current fan regime.
+
+        Distinguishes the two auto sources (``local_pid`` vs cloud ``auto``)
+        that ``fan_mode`` collapses into ``FAN_AUTO``, so logs make clear which
+        controller actually drives the breezer.
+        """
+        if self.coordinator.pid_manager.is_active(self._breezer_guid):
+            return "local_pid"
+        if self._mode == ZoneMode.AUTO:
+            return "cloud_auto"
+        return f"manual(speed={self.speed})"
+
     @property
     def swing_modes(self) -> list[SwingMode]:
         """Return the list of available preset modes."""
@@ -366,11 +379,18 @@ class TionClimate(
     def _restore_local_pid(self, last_state: State) -> None:
         """Restore local PID active state after Home Assistant restart."""
         pid_manager = self.coordinator.pid_manager
-        if last_state.attributes.get(
-            "pid_active"
-        ) is True and pid_manager.is_configured(self._breezer_guid):
+        if not pid_manager.is_configured(self._breezer_guid):
+            return
+        pid_active = last_state.attributes.get("pid_active")
+        if pid_active is True:
             _LOGGER.debug("%s: restoring active local PID", self.name)
             pid_manager.start_breezer_pid(self._breezer_guid)
+        else:
+            _LOGGER.debug(
+                "%s: no need to restore local PID (restored pid_active=%s)",
+                self.name,
+                pid_active,
+            )
 
     @callback
     def _restore_preset(self, last_state: State) -> None:
@@ -379,6 +399,11 @@ class TionClimate(
             return
         preset_mode = last_state.attributes.get(ATTR_PRESET_MODE)
         if preset_mode is None or preset_mode == PRESET_NONE:
+            _LOGGER.debug(
+                "%s: no preset to restore (restored preset_mode=%s)",
+                self.name,
+                preset_mode,
+            )
             return
         saved = PresetBaseline.from_storage(
             last_state.attributes.get(ATTR_SAVED_PRESET)
@@ -412,6 +437,15 @@ class TionClimate(
                     self._presets.preset_mode,
                 )
                 self._presets.deactivate()
+        _LOGGER.debug(
+            "%s: state: preset=%s, fan_mode=%s, speed=%s, min=%s, max=%s",
+            self.name,
+            self.preset_mode,
+            self._exact_fan_mode(),
+            self.speed,
+            self._speed_min_set,
+            self._speed_max_set,
+        )
         super()._handle_coordinator_update()
 
     async def async_turn_on(self) -> None:
@@ -468,6 +502,11 @@ class TionClimate(
         """
         if self._presets.preset_mode == PRESET_NONE:
             return
+        _LOGGER.info(
+            "%s: releasing preset '%s' (manual command overlaps managed fields)",
+            self.name,
+            self._presets.preset_mode,
+        )
         self.coordinator.reconciler.release(
             self._breezer_guid, self._presets.managed_fields
         )
@@ -567,6 +606,12 @@ class TionClimate(
         # desired write is synchronous: there is no await before it, so a
         # restart-mode cancellation cannot interleave and pollute the baseline.
         if preset_mode == PRESET_NONE:
+            _LOGGER.debug(
+                "%s: leaving preset '%s', restoring baseline %s",
+                self.name,
+                self._presets.preset_mode,
+                self._presets.saved,
+            )
             self._restore_preset_baseline(self._presets.saved)
             self._presets.deactivate()
         else:
@@ -574,11 +619,26 @@ class TionClimate(
                 overrides=self._managed_overrides(),
                 was_auto=self.fan_mode == FAN_AUTO,
             )
+            _LOGGER.debug(
+                "%s: entering preset '%s' (from fan_mode=%s), saving baseline %s",
+                self.name,
+                preset_mode,
+                self._exact_fan_mode(),
+                baseline,
+            )
             self._presets.activate(preset_mode, baseline)
             self._write_preset_desired(target)
 
-        _LOGGER.debug("%s: applied preset '%s'", self.name, preset_mode)
         await self._push()
+        _LOGGER.debug(
+            "%s: applied preset '%s': fan_mode=%s, speed=%s, min=%s, max=%s",
+            self.name,
+            preset_mode,
+            self._exact_fan_mode(),
+            self.speed,
+            self._speed_min_set,
+            self._speed_max_set,
+        )
 
     def _managed_overrides(self) -> dict[str, Any]:
         """Return the current desired overlay restricted to preset-managed fields."""

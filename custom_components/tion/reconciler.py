@@ -201,6 +201,12 @@ class TionReconciler:
         zone_payload: Mapping[str, Any] | None,
         breezer_payload: Mapping[str, Any] | None,
     ) -> None:
+        _LOGGER.debug(
+            "Tion reconcile dispatching %s: zone=%s, breezer=%s",
+            name,
+            zone_payload,
+            breezer_payload,
+        )
         self._inflight.update(keys)
         self.coordinator.config_entry.async_create_background_task(
             self.coordinator.hass,
@@ -228,6 +234,12 @@ class TionReconciler:
                     **breezer_payload, request_refresh=False, track_stale=False
                 )
         except TionError as err:
-            _LOGGER.warning("Tion reconcile send failed for %s: %s", keys, err)
+            _LOGGER.warning(
+                "Tion reconcile send failed for %s (zone=%s, breezer=%s): %s",
+                keys,
+                zone_payload,
+                breezer_payload,
+                err,
+            )
         finally:
             self._inflight.difference_update(keys)
