@@ -20,6 +20,7 @@ from custom_components.tion.const import (
 from custom_components.tion.pid_manager import (
     PID_STATUS_INACTIVE,
     PID_STATUS_NOT_CONFIGURED,
+    PID_STATUS_PAUSED_DEVICE_UNAVAILABLE,
     PID_STATUS_PAUSED_SENSOR_UNAVAILABLE,
     PID_STATUS_RUNNING,
     TionPidManager,
@@ -151,10 +152,13 @@ class FakeCoordinator:
 class FakeData:
     """Fake coordinator data exposing device and zone lookups."""
 
-    def __init__(self, device: TionZoneDevice, zone: Any) -> None:
+    def __init__(
+        self, device: TionZoneDevice, zone: Any, *, reachable: bool = True
+    ) -> None:
         """Initialize fake coordinator data."""
         self._device = device
         self._zone = zone
+        self._reachable = reachable
 
     def device(self, guid: str) -> TionZoneDevice | None:
         """Return the fake breezer."""
@@ -163,6 +167,10 @@ class FakeData:
     def zone(self, guid: str) -> Any:
         """Return the fake zone."""
         return self._zone if guid == BREEZER_GUID else None
+
+    def is_breezer_reachable(self, guid: str) -> bool:
+        """Return the configured reachability for the fake breezer."""
+        return self._reachable
 
 
 def _device(*, speed: int = 1, is_on: bool = True) -> TionZoneDevice:
@@ -189,9 +197,9 @@ def _device(*, speed: int = 1, is_on: bool = True) -> TionZoneDevice:
     )
 
 
-def _data(coordinator: FakeCoordinator) -> FakeData:
+def _data(coordinator: FakeCoordinator, *, reachable: bool = True) -> FakeData:
     """Build coordinator data exposing the coordinator's device and zone."""
-    return FakeData(coordinator.device, coordinator.zone)
+    return FakeData(coordinator.device, coordinator.zone, reachable=reachable)
 
 
 def _armed_manager(coordinator: FakeCoordinator) -> TionPidManager:
@@ -360,6 +368,20 @@ def test_write_all_writes_nothing_on_invalid_sensor_state() -> None:
     assert (
         manager.extra_state_attributes(BREEZER_GUID)["pid_status"]
         == PID_STATUS_PAUSED_SENSOR_UNAVAILABLE
+    )
+
+
+def test_write_all_pauses_when_breezer_unreachable() -> None:
+    """Test PID pauses (device unavailable) when the breezer gateway is offline."""
+    coordinator = FakeCoordinator(_device(speed=1))
+    manager = _armed_manager(coordinator)
+
+    manager.write_all(_data(coordinator, reachable=False))
+
+    assert coordinator.reconciler.breezer == {}
+    assert (
+        manager.extra_state_attributes(BREEZER_GUID)["pid_status"]
+        == PID_STATUS_PAUSED_DEVICE_UNAVAILABLE
     )
 
 

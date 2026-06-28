@@ -132,10 +132,16 @@ class TionClimate(
 
     @property
     def available(self) -> bool:
-        """Return True if entity is available."""
+        """Return True if entity is available.
+
+        A breezer reaches the cloud only through its MagicAir gateway, so it is
+        available only while that gateway is online; its own ``is_online`` flag
+        freezes stale once the gateway drops.
+        """
         return bool(
             super().available
-            and self._is_online
+            and self.coordinator.data is not None
+            and self.coordinator.data.is_breezer_reachable(self._breezer_guid)
             and self._breezer_valid
             and self._zone_valid
         )

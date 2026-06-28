@@ -22,6 +22,7 @@ from .client import (
     TionZone,
     TionZoneDevice,
 )
+from .const import TionDeviceType
 from .reconciler import TionReconciler
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +58,62 @@ class TionData:
                     return zone
 
         return None
+
+    def is_breezer_reachable(self, guid: str) -> bool:
+        """Return whether a breezer is reachable through an online gateway.
+
+        Breezers reach the cloud only through a MagicAir bound to the same
+        hardware zone (``zone_hwid``), regardless of logical zone. When such a
+        station is present, the breezer is reachable only if that station is
+        online -- the breezer's own ``is_online`` freezes stale once the
+        gateway drops. With no bound station in the snapshot, fall back to the
+        breezer's own flag.
+        """
+        device = self.device(guid)
+        if device is None:
+            return False
+        station_online = self._bound_station_online(device)
+        if station_online is None:
+            return bool(device.is_online)
+        return station_online and bool(device.is_online)
+
+    def _bound_station_online(self, breezer: TionZoneDevice) -> bool | None:
+        """Return whether a MagicAir bound to the breezer's hw zone is online.
+
+        ``None`` means no such station exists in the current snapshot, so the
+        caller should fall back to the breezer's own ``is_online``.
+        """
+        hwid = breezer.zone_hwid
+        if hwid is None:
+            return None
+        stations = [
+            device
+            for device in self.devices()
+            if device.type == TionDeviceType.MAGIC_AIR and device.zone_hwid == hwid
+        ]
+        if not stations:
+            return None
+        return any(bool(station.is_online) for station in stations)
+
+    def is_zone_reachable(self, zone_guid: str) -> bool:
+        """Return whether a zone can be commanded through an online gateway.
+
+        A zone is reachable when it has no MagicAir (cannot tell) or at least
+        one of its MagicAir gateways is online.
+        """
+        for location in self.locations:
+            for zone in location.zones:
+                if zone.guid != zone_guid:
+                    continue
+                stations = [
+                    device
+                    for device in zone.devices
+                    if device.type == TionDeviceType.MAGIC_AIR
+                ]
+                return not stations or any(
+                    bool(station.is_online) for station in stations
+                )
+        return False
 
 
 class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):

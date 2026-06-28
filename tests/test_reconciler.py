@@ -46,8 +46,47 @@ class _FakeCoordinator:
         return True
 
 
-def _data(*, speed: int = 3, zone_mode: ZoneMode = ZoneMode.MANUAL) -> TionData:
-    """Build coordinator data with one valid, online breezer in one zone."""
+def _data(
+    *,
+    speed: int = 3,
+    zone_mode: ZoneMode = ZoneMode.MANUAL,
+    station_online: bool | None = None,
+) -> TionData:
+    """Build coordinator data with one valid, online breezer in one zone.
+
+    When ``station_online`` is given, the breezer is bound (``zone_hwid``) to a
+    MagicAir gateway with that online state, exercising reachability gating.
+    """
+    breezer: dict[str, Any] = {
+        "guid": BREEZER_GUID,
+        "name": "Breezer",
+        "max_speed": 6,
+        "is_online": True,
+        "data": {
+            "data_valid": True,
+            "is_on": True,
+            "speed": speed,
+            "speed_min_set": 1,
+            "speed_max_set": 6,
+            "t_set": 20,
+            "heater_enabled": False,
+            "heater_mode": "maintenance",
+            "gate": 0,
+        },
+    }
+    devices: list[dict[str, Any]] = [breezer]
+    if station_online is not None:
+        breezer["zone_hwid"] = "hw1"
+        devices.append(
+            {
+                "guid": "magicair-guid",
+                "name": "MagicAir",
+                "type": "co2mb",
+                "zone_hwid": "hw1",
+                "is_online": station_online,
+                "data": {"data_valid": True},
+            }
+        )
     return TionData(
         [
             TionLocation(
@@ -57,25 +96,7 @@ def _data(*, speed: int = 3, zone_mode: ZoneMode = ZoneMode.MANUAL) -> TionData:
                         {
                             "guid": ZONE_GUID,
                             "mode": {"current": zone_mode, "auto_set": {"co2": 800}},
-                            "devices": [
-                                {
-                                    "guid": BREEZER_GUID,
-                                    "name": "Breezer",
-                                    "max_speed": 6,
-                                    "is_online": True,
-                                    "data": {
-                                        "data_valid": True,
-                                        "is_on": True,
-                                        "speed": speed,
-                                        "speed_min_set": 1,
-                                        "speed_max_set": 6,
-                                        "t_set": 20,
-                                        "heater_enabled": False,
-                                        "heater_mode": "maintenance",
-                                        "gate": 0,
-                                    },
-                                }
-                            ],
+                            "devices": devices,
                         }
                     ],
                 }
@@ -298,3 +319,28 @@ def test_zone_only_desired_is_dispatched() -> None:
         assert coordinator.breezer_sends == []
 
     asyncio.run(_run())
+
+
+def test_reconcile_skips_breezer_when_gateway_offline() -> None:
+    """Test no command is dispatched (nor optimistic apply) when unreachable."""
+    data = _data(speed=3, station_online=False)
+    coordinator = _FakeCoordinator(data)
+    reconciler = TionReconciler(coordinator)
+    reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+
+    reconciler.reconcile(data)
+
+    assert coordinator.config_entry.tasks == []
+    assert data.device(BREEZER_GUID).data.speed == 3  # no optimistic overwrite
+
+
+def test_reconcile_zone_only_skipped_when_gateway_offline() -> None:
+    """Test a zone-only command is not dispatched when the zone gateway is down."""
+    data = _data(zone_mode=ZoneMode.MANUAL, station_online=False)
+    coordinator = _FakeCoordinator(data)
+    reconciler = TionReconciler(coordinator)
+    reconciler.set_zone(ZONE_GUID, {"mode": ZoneMode.AUTO})
+
+    reconciler.reconcile(data)
+
+    assert coordinator.config_entry.tasks == []

@@ -93,6 +93,10 @@ class TionZoneDevice:
         self.t_max = data.get("t_max")
         self.t_min = data.get("t_min")
         self.is_online = data.get("is_online")
+        # Hardware zone id of the breezer's Bluetooth cluster. Breezers reach
+        # the cloud only through the MagicAir gateway sharing this id, even when
+        # the user has placed them in different logical zones.
+        self.zone_hwid = data.get("zone_hwid")
 
     @property
     def valid(self) -> bool:

@@ -99,6 +99,11 @@ class TionReconciler:
                 self._reconcile_zone_only(zone_guid, data)
 
     def _reconcile_breezer(self, guid: str, data: TionData) -> None:
+        # The breezer reaches the cloud only through its MagicAir gateway; when
+        # that is offline, commands can never complete, so skip sending (and the
+        # optimistic overlay) entirely instead of retrying every cycle.
+        if not data.is_breezer_reachable(guid):
+            return
         device = data.device(guid)
         if device is None:
             return
@@ -135,6 +140,8 @@ class TionReconciler:
             return
         zone = self._find_zone(data, zone_guid)
         if zone is None:
+            return
+        if not data.is_zone_reachable(zone_guid):
             return
         zone_payload = self._resolve_zone(zone_guid, zone)
         if zone_payload is None:

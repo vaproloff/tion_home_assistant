@@ -157,7 +157,11 @@ class _TionBreezerPidController:
 
         device = data.device(self.breezer_guid)
         self.source_co2 = source_co2
-        if device is None or not device.valid or not device.is_online:
+        if (
+            device is None
+            or not device.valid
+            or not data.is_breezer_reachable(self.breezer_guid)
+        ):
             self.pause(PID_STATUS_PAUSED_DEVICE_UNAVAILABLE)
             return
 

@@ -6,8 +6,10 @@ from typing import Any
 
 import pytest
 
+from custom_components.tion.client import TionLocation
 from custom_components.tion.climate import TionClimate
 from custom_components.tion.const import Heater, SwingMode, TionDeviceType, ZoneMode
+from custom_components.tion.coordinator import TionData
 from custom_components.tion.presets import (
     ATTR_SAVED_PRESET,
     PresetBaseline,
@@ -121,7 +123,8 @@ class FakeCoordinator:
         """Initialize fake coordinator."""
         self.pid_manager = pid_manager
         self.reconciler = FakeReconciler()
-        self.data: SimpleNamespace | None = None
+        self.data: Any = None
+        self.last_update_success = True
         self.zone = SimpleNamespace(devices=zone_devices or [])
 
     async def async_request_refresh(self) -> None:
@@ -150,6 +153,60 @@ def _climate(
     entity._manual_fan_modes = ["1", "2", "3"]  # noqa: SLF001
     entity.coordinator = FakeCoordinator(pid_manager, zone_devices)
     return entity
+
+
+def _reachable_data(*, station_online: bool) -> TionData:
+    """Build coordinator data with the breezer bound to a MagicAir gateway."""
+    return TionData(
+        [
+            TionLocation(
+                {
+                    "guid": "loc",
+                    "zones": [
+                        {
+                            "guid": "zone",
+                            "devices": [
+                                {
+                                    "guid": BREEZER_GUID,
+                                    "type": "breezer4",
+                                    "zone_hwid": "hw1",
+                                    "is_online": True,
+                                    "data": {"data_valid": True},
+                                },
+                                {
+                                    "guid": "magicair",
+                                    "type": "co2mb",
+                                    "zone_hwid": "hw1",
+                                    "is_online": station_online,
+                                    "data": {"data_valid": True},
+                                },
+                            ],
+                        }
+                    ],
+                }
+            )
+        ]
+    )
+
+
+def test_available_false_when_gateway_offline() -> None:
+    """Test the breezer is unavailable when its MagicAir gateway is offline."""
+    entity = _climate(FakePidManager())
+    entity._breezer_valid = True  # noqa: SLF001
+    entity._zone_valid = True  # noqa: SLF001
+    entity.coordinator.data = _reachable_data(station_online=False)
+
+    assert entity.available is False
+
+
+def test_available_true_when_gateway_online() -> None:
+    """Test the breezer is available when its MagicAir gateway is online."""
+    entity = _climate(FakePidManager())
+    entity._breezer_valid = True  # noqa: SLF001
+    entity._zone_valid = True  # noqa: SLF001
+    entity.coordinator.data = _reachable_data(station_online=True)
+
+    assert entity.available is True
 
 
 def test_climate_restores_active_local_pid() -> None:
