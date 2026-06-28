@@ -14,6 +14,7 @@ from homeassistant.const import (
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     CONCENTRATION_PARTS_PER_MILLION,
     PERCENTAGE,
+    EntityCategory,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -59,8 +60,34 @@ async def async_setup_entry(
             if device.data.pm25 != "NaN":
                 entities.append(TionPM25Sensor(coordinator, device))
 
+    entities.append(TionApiProfileSensor(coordinator, entry.entry_id))
+
     async_add_entities(entities)
     return True
+
+
+class TionApiProfileSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity):
+    """Diagnostic sensor exposing the active Tion cloud API profile.
+
+    Account-level (no device) and disabled by default. It stays available while
+    the coordinator is updating even when the breezers are offline, so the
+    serving endpoint can be inspected during an outage.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "api_profile"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator: TionDataUpdateCoordinator, entry_id: str) -> None:
+        """Initialize the API profile sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry_id}_api_profile"
+
+    @property
+    def native_value(self) -> str:
+        """Return the name of the active API profile."""
+        return self.coordinator.client.active_profile
 
 
 class TionSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc.ABC):

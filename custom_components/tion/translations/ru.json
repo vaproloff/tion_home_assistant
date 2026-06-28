@@ -240,6 +240,9 @@
       },
       "filter_replacement_days": {
         "name": "До замены фильтров"
+      },
+      "api_profile": {
+        "name": "Профиль API"
       }
     },
     "switch": {
