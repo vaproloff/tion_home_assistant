@@ -133,7 +133,7 @@ class TionReconciler:
         keys = [guid] if breezer_payload is not None else []
         if zone_payload is not None:
             keys.append(zone_payload["guid"])
-        self._dispatch(guid, keys, zone_payload, breezer_payload)
+        self._dispatch(device.name or guid, keys, zone_payload, breezer_payload)
 
     def _reconcile_zone_only(self, zone_guid: str, data: TionData) -> None:
         if zone_guid in self._inflight:
@@ -146,7 +146,7 @@ class TionReconciler:
         zone_payload = self._resolve_zone(zone_guid, zone)
         if zone_payload is None:
             return
-        self._dispatch(f"zone_{zone_guid}", [zone_guid], zone_payload, None)
+        self._dispatch(zone.name or zone_guid, [zone_guid], zone_payload, None)
 
     def _resolve_breezer(
         self, guid: str, device: TionZoneDevice
@@ -203,29 +203,37 @@ class TionReconciler:
 
     def _dispatch(
         self,
-        name: str,
+        label: str,
         keys: list[str],
         zone_payload: Mapping[str, Any] | None,
         breezer_payload: Mapping[str, Any] | None,
     ) -> None:
         _LOGGER.debug(
-            "Tion reconcile dispatching %s: zone=%s, breezer=%s",
-            name,
-            zone_payload,
-            breezer_payload,
+            "Tion reconcile dispatching for %s: zone=%s, breezer=%s",
+            label,
+            self._loggable(zone_payload),
+            self._loggable(breezer_payload),
         )
         self._inflight.update(keys)
         self.coordinator.config_entry.async_create_background_task(
             self.coordinator.hass,
-            self._send(zone_payload, breezer_payload, keys),
-            f"tion_reconcile_{name}",
+            self._send(zone_payload, breezer_payload, keys, label),
+            f"tion_reconcile_{label}",
         )
+
+    @staticmethod
+    def _loggable(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        """Return a payload copy without the guid, for human-readable logs."""
+        if payload is None:
+            return None
+        return {key: value for key, value in payload.items() if key != "guid"}
 
     async def _send(
         self,
         zone_payload: Mapping[str, Any] | None,
         breezer_payload: Mapping[str, Any] | None,
         keys: list[str],
+        label: str,
     ) -> None:
         try:
             if zone_payload is not None:
@@ -243,9 +251,9 @@ class TionReconciler:
         except TionError as err:
             _LOGGER.warning(
                 "Tion reconcile send failed for %s (zone=%s, breezer=%s): %s",
-                keys,
-                zone_payload,
-                breezer_payload,
+                label,
+                self._loggable(zone_payload),
+                self._loggable(breezer_payload),
                 err,
             )
         finally:

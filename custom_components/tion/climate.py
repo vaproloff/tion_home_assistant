@@ -110,7 +110,6 @@ class TionClimate(
         self._attr_max_temp = breezer.t_max
         self._attr_min_temp = breezer.t_min
         self._breezer_valid = breezer.valid
-        self._is_online = breezer.is_online
         self._is_on = breezer.data.is_on
         self._t_in = breezer.data.t_in
         self._t_out = breezer.data.t_out
@@ -807,27 +806,6 @@ class TionClimate(
             self._t_out = device_data.data.t_out
             self._filter_time_seconds = device_data.data.filter_time_seconds
             self._filter_need_replace = device_data.data.filter_need_replace
-            self._is_online = device_data.is_online
-
-        _LOGGER.debug(
-            "%s: fetching breezer data: valid=%s, is_on=%s, t_set=%s, t_in: %s, t_out: %s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, heater_power: %s, gate=%s, filter_time_seconds=%s, filter_need_replace: %s, is_online: %s",
-            self.name,
-            self._breezer_valid,
-            self._is_on,
-            self._t_set,
-            self._t_in,
-            self._t_out,
-            self._speed,
-            self._speed_min_set,
-            self._speed_max_set,
-            self._heater_enabled,
-            self._heater_mode,
-            self._heater_power,
-            self._gate,
-            self._filter_time_seconds,
-            self._filter_need_replace,
-            self._is_online,
-        )
 
         return self.available
 

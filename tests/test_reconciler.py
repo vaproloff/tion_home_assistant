@@ -1,10 +1,13 @@
 """Tests for the Tion desired-state reconciler."""
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from typing import Any
 
-from custom_components.tion.client import TionLocation
+import pytest
+
+from custom_components.tion.client import TionError, TionLocation
 from custom_components.tion.const import ZoneMode
 from custom_components.tion.coordinator import TionData
 from custom_components.tion.reconciler import TionReconciler
@@ -344,3 +347,29 @@ def test_reconcile_zone_only_skipped_when_gateway_offline() -> None:
     reconciler.reconcile(data)
 
     assert coordinator.config_entry.tasks == []
+
+
+def test_send_failure_logs_breezer_name_not_guid(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a failed reconcile send is logged by device name, never the guid."""
+
+    async def _run() -> None:
+        data = _data(speed=3)
+        coordinator = _FakeCoordinator(data)
+
+        async def _boom(**kwargs: Any) -> bool:
+            raise TionError("boom")
+
+        coordinator.async_send_breezer = _boom  # type: ignore[method-assign]
+        reconciler = TionReconciler(coordinator)
+        reconciler.set_breezer(BREEZER_GUID, {"speed": 5})
+        caplog.set_level(logging.WARNING, logger="custom_components.tion.reconciler")
+
+        reconciler.reconcile(data)
+        await _drain(coordinator)
+
+        assert "Breezer" in caplog.text
+        assert BREEZER_GUID not in caplog.text
+
+    asyncio.run(_run())

@@ -22,7 +22,7 @@ from .client import (
     TionZone,
     TionZoneDevice,
 )
-from .const import TionDeviceType
+from .const import BREEZER_TYPES, TionDeviceType
 from .reconciler import TionReconciler
 
 _LOGGER = logging.getLogger(__name__)
@@ -182,8 +182,47 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
             return self.data
 
         data = TionData(locations)
+        self._log_fetched_breezers(data)
         self.apply_desired(data)
         return data
+
+    def _log_fetched_breezers(self, data: TionData) -> None:
+        """Log the raw cloud state per breezer, before optimistic overlays apply.
+
+        Runs on the pristine fetched snapshot (before apply_desired overwrites
+        device data with desired values), so it reflects what the cloud actually
+        reported, identified by device name rather than guid.
+        """
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        for device in data.devices():
+            if device.type not in BREEZER_TYPES or not device.guid:
+                continue
+            breezer = device.data
+            _LOGGER.debug(
+                "%s: fetched cloud data: is_online=%s, reachable=%s, valid=%s, "
+                "is_on=%s, speed=%s, speed_min_set=%s, speed_max_set=%s, "
+                "t_set=%s, t_in=%s, t_out=%s, heater_enabled=%s, heater_mode=%s, "
+                "heater_power=%s, gate=%s, filter_time_seconds=%s, "
+                "filter_need_replace=%s",
+                device.name,
+                device.is_online,
+                data.is_breezer_reachable(device.guid),
+                device.valid,
+                breezer.is_on,
+                breezer.speed,
+                breezer.speed_min_set,
+                breezer.speed_max_set,
+                breezer.t_set,
+                breezer.t_in,
+                breezer.t_out,
+                breezer.heater_enabled,
+                breezer.heater_mode,
+                breezer.heater_power,
+                breezer.gate,
+                breezer.filter_time_seconds,
+                breezer.filter_need_replace,
+            )
 
     def apply_desired(self, data: TionData) -> None:
         """Recompute active PID desired state, then reconcile toward all desired.
