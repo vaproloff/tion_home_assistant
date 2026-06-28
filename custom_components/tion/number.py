@@ -4,12 +4,17 @@ import abc
 import logging
 from typing import Any
 
-from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
+from homeassistant.components.number import (
+    NumberDeviceClass,
+    NumberEntity,
+    NumberExtraStoredData,
+    NumberMode,
+    RestoreNumber,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import TionZone, TionZoneDevice
@@ -211,7 +216,7 @@ class TionTargetCO2(TionNumber):
             self._target_co2 = None
 
 
-class TionLocalTargetCO2(TionNumber, RestoreEntity):
+class TionLocalTargetCO2(TionNumber, RestoreNumber):
     """Local target CO2 level for an external CO2 PID controller."""
 
     _attr_icon = "mdi:molecule-co2"
@@ -253,14 +258,29 @@ class TionLocalTargetCO2(TionNumber, RestoreEntity):
         """Return the value reported by the number."""
         return self._target_co2 if self.available else None
 
+    @property
+    def extra_restore_state_data(self) -> NumberExtraStoredData:
+        """Persist the raw local target, even while the entity is unavailable.
+
+        RestoreNumber would persist ``native_value``, which this entity reports
+        as ``None`` while unavailable (e.g. the breezer's gateway is offline);
+        persist the stored target directly so a reload never loses it.
+        """
+        return NumberExtraStoredData(
+            self.native_max_value,
+            self.native_min_value,
+            self.native_step,
+            self.native_unit_of_measurement,
+            self._target_co2,
+        )
+
     async def async_added_to_hass(self) -> None:
-        """Restore local target CO2."""
+        """Restore the local target CO2 across restarts and reloads."""
         await super().async_added_to_hass()
-        if (last_state := await self.async_get_last_state()) is not None:
-            try:
-                self._target_co2 = float(last_state.state)
-            except TypeError, ValueError:
-                self._target_co2 = DEFAULT_TARGET_CO2
+        if (
+            last_number_data := await self.async_get_last_number_data()
+        ) is not None and last_number_data.native_value is not None:
+            self._target_co2 = last_number_data.native_value
 
         self.coordinator.pid_manager.set_target_co2(self._device.guid, self._target_co2)
 

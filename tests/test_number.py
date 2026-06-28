@@ -7,7 +7,12 @@ from typing import Any
 import pytest
 
 from custom_components.tion.const import TionDeviceType
-from custom_components.tion.number import TionMaxSpeed, TionMinSpeed, TionTargetCO2
+from custom_components.tion.number import (
+    TionLocalTargetCO2,
+    TionMaxSpeed,
+    TionMinSpeed,
+    TionTargetCO2,
+)
 
 DEVICE_GUID = "device-guid"
 ZONE_GUID = "zone-guid"
@@ -157,3 +162,61 @@ def test_speed_number_unavailable_raises(number_cls: type) -> None:
         asyncio.run(entity.async_set_native_value(3))
 
     assert coordinator.reconciler.breezer == {}
+
+
+class FakePidManager:
+    """Fake local PID manager for the local target CO2 number."""
+
+    def __init__(self, *, configured: bool = True, target: float = 800.0) -> None:
+        """Initialize the fake PID manager."""
+        self._configured = configured
+        self.target = target
+        self.set_calls: list[tuple[str, float]] = []
+
+    def is_configured(self, guid: str) -> bool:
+        """Return whether local PID is configured for the breezer."""
+        return self._configured
+
+    def get_target_co2(self, guid: str) -> float:
+        """Return the stored local target CO2."""
+        return self.target
+
+    def set_target_co2(self, guid: str, value: float) -> None:
+        """Record a local target CO2 write."""
+        self.set_calls.append((guid, value))
+
+
+def _local_co2(coordinator: FakeCoordinator, *, target: float = 800.0) -> Any:
+    """Return a local target CO2 number bound to the coordinator."""
+    entity = TionLocalTargetCO2.__new__(TionLocalTargetCO2)
+    entity.coordinator = coordinator
+    entity._device = coordinator._device  # noqa: SLF001
+    entity._attr_name = "Local target CO2"  # noqa: SLF001
+    entity._target_co2 = target  # noqa: SLF001
+    entity._attr_native_min_value = 550  # noqa: SLF001
+    entity._attr_native_max_value = 1500  # noqa: SLF001
+    entity._attr_native_step = 10  # noqa: SLF001
+    entity.async_write_ha_state = lambda: None
+    return entity
+
+
+def test_local_target_co2_persists_raw_target_even_when_unavailable() -> None:
+    """Test the restore payload keeps the target even while the entity is offline."""
+    coordinator = FakeCoordinator(_device())
+    coordinator.pid_manager = FakePidManager(configured=False)
+    entity = _local_co2(coordinator, target=1200.0)
+
+    assert entity.available is False  # unavailable, yet the target must persist
+    assert entity.extra_restore_state_data.native_value == 1200.0
+
+
+def test_local_target_co2_set_updates_pid_manager() -> None:
+    """Test setting the local target updates the value and the PID manager."""
+    coordinator = FakeCoordinator(_device())
+    coordinator.pid_manager = FakePidManager()
+    entity = _local_co2(coordinator, target=800.0)
+
+    asyncio.run(entity.async_set_native_value(1100))
+
+    assert entity._target_co2 == 1100  # noqa: SLF001
+    assert coordinator.pid_manager.set_calls == [(DEVICE_GUID, 1100)]
