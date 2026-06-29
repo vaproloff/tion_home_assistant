@@ -165,7 +165,6 @@ class TionTemperatureSensor(TionSensor):
         return self._device.data.temperature if self.available else None
 
 
-
 class TionHumiditySensor(TionSensor):
     """Tion room humidity sensor."""
 
@@ -193,7 +192,6 @@ class TionHumiditySensor(TionSensor):
     def native_value(self):
         """Return the state of the sensor."""
         return self._device.data.humidity if self.available else None
-
 
 
 class TionCO2Sensor(TionSensor):
@@ -225,7 +223,6 @@ class TionCO2Sensor(TionSensor):
         return self._device.data.co2 if self.available else None
 
 
-
 class TionPM25Sensor(TionSensor):
     """Tion room PM25 sensor."""
 
@@ -253,7 +250,6 @@ class TionPM25Sensor(TionSensor):
     def native_value(self):
         """Return the state of the sensor."""
         return self._device.data.pm25 if self.available else None
-
 
 
 class TionTemperatureInSensor(TionSensor):
@@ -285,7 +281,6 @@ class TionTemperatureInSensor(TionSensor):
         return self._device.data.t_in if self.available else None
 
 
-
 class TionTemperatureOutSensor(TionSensor):
     """Tion outside air flow temperature sensor."""
 
@@ -313,7 +308,6 @@ class TionTemperatureOutSensor(TionSensor):
     def native_value(self):
         """Return the state of the sensor."""
         return self._device.data.t_out if self.available else None
-
 
 
 class TionFilterReplacementSensor(TionSensor):
@@ -347,4 +341,3 @@ class TionFilterReplacementSensor(TionSensor):
             if self.available
             else None
         )
-
