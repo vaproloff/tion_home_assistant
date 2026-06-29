@@ -222,6 +222,32 @@ def test_hvac_action_idle_while_local_pid_holds_fan_stopped() -> None:
     assert entity.hvac_action == HVACAction.IDLE
 
 
+def test_speed_zero_when_breezer_stopped() -> None:
+    """Test speed reads 0 while the breezer is not running (no airflow)."""
+    entity = _stopped_breezer(FakePidManager())
+    entity._speed = 4  # noqa: SLF001
+
+    assert entity.speed == 0
+
+
+def test_speed_reports_setpoint_when_running() -> None:
+    """Test speed reflects the reported value while the breezer runs."""
+    entity = _stopped_breezer(FakePidManager())
+    entity._is_on = True  # noqa: SLF001
+    entity._speed = 4  # noqa: SLF001
+
+    assert entity.speed == 4
+
+
+def test_fan_mode_none_when_stopped_manual() -> None:
+    """Test a stopped manual breezer exposes no fan mode (speed 0 is not a mode)."""
+    entity = _stopped_breezer(FakePidManager())
+    entity._mode = ZoneMode.MANUAL  # noqa: SLF001
+    entity._speed = 4  # noqa: SLF001
+
+    assert entity.fan_mode is None
+
+
 def test_available_false_when_gateway_offline() -> None:
     """Test the breezer is unavailable when its MagicAir gateway is offline."""
     entity = _climate(FakePidManager())
@@ -341,6 +367,7 @@ def _preset_climate(
     entity._speed_max_set = speed_max_set  # noqa: SLF001
     entity._mode = None  # noqa: SLF001
     entity._zone_valid = False  # noqa: SLF001
+    entity._is_on = True  # noqa: SLF001
     entity._speed = speed  # noqa: SLF001
     entity._heater_power = None  # noqa: SLF001
     entity._gate = None  # noqa: SLF001

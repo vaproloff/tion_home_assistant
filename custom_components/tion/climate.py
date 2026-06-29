@@ -317,7 +317,8 @@ class TionClimate(
         if self._mode == FAN_AUTO:
             return FAN_AUTO
 
-        return str(self.speed) if self.speed is not None else None
+        mode = str(self.speed) if self.speed is not None else None
+        return mode if mode in self._manual_fan_modes else None
 
     def _exact_fan_mode(self) -> str:
         """Return a log-friendly label for the current fan regime.
@@ -374,7 +375,14 @@ class TionClimate(
 
     @property
     def speed(self) -> int | None:
-        """Return the current speed."""
+        """Return the current fan speed.
+
+        Reports 0 while the breezer is not running: is_on=False means no airflow
+        regardless of the stored setpoint, so the speed shown to automations and
+        dashboards matches reality (and the IDLE/OFF hvac_action).
+        """
+        if not self._is_on:
+            return 0
         try:
             return int(self._speed)
         except (TypeError, ValueError) as e:
