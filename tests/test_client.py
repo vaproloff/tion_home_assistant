@@ -18,6 +18,7 @@ from custom_components.tion.client import (
     TionApiProfile,
     TionClient,
     TionConnectionError,
+    TionLocation,
 )
 
 
@@ -433,3 +434,65 @@ async def test_validate_auth_fails_over_to_api2_when_api_auth_is_down() -> None:
 
     assert auth == {"api": None, "api2": "Bearer api2tok"}
     assert client.active_profile == "api2"
+
+
+def _sample_location() -> TionLocation:
+    """Return a location with one zone holding a breezer and a MagicAir."""
+    return TionLocation(
+        {
+            "guid": "loc-guid",
+            "name": "Home",
+            "zones": [
+                {
+                    "guid": "zone-guid",
+                    "name": "Bedroom",
+                    "mode": {"current": "auto", "auto_set": {"co2": 800}},
+                    "devices": [
+                        {
+                            "guid": "breezer-guid",
+                            "name": "Breezer 4S",
+                            "type": "breezer4s",
+                            "mac": "AA:BB:CC:DD",
+                            "is_online": True,
+                            "data": {"data_valid": True, "speed": 2, "t_set": 20},
+                        },
+                        {
+                            "guid": "station-guid",
+                            "name": "MagicAir",
+                            "type": "co2mb",
+                            "mac": "EE:FF:00:11",
+                            "is_online": False,
+                            "data": {"data_valid": True, "co2": 950},
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def test_location_log_summary_renders_zones_and_devices_by_name() -> None:
+    """The summary names the location, zones and devices and their raw state."""
+    summary = _sample_location().log_summary()
+
+    assert "Home" in summary
+    assert "Bedroom" in summary
+    assert "mode=auto" in summary
+    assert "target_co2=800" in summary
+    assert "Breezer 4S" in summary
+    assert "speed=2" in summary
+    assert "MagicAir" in summary
+    assert "co2=950" in summary
+    # The offline gateway's raw state is visible, so reachability is readable.
+    assert "online=False" in summary
+
+
+def test_location_log_summary_omits_identifiers() -> None:
+    """The summary must not leak guids or MAC addresses."""
+    summary = _sample_location().log_summary()
+
+    assert "loc-guid" not in summary
+    assert "breezer-guid" not in summary
+    assert "station-guid" not in summary
+    assert "AA:BB:CC:DD" not in summary
+    assert "EE:FF:00:11" not in summary

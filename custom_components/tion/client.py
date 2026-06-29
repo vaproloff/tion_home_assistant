@@ -76,6 +76,14 @@ class TionZoneDeviceData:
         self.filter_time_seconds = data.get("filter_time_seconds")
         self.filter_need_replace = data.get("filter_need_replace")
 
+    def log_summary(self) -> str:
+        """Return non-empty data fields as a compact 'key=value' string."""
+        return ", ".join(
+            f"{key}={value}"
+            for key, value in vars(self).items()
+            if value is not None
+        )
+
 
 class TionZoneDevice:
     """Tion zone device."""
@@ -106,6 +114,13 @@ class TionZoneDevice:
 
         return self.guid is not None
 
+    def log_summary(self) -> str:
+        """Return a one-line summary of the device's raw cloud state."""
+        return (
+            f"{self.name} (online={self.is_online}, valid={self.valid}): "
+            f"{self.data.log_summary()}"
+        )
+
 
 class TionZone:
     """Tion zone."""
@@ -122,6 +137,15 @@ class TionZone:
         """Return if zone data valid."""
         return self.guid is not None
 
+    def log_summary(self) -> str:
+        """Return a multi-line summary of the zone and its devices."""
+        header = (
+            f"  zone '{self.name}' (valid={self.valid}, mode={self.mode.current}, "
+            f"target_co2={self.mode.auto_set.co2})"
+        )
+        devices = [f"    {device.log_summary()}" for device in self.devices]
+        return "\n".join([header, *devices])
+
 
 class TionLocation:
     """Tion location class."""
@@ -135,6 +159,11 @@ class TionLocation:
             for zone in data.get("zones", [])
             if not zone.get("is_virtual")
         ]
+
+    def log_summary(self) -> str:
+        """Return a multi-line summary of the location, its zones and devices."""
+        zones = [zone.log_summary() for zone in self.zones]
+        return "\n".join([f"location '{self.name}':", *zones])
 
 
 @dataclass(frozen=True)
@@ -458,7 +487,11 @@ class TionClient:
             raise TionApiError("Tion API returned invalid location data")
 
         self._locations = [TionLocation(location) for location in response]
-        _LOGGER.debug("TionClient: location data has been updated")
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "TionClient: location data has been updated\n%s",
+                "\n".join(location.log_summary() for location in self._locations),
+            )
         return self._locations
 
     async def get_zone(self, guid: str) -> TionZone | None:
