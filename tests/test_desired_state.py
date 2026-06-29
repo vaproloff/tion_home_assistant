@@ -80,6 +80,19 @@ def test_breezer_merge_overlays_only_specified_fields() -> None:
     }
 
 
+def test_breezer_merge_floors_speed_to_api_minimum() -> None:
+    """Test merge floors speed to 1: the API rejects speed 0 even when off."""
+    device = _device()
+    device.data.is_on = False
+    device.data.speed = 0
+
+    payload = DesiredBreezer({"is_on": False}).merge(device)
+
+    assert payload is not None
+    assert payload["speed"] == 1
+    assert payload["is_on"] is False
+
+
 def test_breezer_merge_preserves_explicit_none() -> None:
     """Test a key set to None overrides reported (distinct from an absent key)."""
     payload = DesiredBreezer({"heater_enabled": None}).merge(_device())

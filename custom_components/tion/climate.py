@@ -252,16 +252,18 @@ class TionClimate(
     @property
     def hvac_mode(self) -> HVACMode | None:
         """Return current operation."""
-        if self._breezer_valid:
-            if not self._is_on:
-                return HVACMode.OFF
+        if not self._breezer_valid:
+            return None
 
-            if self.heater_enabled:
-                return HVACMode.HEAT
+        if not self._is_on and not self.coordinator.pid_manager.is_active(
+            self._breezer_guid
+        ):
+            return HVACMode.OFF
 
-            return HVACMode.FAN_ONLY
+        if self.heater_enabled:
+            return HVACMode.HEAT
 
-        return None
+        return HVACMode.FAN_ONLY
 
     @property
     def hvac_action(self) -> HVACAction | None:
@@ -272,6 +274,9 @@ class TionClimate(
 
         if hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
+
+        if not self._is_on:
+            return HVACAction.IDLE
 
         if self._heater_power or self._heater_enabled:
             return HVACAction.HEATING

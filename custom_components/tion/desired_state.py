@@ -46,6 +46,10 @@ class DesiredBreezer:
         payload: dict[str, Any] = {"guid": reported.guid, "t_set": t_set}
         for key in _BREEZER_FIELDS:
             payload[key] = self.fields.get(key, getattr(reported.data, key))
+
+        speed = _int_or_default(payload["speed"], None)
+        if speed is not None:
+            payload["speed"] = max(1, speed)
         return payload
 
 

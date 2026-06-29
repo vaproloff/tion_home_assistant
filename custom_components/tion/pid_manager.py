@@ -219,16 +219,14 @@ class _TionBreezerPidController:
             output.is_on,
         )
 
-        # Local PID owns is_on and speed; off implies speed 0. The reconciler
-        # decides whether anything actually needs sending (diff) and dispatches.
         if zone_target_co2 is not None:
             self.coordinator.reconciler.set_zone(
                 zone.guid, {"mode": ZoneMode.MANUAL, "co2": zone_target_co2}
             )
-        speed = output.speed if output.is_on else 0
-        self.coordinator.reconciler.set_breezer(
-            self.breezer_guid, {"is_on": output.is_on, "speed": speed}
-        )
+        fields: dict[str, Any] = {"is_on": output.is_on}
+        if output.is_on:
+            fields["speed"] = output.speed
+        self.coordinator.reconciler.set_breezer(self.breezer_guid, fields)
 
     def pause(self, status: str) -> None:
         """Pause updates without disarming PID."""

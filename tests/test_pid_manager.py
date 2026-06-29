@@ -399,14 +399,18 @@ def test_write_all_writes_zone_manual_for_auto_zone() -> None:
     assert coordinator.reconciler.breezer[BREEZER_GUID] == {"is_on": True, "speed": 6}
 
 
-def test_write_all_writes_zero_speed_when_pid_turns_off() -> None:
-    """Test PID turning the breezer off writes speed 0 (off implies zero)."""
+def test_write_all_omits_speed_when_pid_turns_off() -> None:
+    """Test PID idling the breezer asserts is_on False without an invalid speed 0.
+
+    The Tion API rejects speed 0, so off-state must not push a speed; is_on alone
+    stops airflow and the API-valid floor is enforced when the payload is built.
+    """
     coordinator = FakeCoordinator(_device(speed=4))
     manager = _armed_manager(coordinator)
     controller = manager._controllers[BREEZER_GUID]  # noqa: SLF001
     controller.controller.calculate = lambda **kwargs: SimpleNamespace(  # type: ignore[method-assign]
         error=-50.0,
-        speed=3,
+        speed=0,
         is_on=False,
         p_output=0.0,
         i_output=0.0,
@@ -416,7 +420,7 @@ def test_write_all_writes_zero_speed_when_pid_turns_off() -> None:
 
     manager.write_all(_data(coordinator))
 
-    assert coordinator.reconciler.breezer[BREEZER_GUID] == {"is_on": False, "speed": 0}
+    assert coordinator.reconciler.breezer[BREEZER_GUID] == {"is_on": False}
 
 
 def test_write_all_advances_pid_state_and_resets_on_disarm() -> None:

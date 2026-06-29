@@ -15,6 +15,7 @@ from homeassistant.components.climate import (
     FAN_AUTO,
     PRESET_NONE,
     ClimateEntityFeature,
+    HVACAction,
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE
@@ -182,6 +183,43 @@ def _reachable_data(*, station_online: bool) -> TionData:
             )
         ]
     )
+
+
+def _stopped_breezer(pid_manager: FakePidManager) -> TionClimate:
+    """Return a valid breezer whose fan is stopped (is_on False), heater off."""
+    entity = _climate(pid_manager)
+    entity._breezer_valid = True  # noqa: SLF001
+    entity._is_on = False  # noqa: SLF001
+    entity._type = TionDeviceType.BREEZER_4S  # noqa: SLF001
+    entity._heater_mode = Heater.OFF  # noqa: SLF001
+    entity._heater_enabled = False  # noqa: SLF001
+    entity._heater_power = 0  # noqa: SLF001
+    return entity
+
+
+def test_hvac_mode_off_when_breezer_stopped_and_pid_inactive() -> None:
+    """Test a stopped breezer with no active local PID reports OFF."""
+    entity = _stopped_breezer(FakePidManager())
+
+    assert entity.hvac_mode == HVACMode.OFF
+
+
+def test_hvac_mode_not_off_while_local_pid_active() -> None:
+    """Test active local PID keeps the operating mode while the fan is stopped."""
+    pid_manager = FakePidManager(configured=True)
+    pid_manager.active_guids.add(BREEZER_GUID)
+    entity = _stopped_breezer(pid_manager)
+
+    assert entity.hvac_mode == HVACMode.FAN_ONLY
+
+
+def test_hvac_action_idle_while_local_pid_holds_fan_stopped() -> None:
+    """Test hvac_action is IDLE when PID holds the mode but the fan is stopped."""
+    pid_manager = FakePidManager(configured=True)
+    pid_manager.active_guids.add(BREEZER_GUID)
+    entity = _stopped_breezer(pid_manager)
+
+    assert entity.hvac_action == HVACAction.IDLE
 
 
 def test_available_false_when_gateway_offline() -> None:
