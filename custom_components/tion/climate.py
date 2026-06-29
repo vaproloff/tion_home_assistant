@@ -831,13 +831,4 @@ class TionClimate(
                     e,
                 )
 
-            _LOGGER.debug(
-                "%s: fetching zone data: name: %s, valid: %s, mode=%s, target_co2=%s",
-                self.name,
-                self._zone_name,
-                self._zone_valid,
-                self._mode,
-                self._target_co2,
-            )
-
         return self.available
