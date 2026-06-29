@@ -25,16 +25,21 @@ from custom_components.tion.client import (
 class FakeResponse:
     """Async-context-manager stand-in for an aiohttp response."""
 
-    def __init__(self, status: int, payload: Any) -> None:
+    def __init__(self, status: int, payload: Any, text_body: str = "") -> None:
         """Store the canned status and JSON payload (or exception)."""
         self.status = status
         self._payload = payload
+        self._text_body = text_body
 
     async def json(self, content_type: str | None = None) -> Any:
         """Return the canned payload, raising it if it is an exception."""
         if isinstance(self._payload, Exception):
             raise self._payload
         return self._payload
+
+    async def text(self) -> str:
+        """Return the canned raw response body."""
+        return self._text_body
 
     async def __aenter__(self) -> Self:
         """Enter the async context."""
@@ -496,3 +501,42 @@ def test_location_log_summary_omits_identifiers() -> None:
     assert "station-guid" not in summary
     assert "AA:BB:CC:DD" not in summary
     assert "EE:FF:00:11" not in summary
+
+
+@pytest.mark.asyncio
+async def test_api_error_includes_response_body() -> None:
+    """A 4xx error surfaces the cloud's JSON error body for diagnosis."""
+    routes = {
+        "api.": lambda *a: FakeResponse(400, {"error": "bad co2 format"}),
+        "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
+    }
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    with pytest.raises(TionApiError, match="bad co2 format"):
+        await client.get_locations()
+
+
+@pytest.mark.asyncio
+async def test_server_error_includes_non_json_body() -> None:
+    """A 5xx error with a non-JSON body still surfaces the raw text."""
+
+    def server_error(*_a: Any) -> FakeResponse:
+        return FakeResponse(
+            500, ValueError("not json"), text_body="Internal Server Error"
+        )
+
+    routes = {"api.": server_error, "api2.": server_error}
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    with pytest.raises(TionConnectionError, match="Internal Server Error"):
+        await client.get_locations()
+
+
+@pytest.mark.asyncio
+async def test_connection_error_names_underlying_failure() -> None:
+    """A transport failure names the underlying error instead of hiding it."""
+    routes = {"api.": _fail_conn, "api2.": _fail_conn}
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    with pytest.raises(TionConnectionError, match="ClientError"):
+        await client.get_locations()

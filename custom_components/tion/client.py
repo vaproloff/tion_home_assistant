@@ -443,13 +443,15 @@ class TionClient:
                     data = await response.json(content_type=None)
                 except (ContentTypeError, JSONDecodeError, ValueError) as err:
                     if status >= 400:
-                        data = {}
+                        data = await response.text()
                     else:
                         raise TionApiError(
                             f"Tion API returned a non-JSON response with status {status}"
                         ) from err
         except (ClientError, TimeoutError) as err:
-            raise TionConnectionError("Error communicating with Tion API") from err
+            raise TionConnectionError(
+                f"Error communicating with Tion API: {type(err).__name__}: {err}"
+            ) from err
 
         if status == 401 and auth_required:
             if retry_auth:
@@ -470,11 +472,13 @@ class TionClient:
         if auth_request and status in (400, 401, 403):
             raise TionAuthError("Invalid Tion credentials")
 
+        detail = f": {data}" if data else ""
+
         if status >= 500:
-            raise TionConnectionError(f"Tion API returned status {status}")
+            raise TionConnectionError(f"Tion API returned status {status}{detail}")
 
         if status >= 400:
-            raise TionApiError(f"Tion API returned status {status}")
+            raise TionApiError(f"Tion API returned status {status}{detail}")
 
         return data
 
