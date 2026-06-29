@@ -2,10 +2,10 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from json import JSONDecodeError
 import logging
-from typing import Any
+from typing import Any, Self
 
 from aiohttp import ClientError, ClientSession, ContentTypeError
 
@@ -47,41 +47,46 @@ class TionZoneMode:
         self.auto_set = TionZoneModeAutoSet(data.get("auto_set", {}))
 
 
+@dataclass
 class TionZoneDeviceData:
     """Tion zone device data."""
 
-    def __init__(self, data: dict[str, Any]) -> None:
-        """Tion zone device data initialization."""
-        self.co2 = data.get("co2")
-        self.temperature = data.get("temperature")
-        self.humidity = data.get("humidity")
-        self.pm25 = data.get("pm25")
-        self.backlight = data.get("backlight")
-        self.sound_is_on = data.get("sound_is_on")
-        self.is_on = data.get("is_on")
-        self.data_valid = data.get("data_valid")
-        self.heater_installed = data.get("heater_installed")
-        self.heater_enabled = data.get("heater_enabled")
-        self.heater_type = data.get("heater_type")
-        self.heater_mode = data.get("heater_mode")
-        self.heater_power = data.get("heater_power")
-        self.speed = data.get("speed")
-        self.speed_max_set = data.get("speed_max_set")
-        self.speed_min_set = data.get("speed_min_set")
-        self.speed_limit = data.get("speed_limit")
-        self.t_in = data.get("t_in")
-        self.t_set = data.get("t_set")
-        self.t_out = data.get("t_out")
-        self.gate = data.get("gate")
-        self.filter_time_seconds = data.get("filter_time_seconds")
-        self.filter_need_replace = data.get("filter_need_replace")
+    co2: Any = None
+    temperature: Any = None
+    humidity: Any = None
+    pm25: Any = None
+    backlight: Any = None
+    sound_is_on: Any = None
+    is_on: Any = None
+    data_valid: Any = None
+    heater_installed: Any = None
+    heater_enabled: Any = None
+    heater_type: Any = None
+    heater_mode: Any = None
+    heater_power: Any = None
+    speed: Any = None
+    speed_max_set: Any = None
+    speed_min_set: Any = None
+    speed_limit: Any = None
+    t_in: Any = None
+    t_set: Any = None
+    t_out: Any = None
+    gate: Any = None
+    filter_time_seconds: Any = None
+    filter_need_replace: Any = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        """Build from a raw API dict, ignoring keys we do not model."""
+        known = {field.name for field in fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in known})
 
     def log_summary(self) -> str:
         """Return non-empty data fields as a compact 'key=value' string."""
         return ", ".join(
-            f"{key}={value}"
-            for key, value in vars(self).items()
-            if value is not None
+            f"{field.name}={value}"
+            for field in fields(self)
+            if (value := getattr(self, field.name)) is not None
         )
 
 
@@ -94,7 +99,7 @@ class TionZoneDevice:
         self.name = data.get("name")
         self.type = data.get("type")
         self.mac = data.get("mac")
-        self.data = TionZoneDeviceData(data.get("data", {}))
+        self.data = TionZoneDeviceData.from_dict(data.get("data", {}))
         self.firmware = data.get("firmware")
         self.hardware = data.get("hardware")
         self.max_speed = data.get("max_speed")

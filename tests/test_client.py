@@ -19,6 +19,7 @@ from custom_components.tion.client import (
     TionClient,
     TionConnectionError,
     TionLocation,
+    TionZoneDeviceData,
 )
 
 
@@ -439,6 +440,25 @@ async def test_validate_auth_fails_over_to_api2_when_api_auth_is_down() -> None:
 
     assert auth == {"api": None, "api2": "Bearer api2tok"}
     assert client.active_profile == "api2"
+
+
+def test_device_data_from_dict_maps_known_and_ignores_unknown_keys() -> None:
+    """from_dict keeps modelled fields and drops keys the client does not model."""
+    device_data = TionZoneDeviceData.from_dict(
+        {"co2": 900, "speed": 2, "unmodelled": "ignored"}
+    )
+
+    assert device_data.co2 == 900
+    assert device_data.speed == 2
+    assert device_data.humidity is None
+    assert not hasattr(device_data, "unmodelled")
+
+
+def test_device_data_log_summary_lists_only_non_null_fields() -> None:
+    """log_summary renders set fields and omits the None ones."""
+    summary = TionZoneDeviceData.from_dict({"co2": 900, "speed": 2}).log_summary()
+
+    assert summary == "co2=900, speed=2"
 
 
 def _sample_location() -> TionLocation:
