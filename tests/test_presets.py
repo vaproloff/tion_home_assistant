@@ -206,3 +206,19 @@ def test_preset_storage_roundtrip(preset: Preset) -> None:
 def test_preset_from_storage_none() -> None:
     """Test Preset.from_storage returns None for missing data."""
     assert Preset.from_storage(None) is None
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"overrides": {"speed_min_set": 1, "speed_max_set": 4}, "was_auto": True},
+        {"overrides": {}, "was_auto": False},
+        {"type": "unknown"},
+    ],
+    ids=["legacy_auto", "legacy_empty", "unknown_type"],
+)
+def test_preset_from_storage_drops_unrecognized_payload(
+    data: dict[str, object],
+) -> None:
+    """Test from_storage drops a legacy/unknown payload instead of crashing."""
+    assert Preset.from_storage(data) is None

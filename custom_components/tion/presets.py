@@ -51,12 +51,21 @@ class Preset(ABC):
 
     @classmethod
     def from_storage(cls, data: Mapping[str, Any] | None) -> Preset | None:
-        """Rebuild a preset from a restored storage payload."""
+        """Rebuild a preset from a restored storage payload.
+
+        Returns None for an unrecognized payload -- e.g. a baseline persisted by
+        an older version in a different shape -- so a stale restore is dropped
+        instead of crashing the entity; the baseline is rebuilt on the next
+        preset change.
+        """
         if not data:
             return None
-        if data["type"] == TionPresetType.MANUAL.value:
+        preset_type = data.get("type")
+        if preset_type == TionPresetType.MANUAL.value:
             return ManualPreset(int(data["speed"]), bool(data["is_on"]))
-        return AutoPreset(int(data["min_speed"]), int(data["max_speed"]))
+        if preset_type == TionPresetType.AUTO.value:
+            return AutoPreset(int(data["min_speed"]), int(data["max_speed"]))
+        return None
 
 
 @dataclass(frozen=True)
