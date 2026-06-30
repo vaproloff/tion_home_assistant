@@ -37,7 +37,7 @@ from .const import (
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .presets import Preset, PresetBaseline, TionPresetController
+from .presets import AutoPreset, ManualPreset, Preset, TionPresetController
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -464,7 +464,7 @@ class TionClimate(
                 preset_mode,
             )
             return
-        saved = PresetBaseline.from_storage(preset_saved)
+        saved = Preset.from_storage(preset_saved)
         _LOGGER.debug(
             "%s: restoring preset '%s' with saved baseline %s",
             self.name,
@@ -659,9 +659,8 @@ class TionClimate(
             )
             return
 
-        # The baseline comes from the desired overlay (not a live snapshot) and the
-        # desired write is synchronous: there is no await before it, so a
-        # restart-mode cancellation cannot interleave and pollute the baseline.
+        # The baseline is captured synchronously before any await, so a
+        # restart-mode cancellation cannot interleave and pollute it.
         if preset_mode == PRESET_NONE:
             _LOGGER.debug(
                 "%s: leaving preset '%s', restoring baseline %s",
@@ -672,10 +671,7 @@ class TionClimate(
             self._restore_preset_baseline(self._presets.saved)
             self._presets.deactivate()
         else:
-            baseline = PresetBaseline(
-                overrides=self._managed_overrides(),
-                was_auto=self.fan_mode == FAN_AUTO,
-            )
+            baseline = self._capture_none_state()
             _LOGGER.debug(
                 "%s: entering preset '%s' (from fan_mode=%s), saving baseline %s",
                 self.name,
@@ -697,14 +693,27 @@ class TionClimate(
             self._speed_max_set,
         )
 
-    def _managed_overrides(self) -> dict[str, Any]:
-        """Return the current desired overlay restricted to preset-managed fields."""
-        current = self.coordinator.reconciler.current_breezer(self._breezer_guid)
-        return {
-            field: current[field]
-            for field in self._presets.managed_fields
-            if field in current
-        }
+    def _capture_none_state(self) -> Preset:
+        """Model the current PRESET_NONE regime as the baseline to restore later.
+
+        The baseline mirrors the breezer's pre-preset regime: the auto-speed
+        limits when running auto, otherwise the manual speed and power state.
+        Each field is taken from the desired overlay when present, else from the
+        breezer's reported state -- the limits or speed the breezer holds with an
+        empty overlay. Reading the reported value is what lets returning to
+        ``PRESET_NONE`` command the pre-preset regime back, instead of leaving the
+        breezer pinned at the preset's values.
+        """
+        overlay = self.coordinator.reconciler.current_breezer(self._breezer_guid)
+        if self.fan_mode == FAN_AUTO:
+            return AutoPreset(
+                int(overlay.get("speed_min_set", self._speed_min_set)),
+                int(overlay.get("speed_max_set", self._speed_max_set)),
+            )
+        return ManualPreset(
+            int(overlay.get("speed", self._speed)),
+            bool(overlay.get("is_on", self._is_on)),
+        )
 
     def _write_preset_desired(self, preset: Preset) -> None:
         """Write a preset's desired fields and arm/disarm its mode."""
@@ -720,26 +729,18 @@ class TionClimate(
                     self._zone_guid, {"mode": ZoneMode.MANUAL}
                 )
 
-    def _restore_preset_baseline(self, baseline: PresetBaseline | None) -> None:
-        """Restore the desired overlay and mode saved before a preset."""
-        if baseline is None:
-            return
-        if baseline.overrides:
-            self.coordinator.reconciler.set_breezer(
-                self._breezer_guid, baseline.overrides
-            )
-        else:
-            self.coordinator.reconciler.release(
-                self._breezer_guid, self._presets.managed_fields
-            )
-        if baseline.was_auto:
-            self._enter_auto_desired()
-        else:
-            self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
-            if self._zone_guid is not None:
-                self.coordinator.reconciler.set_zone(
-                    self._zone_guid, {"mode": ZoneMode.MANUAL}
-                )
+    def _restore_preset_baseline(self, baseline: Preset | None) -> None:
+        """Restore the regime saved before a preset by re-applying it.
+
+        Drop every preset-managed field first so the leaving preset leaves no
+        footprint (e.g. its auto limits when the saved regime is manual), then
+        write the saved baseline through the same path used to apply a preset.
+        """
+        self.coordinator.reconciler.release(
+            self._breezer_guid, self._presets.managed_fields
+        )
+        if baseline is not None:
+            self._write_preset_desired(baseline)
 
     def _enter_auto_desired(self) -> None:
         """Write desired auto mode (local PID if configured, else cloud auto)."""

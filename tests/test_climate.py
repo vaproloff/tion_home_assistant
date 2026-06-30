@@ -10,7 +10,7 @@ from custom_components.tion.client import TionLocation
 from custom_components.tion.climate import TionClimate
 from custom_components.tion.const import Heater, SwingMode, TionDeviceType, ZoneMode
 from custom_components.tion.coordinator import TionData
-from custom_components.tion.presets import PresetBaseline, TionPresetController
+from custom_components.tion.presets import AutoPreset, TionPresetController
 from homeassistant.components.climate import (
     FAN_AUTO,
     PRESET_NONE,
@@ -466,7 +466,7 @@ def test_climate_preset_double_apply_keeps_original_baseline() -> None:
     mid-flight and re-firing cannot pollute it.
     """
     pid_manager = FakePidManager(configured=True)
-    pid_manager.active_guids.add(BREEZER_GUID)  # fan_mode == FAN_AUTO -> was_auto
+    pid_manager.active_guids.add(BREEZER_GUID)  # fan_mode == FAN_AUTO -> auto baseline
     entity = _preset_climate(
         pid_manager,
         presets={"sleep": {"type": "auto", "min_speed": 1, "max_speed": 2}},
@@ -496,9 +496,7 @@ def test_climate_preset_double_apply_keeps_original_baseline() -> None:
     asyncio.run(_run())
 
     assert entity.preset_mode == "sleep"
-    saved = entity._presets.saved  # noqa: SLF001
-    assert saved is not None
-    assert saved.overrides == {"speed_min_set": 1, "speed_max_set": 4}
+    assert entity._presets.saved == AutoPreset(1, 4)  # noqa: SLF001
 
 
 def test_climate_restores_preset() -> None:
@@ -509,16 +507,11 @@ def test_climate_restores_preset() -> None:
     )
     entity._restore_preset(  # noqa: SLF001
         "boost",
-        {
-            "overrides": {"speed_min_set": 1, "speed_max_set": 3},
-            "was_auto": True,
-        },
+        {"type": "auto", "min_speed": 1, "max_speed": 3},
     )
 
     assert entity.preset_mode == "boost"
-    assert entity._presets.saved == PresetBaseline(  # noqa: SLF001
-        overrides={"speed_min_set": 1, "speed_max_set": 3}, was_auto=True
-    )
+    assert entity._presets.saved == AutoPreset(1, 3)  # noqa: SLF001
 
 
 def test_climate_restore_ignores_none_preset() -> None:
@@ -559,6 +552,63 @@ def test_climate_set_preset_none_restores_baseline() -> None:
 
     assert entity.preset_mode == PRESET_NONE
     assert reconciler.breezer[BREEZER_GUID] == {"speed_min_set": 1, "speed_max_set": 4}
+
+
+def test_climate_preset_none_restores_limits_from_reported_state() -> None:
+    """Returning to none restores limits that live only in the reported state.
+
+    Field bug: the user reaches 'none' at max=4 without ever writing the limit
+    through Home Assistant, so the desired overlay is empty. Entering 'sleep'
+    must capture max=4 from the breezer's reported state (not an empty baseline);
+    leaving must command max=4 back instead of releasing the field and leaving
+    the breezer pinned at the preset's max=2.
+    """
+    pid_manager = FakePidManager(configured=True)
+    pid_manager.active_guids.add(BREEZER_GUID)
+    entity = _preset_climate(
+        pid_manager,
+        presets={"sleep": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        speed_min_set=1,
+        speed_max_set=4,
+    )
+    reconciler = entity.coordinator.reconciler
+    # No overlay write: max=4 exists only in the breezer's reported state.
+
+    asyncio.run(entity.async_set_preset_mode("sleep"))
+    assert entity.preset_mode == "sleep"
+    assert reconciler.breezer[BREEZER_GUID] == {"speed_min_set": 1, "speed_max_set": 2}
+
+    asyncio.run(entity.async_set_preset_mode(PRESET_NONE))
+
+    assert entity.preset_mode == PRESET_NONE
+    assert reconciler.breezer[BREEZER_GUID] == {"speed_min_set": 1, "speed_max_set": 4}
+
+
+def test_climate_preset_none_restores_manual_speed_after_auto_preset() -> None:
+    """Leaving an auto preset restores the manual speed the breezer ran before it.
+
+    The baseline regime is manual, so returning to none must write back is_on and
+    the manual speed (not the auto limits the preset overlaid), leaving no stale
+    auto-limit footprint in the desired overlay.
+    """
+    pid_manager = FakePidManager(configured=True)  # auto preset selectable
+    entity = _preset_climate(
+        pid_manager,
+        presets={"sleep": {"type": "auto", "min_speed": 1, "max_speed": 2}},
+        speed=5,
+        speed_max_set=4,
+    )
+    entity._mode = ZoneMode.MANUAL  # noqa: SLF001  -- none regime is manual speed 5
+    reconciler = entity.coordinator.reconciler
+
+    asyncio.run(entity.async_set_preset_mode("sleep"))
+    assert entity.preset_mode == "sleep"
+    assert reconciler.breezer[BREEZER_GUID] == {"speed_min_set": 1, "speed_max_set": 2}
+
+    asyncio.run(entity.async_set_preset_mode(PRESET_NONE))
+
+    assert entity.preset_mode == PRESET_NONE
+    assert reconciler.breezer[BREEZER_GUID] == {"is_on": True, "speed": 5}
 
 
 def test_climate_coordinator_update_releases_preset_on_external_change() -> None:
@@ -721,9 +771,7 @@ def test_climate_set_fan_mode_manual_deactivates_active_preset() -> None:
     entity.coordinator.reconciler.set_breezer(
         BREEZER_GUID, {"speed_min_set": 1, "speed_max_set": 2}
     )
-    entity._presets.activate(  # noqa: SLF001
-        "eco", PresetBaseline(overrides={}, was_auto=True)
-    )
+    entity._presets.activate("eco", AutoPreset(1, 2))  # noqa: SLF001
 
     asyncio.run(entity.async_set_fan_mode("3"))
 
@@ -740,9 +788,7 @@ def test_climate_set_hvac_off_deactivates_active_preset() -> None:
     entity.coordinator.reconciler.set_breezer(
         BREEZER_GUID, {"speed_min_set": 1, "speed_max_set": 2}
     )
-    entity._presets.activate(  # noqa: SLF001
-        "eco", PresetBaseline(overrides={}, was_auto=True)
-    )
+    entity._presets.activate("eco", AutoPreset(1, 2))  # noqa: SLF001
 
     asyncio.run(entity.async_set_hvac_mode(HVACMode.OFF))
 
@@ -816,14 +862,12 @@ def test_extra_restore_state_data_captures_pid_preset_and_baseline() -> None:
         presets={"boost": {"type": "manual", "speed": 3}},
     )
     pid_manager.start_breezer_pid(BREEZER_GUID)
-    entity._presets.activate(  # noqa: SLF001
-        "boost", PresetBaseline(overrides={"speed_max_set": 4}, was_auto=True)
-    )
+    entity._presets.activate("boost", AutoPreset(1, 4))  # noqa: SLF001
 
     restored = entity.extra_restore_state_data.as_dict()
 
     assert restored == {
         "pid_active": True,
         "preset_mode": "boost",
-        "preset_saved": {"overrides": {"speed_max_set": 4}, "was_auto": True},
+        "preset_saved": {"type": "auto", "min_speed": 1, "max_speed": 4},
     }
