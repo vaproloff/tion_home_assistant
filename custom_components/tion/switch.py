@@ -211,11 +211,6 @@ class TionBacklightSwitch(TionSwitch):
     def _handle_device_update(self) -> None:
         """Handle updated backlight state."""
         self._is_on = bool(self._device.data.backlight)
-        _LOGGER.debug(
-            "%s: fetched settings data: backlight=%s",
-            self.name,
-            self.is_on,
-        )
 
     async def _send(self) -> None:
         """Send new switch data to API."""
@@ -279,16 +274,7 @@ class TionAutoModeSwitch(TionSwitch):
         self._is_on = self._auto_enabled
 
         if self._is_on is None:
-            _LOGGER.debug(
-                "%s: zone is unavailable",
-                self.name,
-            )
-
-        _LOGGER.debug(
-            "%s: fetched zone data: mode=%s",
-            self.name,
-            ZoneMode.AUTO if self._is_on else ZoneMode.MANUAL,
-        )
+            _LOGGER.debug("%s: zone is unavailable", self.name)
 
     async def _send(self) -> None:
         """Write the zone auto/manual mode into the desired state."""
@@ -343,11 +329,6 @@ class TionBreezerSoundSwitch(TionSwitch):
     def _handle_device_update(self) -> None:
         """Handle updated sound state."""
         self._is_on = bool(self._device.data.sound_is_on)
-        _LOGGER.debug(
-            "%s: fetched settings data: sound=%s",
-            self.name,
-            self.is_on,
-        )
 
     async def _send(self) -> None:
         """Send new switch data to API."""
@@ -408,12 +389,6 @@ class TionBreezerHeaterSwitch(TionSwitch):
     def _handle_device_update(self) -> None:
         """Handle updated heater state."""
         self._is_on = self._heater_enabled
-        _LOGGER.debug(
-            "%s: fetched settings data: heater_mode=%s, heater_enabled=%s",
-            self.name,
-            self._device.data.heater_mode,
-            self._device.data.heater_enabled,
-        )
 
     async def _send(self) -> None:
         """Write the breezer heater state into the desired state."""

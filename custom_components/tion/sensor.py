@@ -14,6 +14,7 @@ from homeassistant.const import (
     CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
     CONCENTRATION_PARTS_PER_MILLION,
     PERCENTAGE,
+    EntityCategory,
     UnitOfTemperature,
     UnitOfTime,
 )
@@ -59,8 +60,34 @@ async def async_setup_entry(
             if device.data.pm25 != "NaN":
                 entities.append(TionPM25Sensor(coordinator, device))
 
+    entities.append(TionApiProfileSensor(coordinator, entry.entry_id))
+
     async_add_entities(entities)
     return True
+
+
+class TionApiProfileSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity):
+    """Diagnostic sensor exposing the active Tion cloud API profile.
+
+    Account-level (no device) and disabled by default. It stays available while
+    the coordinator is updating even when the breezers are offline, so the
+    serving endpoint can be inspected during an outage.
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "api_profile"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(self, coordinator: TionDataUpdateCoordinator, entry_id: str) -> None:
+        """Initialize the API profile sensor."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry_id}_api_profile"
+
+    @property
+    def native_value(self) -> str:
+        """Return the name of the active API profile."""
+        return self.coordinator.client.active_profile
 
 
 class TionSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc.ABC):
@@ -108,13 +135,6 @@ class TionSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc
             self._device = device_data
         super()._handle_coordinator_update()
 
-    async def _load(self) -> bool:
-        if device_data := self.coordinator.get_device(self._device.guid):
-            self._device = device_data
-            return True
-
-        return False
-
 
 class TionTemperatureSensor(TionSensor):
     """Tion room temperature sensor."""
@@ -143,17 +163,6 @@ class TionTemperatureSensor(TionSensor):
     def native_value(self):
         """Return the state of the sensor."""
         return self._device.data.temperature if self.available else None
-
-    async def _load(self):
-        """Update device data from API."""
-        if await super()._load():
-            _LOGGER.debug(
-                "%s: fetched data: temperature=%s",
-                self.name,
-                self._device.data.temperature,
-            )
-
-        return self.available
 
 
 class TionHumiditySensor(TionSensor):
@@ -184,17 +193,6 @@ class TionHumiditySensor(TionSensor):
         """Return the state of the sensor."""
         return self._device.data.humidity if self.available else None
 
-    async def _load(self):
-        """Update device data from API."""
-        if await super()._load():
-            _LOGGER.debug(
-                "%s: fetched data: humidity=%s",
-                self.name,
-                self._device.data.humidity,
-            )
-
-        return self.available
-
 
 class TionCO2Sensor(TionSensor):
     """Tion room CO2 sensor."""
@@ -223,17 +221,6 @@ class TionCO2Sensor(TionSensor):
     def native_value(self):
         """Return the state of the sensor."""
         return self._device.data.co2 if self.available else None
-
-    async def _load(self):
-        """Update device data from API."""
-        if await super()._load():
-            _LOGGER.debug(
-                "%s: fetched data: co2=%s",
-                self.name,
-                self._device.data.co2,
-            )
-
-        return self.available
 
 
 class TionPM25Sensor(TionSensor):
@@ -264,17 +251,6 @@ class TionPM25Sensor(TionSensor):
         """Return the state of the sensor."""
         return self._device.data.pm25 if self.available else None
 
-    async def _load(self):
-        """Update device data from API."""
-        if await super()._load():
-            _LOGGER.debug(
-                "%s: fetched data: pm25=%s",
-                self.name,
-                self._device.data.pm25,
-            )
-
-        return self.available
-
 
 class TionTemperatureInSensor(TionSensor):
     """Tion inside air flow temperature sensor."""
@@ -304,17 +280,6 @@ class TionTemperatureInSensor(TionSensor):
         """Return the state of the sensor."""
         return self._device.data.t_in if self.available else None
 
-    async def _load(self):
-        """Update device data from API."""
-        if await super()._load():
-            _LOGGER.debug(
-                "%s: fetched data: temperature_in=%s",
-                self.name,
-                self._device.data.t_in,
-            )
-
-        return self.available
-
 
 class TionTemperatureOutSensor(TionSensor):
     """Tion outside air flow temperature sensor."""
@@ -343,17 +308,6 @@ class TionTemperatureOutSensor(TionSensor):
     def native_value(self):
         """Return the state of the sensor."""
         return self._device.data.t_out if self.available else None
-
-    async def _load(self):
-        """Update device data from API."""
-        if await super()._load():
-            _LOGGER.debug(
-                "%s: fetched data: temperature_out=%s",
-                self.name,
-                self._device.data.t_out,
-            )
-
-        return self.available
 
 
 class TionFilterReplacementSensor(TionSensor):
@@ -387,14 +341,3 @@ class TionFilterReplacementSensor(TionSensor):
             if self.available
             else None
         )
-
-    async def _load(self):
-        """Update device data from API."""
-        if await super()._load():
-            _LOGGER.debug(
-                "%s: fetched data: filter_time_seconds=%s",
-                self.name,
-                self._device.data.filter_time_seconds,
-            )
-
-        return self.available

@@ -21,7 +21,6 @@ DEFAULT_PID_KP = 0.5
 DEFAULT_PID_KI = 0.001
 DEFAULT_PID_KD = 0.0
 AUTH_DATA = "auth"
-ACTIVE_PROFILE = "active_profile"
 MANUFACTURER = "Tion"
 CONF_BREEZER_GUID = "breezer_guid"
 CONF_CO2_SENSOR_ENTITY_ID = "co2_sensor_entity_id"

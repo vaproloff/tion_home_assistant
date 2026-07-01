@@ -18,22 +18,29 @@ from custom_components.tion.client import (
     TionApiProfile,
     TionClient,
     TionConnectionError,
+    TionLocation,
+    TionZoneDeviceData,
 )
 
 
 class FakeResponse:
     """Async-context-manager stand-in for an aiohttp response."""
 
-    def __init__(self, status: int, payload: Any) -> None:
+    def __init__(self, status: int, payload: Any, text_body: str = "") -> None:
         """Store the canned status and JSON payload (or exception)."""
         self.status = status
         self._payload = payload
+        self._text_body = text_body
 
     async def json(self, content_type: str | None = None) -> Any:
         """Return the canned payload, raising it if it is an exception."""
         if isinstance(self._payload, Exception):
             raise self._payload
         return self._payload
+
+    async def text(self) -> str:
+        """Return the canned raw response body."""
+        return self._text_body
 
     async def __aenter__(self) -> Self:
         """Enter the async context."""
@@ -185,22 +192,14 @@ async def test_request_fails_over_to_second_profile_and_sticks() -> None:
         "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
     }
     client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
-    switches: list[str] = []
-
-    async def _on_switch(name: str) -> None:
-        switches.append(name)
-
-    client.add_active_profile_listener(_on_switch)
 
     await client.get_locations()
 
     assert client.active_profile == "api2"
-    assert switches == ["api2"]
 
     # Subsequent request stays on api2 without touching api again.
     await client.get_locations()
     assert client.active_profile == "api2"
-    assert switches == ["api2"]
 
 
 @pytest.mark.asyncio
@@ -325,8 +324,24 @@ async def test_send_pins_task_poll_to_post_profile() -> None:
 @pytest.mark.asyncio
 async def test_send_pins_task_poll_to_post_profile_when_active_changes() -> None:
     """Task polling stays on the POST profile even if another request switches back."""
-    switched_to_api2 = asyncio.Event()
-    release_api2_listener = asyncio.Event()
+    polling_api2 = asyncio.Event()
+    release_poll = asyncio.Event()
+
+    class GatedTaskResponse:
+        """Task-poll response that pauses until released, then completes."""
+
+        status = 200
+
+        async def __aenter__(self) -> Self:
+            polling_api2.set()
+            await release_poll.wait()
+            return self
+
+        async def json(self, content_type: str | None = None) -> Any:
+            return {"status": "completed"}
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
 
     def api_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
         if method == "post":
@@ -335,32 +350,29 @@ async def test_send_pins_task_poll_to_post_profile_when_active_changes() -> None
             return FakeResponse(200, [{"guid": "loc"}])
         return FakeResponse(404, {})
 
-    def api2_handler(method: str, url: str, kwargs: dict[str, Any]) -> FakeResponse:
+    def api2_handler(
+        method: str, url: str, kwargs: dict[str, Any]
+    ) -> FakeResponse | GatedTaskResponse:
         if method == "post":
             return FakeResponse(200, {"status": "queued", "task_id": "T1"})
         if url.endswith("/location"):
             raise ClientError("api2 read down")
         if "/task/T1" in url:
-            return FakeResponse(200, {"status": "completed"})
+            return GatedTaskResponse()
         return FakeResponse(404, {})
 
     routes = {"api.": api_handler, "api2.": api2_handler}
     client, session = _make_client(routes, auth={"api": "t", "api2": "t2"})
 
-    async def on_switch(name: str) -> None:
-        if name == "api2":
-            switched_to_api2.set()
-            await release_api2_listener.wait()
-
-    client.add_active_profile_listener(on_switch)
-
     send_task = asyncio.create_task(client.send_settings("guid-1", {"backlight": True}))
-    await asyncio.wait_for(switched_to_api2.wait(), timeout=1)
+    # The POST failed over to api2 (now active) and the task poll is in flight.
+    await asyncio.wait_for(polling_api2.wait(), timeout=1)
 
+    # A concurrent read fails over api2->api, flipping the active profile back.
     await client.get_locations()
     assert client.active_profile == "api"
 
-    release_api2_listener.set()
+    release_poll.set()
     assert await send_task is True
 
     task_calls = [call for call in session.calls if "/task/T1" in call.url]
@@ -430,23 +442,121 @@ async def test_validate_auth_fails_over_to_api2_when_api_auth_is_down() -> None:
     assert client.active_profile == "api2"
 
 
+def test_device_data_from_dict_maps_known_and_ignores_unknown_keys() -> None:
+    """from_dict keeps modelled fields and drops keys the client does not model."""
+    device_data = TionZoneDeviceData.from_dict(
+        {"co2": 900, "speed": 2, "unmodelled": "ignored"}
+    )
+
+    assert device_data.co2 == 900
+    assert device_data.speed == 2
+    assert device_data.humidity is None
+    assert not hasattr(device_data, "unmodelled")
+
+
+def test_device_data_log_summary_lists_only_non_null_fields() -> None:
+    """log_summary renders set fields and omits the None ones."""
+    summary = TionZoneDeviceData.from_dict({"co2": 900, "speed": 2}).log_summary()
+
+    assert summary == "co2=900, speed=2"
+
+
+def _sample_location() -> TionLocation:
+    """Return a location with one zone holding a breezer and a MagicAir."""
+    return TionLocation(
+        {
+            "guid": "loc-guid",
+            "name": "Home",
+            "zones": [
+                {
+                    "guid": "zone-guid",
+                    "name": "Bedroom",
+                    "mode": {"current": "auto", "auto_set": {"co2": 800}},
+                    "devices": [
+                        {
+                            "guid": "breezer-guid",
+                            "name": "Breezer 4S",
+                            "type": "breezer4s",
+                            "mac": "AA:BB:CC:DD",
+                            "is_online": True,
+                            "data": {"data_valid": True, "speed": 2, "t_set": 20},
+                        },
+                        {
+                            "guid": "station-guid",
+                            "name": "MagicAir",
+                            "type": "co2mb",
+                            "mac": "EE:FF:00:11",
+                            "is_online": False,
+                            "data": {"data_valid": True, "co2": 950},
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def test_location_log_summary_renders_zones_and_devices_by_name() -> None:
+    """The summary names the location, zones and devices and their raw state."""
+    summary = _sample_location().log_summary()
+
+    assert "Home" in summary
+    assert "Bedroom" in summary
+    assert "mode=auto" in summary
+    assert "target_co2=800" in summary
+    assert "Breezer 4S" in summary
+    assert "speed=2" in summary
+    assert "MagicAir" in summary
+    assert "co2=950" in summary
+    # The offline gateway's raw state is visible, so reachability is readable.
+    assert "online=False" in summary
+
+
+def test_location_log_summary_omits_identifiers() -> None:
+    """The summary must not leak guids or MAC addresses."""
+    summary = _sample_location().log_summary()
+
+    assert "loc-guid" not in summary
+    assert "breezer-guid" not in summary
+    assert "station-guid" not in summary
+    assert "AA:BB:CC:DD" not in summary
+    assert "EE:FF:00:11" not in summary
+
+
 @pytest.mark.asyncio
-async def test_switch_listener_reports_new_active_profile() -> None:
-    """A failover switch notifies the active-profile listener with the new name."""
-    stored: dict[str, str] = {"active_profile": "api"}
-
-    async def on_switch(name: str) -> None:
-        stored["active_profile"] = name
-
+async def test_api_error_includes_response_body() -> None:
+    """A 4xx error surfaces the cloud's JSON error body for diagnosis."""
     routes = {
-        "api.": _fail_conn,
+        "api.": lambda *a: FakeResponse(400, {"error": "bad co2 format"}),
         "api2.": lambda *a: FakeResponse(200, [{"guid": "loc"}]),
     }
-    client, _ = _make_client(
-        routes, auth={"api": "t", "api2": "t2"}, active_profile="api"
-    )
-    client.add_active_profile_listener(on_switch)
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
 
-    await client.get_locations()
+    with pytest.raises(TionApiError, match="bad co2 format"):
+        await client.get_locations()
 
-    assert stored["active_profile"] == "api2"
+
+@pytest.mark.asyncio
+async def test_server_error_includes_non_json_body() -> None:
+    """A 5xx error with a non-JSON body still surfaces the raw text."""
+
+    def server_error(*_a: Any) -> FakeResponse:
+        return FakeResponse(
+            500, ValueError("not json"), text_body="Internal Server Error"
+        )
+
+    routes = {"api.": server_error, "api2.": server_error}
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    with pytest.raises(TionConnectionError, match="Internal Server Error"):
+        await client.get_locations()
+
+
+@pytest.mark.asyncio
+async def test_connection_error_names_underlying_failure() -> None:
+    """A transport failure names the underlying error instead of hiding it."""
+    routes = {"api.": _fail_conn, "api2.": _fail_conn}
+    client, _ = _make_client(routes, auth={"api": "t", "api2": "t2"})
+
+    with pytest.raises(TionConnectionError, match="ClientError"):
+        await client.get_locations()

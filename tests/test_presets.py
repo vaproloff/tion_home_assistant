@@ -10,11 +10,9 @@ from custom_components.tion.const import (
     TionPresetType,
 )
 from custom_components.tion.presets import (
-    ATTR_SAVED_PRESET,
     AutoPreset,
     ManualPreset,
     Preset,
-    PresetBaseline,
     TionPresetController,
 )
 from homeassistant.components.climate import PRESET_NONE
@@ -28,11 +26,6 @@ PRESETS = {
 def _controller() -> TionPresetController:
     """Return a controller with one auto and one manual preset."""
     return TionPresetController({name: dict(cfg) for name, cfg in PRESETS.items()})
-
-
-def _baseline(**overrides: int) -> PresetBaseline:
-    """Build an auto baseline carrying the given breezer overrides."""
-    return PresetBaseline(overrides=dict(overrides), was_auto=True)
 
 
 def test_no_presets() -> None:
@@ -73,6 +66,14 @@ def test_manual_preset_desired_fields_and_mode() -> None:
     assert ManualPreset(3).is_auto() is False
 
 
+def test_manual_preset_off_overlays_power_state() -> None:
+    """Test a manual baseline preset carries a real (off) power state."""
+    assert ManualPreset(3, is_on=False).desired_fields() == {
+        "is_on": False,
+        "speed": 3,
+    }
+
+
 def test_managed_fields_union() -> None:
     """Test managed_fields is the union of every preset's desired fields."""
     controller = _controller()
@@ -85,10 +86,10 @@ def test_managed_fields_union() -> None:
     }
 
 
-def test_activate_saves_baseline_from_passed_overrides() -> None:
-    """Test activating a preset saves the supplied baseline (not a live snapshot)."""
+def test_activate_saves_baseline_from_passed_preset() -> None:
+    """Test activating a preset saves the supplied baseline preset."""
     controller = _controller()
-    baseline = _baseline(speed_min_set=1, speed_max_set=4)
+    baseline = AutoPreset(1, 4)
 
     controller.activate("eco", baseline)
 
@@ -100,10 +101,10 @@ def test_activate_saves_baseline_from_passed_overrides() -> None:
 def test_repeated_activate_keeps_first_baseline() -> None:
     """Test re-activating while active does not overwrite the saved baseline."""
     controller = _controller()
-    first = _baseline(speed_min_set=1, speed_max_set=4)
+    first = AutoPreset(1, 4)
     controller.activate("eco", first)
 
-    controller.activate("eco", _baseline(speed_min_set=1, speed_max_set=2))
+    controller.activate("eco", AutoPreset(1, 2))
 
     assert controller.saved == first
 
@@ -111,10 +112,10 @@ def test_repeated_activate_keeps_first_baseline() -> None:
 def test_activate_preset_to_preset_keeps_saved() -> None:
     """Test switching preset to preset does not overwrite the saved baseline."""
     controller = _controller()
-    first = _baseline(speed_min_set=1, speed_max_set=4)
+    first = AutoPreset(1, 4)
     controller.activate("eco", first)
 
-    controller.activate("boost", _baseline(speed_min_set=1, speed_max_set=2))
+    controller.activate("boost", AutoPreset(1, 2))
 
     assert controller.preset_mode == "boost"
     assert controller.saved == first
@@ -123,19 +124,18 @@ def test_activate_preset_to_preset_keeps_saved() -> None:
 def test_deactivate_clears_active_and_saved() -> None:
     """Test deactivate drops to PRESET_NONE and clears the baseline."""
     controller = _controller()
-    controller.activate("eco", _baseline(speed_min_set=1, speed_max_set=4))
+    controller.activate("eco", AutoPreset(1, 4))
 
     controller.deactivate()
 
     assert controller.preset_mode == PRESET_NONE
     assert controller.saved is None
-    assert controller.restore_attributes() == {ATTR_SAVED_PRESET: None}
 
 
 def test_restore_rehydrates_active_and_saved() -> None:
     """Test restore sets the active preset and saved baseline after a restart."""
     controller = _controller()
-    baseline = _baseline(speed_min_set=1, speed_max_set=4)
+    baseline = AutoPreset(1, 4)
 
     controller.restore("eco", baseline)
 
@@ -150,14 +150,14 @@ def test_restore_without_saved_clears_saved() -> None:
     controller.restore("boost", None)
 
     assert controller.preset_mode == "boost"
-    assert controller.restore_attributes() == {ATTR_SAVED_PRESET: None}
+    assert controller.saved is None
 
 
 def test_restore_ignores_unknown_preset() -> None:
     """Test restore ignores a preset name that is not configured."""
     controller = _controller()
 
-    controller.restore("nonexistent", _baseline(speed=1))
+    controller.restore("nonexistent", ManualPreset(1))
 
     assert controller.preset_mode == PRESET_NONE
 
@@ -190,20 +190,35 @@ def test_equality_across_types() -> None:
 
 
 @pytest.mark.parametrize(
-    "baseline",
+    "preset",
     [
-        PresetBaseline(
-            overrides={"speed_min_set": 1, "speed_max_set": 4}, was_auto=True
-        ),
-        PresetBaseline(overrides={}, was_auto=False),
+        AutoPreset(1, 4),
+        ManualPreset(3),
+        ManualPreset(0, is_on=False),
     ],
-    ids=["auto_with_overrides", "manual_empty"],
+    ids=["auto", "manual_on", "manual_off"],
 )
-def test_preset_baseline_storage_roundtrip(baseline: PresetBaseline) -> None:
-    """Test PresetBaseline round-trips through storage."""
-    assert PresetBaseline.from_storage(baseline.to_storage()) == baseline
+def test_preset_storage_roundtrip(preset: Preset) -> None:
+    """Test a preset round-trips through storage."""
+    assert Preset.from_storage(preset.to_storage()) == preset
 
 
-def test_preset_baseline_from_storage_none() -> None:
-    """Test PresetBaseline.from_storage returns None for missing data."""
-    assert PresetBaseline.from_storage(None) is None
+def test_preset_from_storage_none() -> None:
+    """Test Preset.from_storage returns None for missing data."""
+    assert Preset.from_storage(None) is None
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"overrides": {"speed_min_set": 1, "speed_max_set": 4}, "was_auto": True},
+        {"overrides": {}, "was_auto": False},
+        {"type": "unknown"},
+    ],
+    ids=["legacy_auto", "legacy_empty", "unknown_type"],
+)
+def test_preset_from_storage_drops_unrecognized_payload(
+    data: dict[str, object],
+) -> None:
+    """Test from_storage drops a legacy/unknown payload instead of crashing."""
+    assert Preset.from_storage(data) is None

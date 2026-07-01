@@ -76,13 +76,11 @@ class FakeTionClient:
         *,
         min_update_interval_sec: int,
         auth: str | dict[str, str | None] | None,
-        active_profile: str | None,
     ) -> None:
         """Initialize fake client."""
         self.auth_listener: Callable[[str, str], Awaitable[None]] | None = None
         self.active_profile_listener: Callable[[str], Awaitable[None]] | None = None
         self.auth = auth
-        self.active_profile = active_profile
         self.instances.append(self)
 
     def add_update_listener(
@@ -175,3 +173,17 @@ def test_setup_entry_auth_listener_merges_profile_token(
 
     assert hass.config_entries.updated_data is not None
     assert hass.config_entries.updated_data[AUTH_DATA] == expected_auth
+
+
+def test_setup_entry_does_not_persist_active_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup must not wire active-profile persistence (no reload on failover)."""
+    _patch_setup_dependencies(monkeypatch)
+    hass = FakeHass()
+    entry = FakeConfigEntry({"api": "token"})
+
+    assert asyncio.run(tion.async_setup_entry(hass, entry)) is True
+
+    client = FakeTionClient.instances[0]
+    assert client.active_profile_listener is None

@@ -292,3 +292,142 @@ def test_update_accepts_cloud_data_after_command_completed_before_fetch() -> Non
 
     assert result is not cached
     assert result.device(BREEZER_GUID).data.speed == 1
+
+
+MAGICAIR_GUID = "magicair-guid"
+
+
+def _reachability_data(
+    *,
+    breezer_online: bool = True,
+    breezer_hwid: str | None = "hw1",
+    station_online: bool | None = None,
+    station_hwid: str = "hw1",
+) -> TionData:
+    """Build data with a breezer and an optional MagicAir in a different zone.
+
+    The station shares (or not) the breezer's zone_hwid, exercising the
+    hardware-binding reachability check across separate logical zones.
+    """
+    zones: list[dict] = [
+        {
+            "guid": "breezer-zone",
+            "devices": [
+                {
+                    "guid": BREEZER_GUID,
+                    "name": "Breezer",
+                    "type": "breezer4",
+                    "zone_hwid": breezer_hwid,
+                    "is_online": breezer_online,
+                    "data": {"data_valid": True},
+                }
+            ],
+        }
+    ]
+    if station_online is not None:
+        zones.append(
+            {
+                "guid": "station-zone",
+                "devices": [
+                    {
+                        "guid": MAGICAIR_GUID,
+                        "name": "MagicAir",
+                        "type": "co2mb",
+                        "zone_hwid": station_hwid,
+                        "is_online": station_online,
+                        "data": {"data_valid": True},
+                    }
+                ],
+            }
+        )
+    return TionData([TionLocation({"guid": "loc", "zones": zones})])
+
+
+def test_breezer_reachable_when_bound_station_online() -> None:
+    """Test a breezer is reachable when its bound MagicAir gateway is online."""
+    data = _reachability_data(station_online=True)
+
+    assert data.is_breezer_reachable(BREEZER_GUID) is True
+
+
+def test_breezer_unreachable_when_bound_station_offline() -> None:
+    """Test a stale-online breezer is unreachable when its gateway is offline."""
+    data = _reachability_data(breezer_online=True, station_online=False)
+
+    assert data.is_breezer_reachable(BREEZER_GUID) is False
+
+
+def test_breezer_reachability_binds_across_logical_zones_by_hwid() -> None:
+    """Test the station binds by zone_hwid even from a different logical zone."""
+    online = _reachability_data(
+        breezer_hwid="hw9", station_online=True, station_hwid="hw9"
+    )
+    offline = _reachability_data(
+        breezer_hwid="hw9", station_online=False, station_hwid="hw9"
+    )
+
+    assert online.is_breezer_reachable(BREEZER_GUID) is True
+    assert offline.is_breezer_reachable(BREEZER_GUID) is False
+
+
+def test_breezer_unreachable_when_itself_offline_despite_online_station() -> None:
+    """Test an offline breezer is unreachable even with an online gateway."""
+    data = _reachability_data(breezer_online=False, station_online=True)
+
+    assert data.is_breezer_reachable(BREEZER_GUID) is False
+
+
+def test_breezer_reachability_falls_back_to_own_flag_without_station() -> None:
+    """Test reachability falls back to the breezer's own flag with no station."""
+    online = _reachability_data(breezer_online=True)
+    offline = _reachability_data(breezer_online=False)
+
+    assert online.is_breezer_reachable(BREEZER_GUID) is True
+    assert offline.is_breezer_reachable(BREEZER_GUID) is False
+
+
+def test_breezer_reachability_falls_back_when_no_station_shares_hwid() -> None:
+    """Test a station bound to another hw zone does not gate this breezer."""
+    data = _reachability_data(
+        breezer_online=True,
+        breezer_hwid="hw1",
+        station_online=False,
+        station_hwid="other",
+    )
+
+    assert data.is_breezer_reachable(BREEZER_GUID) is True
+
+
+def test_missing_breezer_is_not_reachable() -> None:
+    """Test an unknown breezer guid is not reachable."""
+    data = _reachability_data(station_online=True)
+
+    assert data.is_breezer_reachable("missing") is False
+
+
+def test_zone_reachable_with_online_station() -> None:
+    """Test a zone holding an online MagicAir is reachable."""
+    data = _reachability_data(station_online=True)
+
+    assert data.is_zone_reachable("station-zone") is True
+
+
+def test_zone_unreachable_with_offline_station() -> None:
+    """Test a zone whose only MagicAir is offline is not reachable."""
+    data = _reachability_data(station_online=False)
+
+    assert data.is_zone_reachable("station-zone") is False
+
+
+def test_zone_reachable_without_station() -> None:
+    """Test a zone with no MagicAir is treated as reachable (cannot tell)."""
+    data = _reachability_data(station_online=True)
+
+    assert data.is_zone_reachable("breezer-zone") is True
+
+
+def test_unknown_zone_is_not_reachable() -> None:
+    """Test an unknown zone guid is not reachable."""
+    data = _reachability_data(station_online=True)
+
+    assert data.is_zone_reachable("missing") is False

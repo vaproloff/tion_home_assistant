@@ -2,10 +2,10 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from json import JSONDecodeError
 import logging
-from typing import Any
+from typing import Any, Self
 
 from aiohttp import ClientError, ClientSession, ContentTypeError
 
@@ -47,34 +47,47 @@ class TionZoneMode:
         self.auto_set = TionZoneModeAutoSet(data.get("auto_set", {}))
 
 
+@dataclass
 class TionZoneDeviceData:
     """Tion zone device data."""
 
-    def __init__(self, data: dict[str, Any]) -> None:
-        """Tion zone device data initialization."""
-        self.co2 = data.get("co2")
-        self.temperature = data.get("temperature")
-        self.humidity = data.get("humidity")
-        self.pm25 = data.get("pm25")
-        self.backlight = data.get("backlight")
-        self.sound_is_on = data.get("sound_is_on")
-        self.is_on = data.get("is_on")
-        self.data_valid = data.get("data_valid")
-        self.heater_installed = data.get("heater_installed")
-        self.heater_enabled = data.get("heater_enabled")
-        self.heater_type = data.get("heater_type")
-        self.heater_mode = data.get("heater_mode")
-        self.heater_power = data.get("heater_power")
-        self.speed = data.get("speed")
-        self.speed_max_set = data.get("speed_max_set")
-        self.speed_min_set = data.get("speed_min_set")
-        self.speed_limit = data.get("speed_limit")
-        self.t_in = data.get("t_in")
-        self.t_set = data.get("t_set")
-        self.t_out = data.get("t_out")
-        self.gate = data.get("gate")
-        self.filter_time_seconds = data.get("filter_time_seconds")
-        self.filter_need_replace = data.get("filter_need_replace")
+    co2: Any = None
+    temperature: Any = None
+    humidity: Any = None
+    pm25: Any = None
+    backlight: Any = None
+    sound_is_on: Any = None
+    is_on: Any = None
+    data_valid: Any = None
+    heater_installed: Any = None
+    heater_enabled: Any = None
+    heater_type: Any = None
+    heater_mode: Any = None
+    heater_power: Any = None
+    speed: Any = None
+    speed_max_set: Any = None
+    speed_min_set: Any = None
+    speed_limit: Any = None
+    t_in: Any = None
+    t_set: Any = None
+    t_out: Any = None
+    gate: Any = None
+    filter_time_seconds: Any = None
+    filter_need_replace: Any = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Self:
+        """Build from a raw API dict, ignoring keys we do not model."""
+        known = {field.name for field in fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in known})
+
+    def log_summary(self) -> str:
+        """Return non-empty data fields as a compact 'key=value' string."""
+        return ", ".join(
+            f"{field.name}={value}"
+            for field in fields(self)
+            if (value := getattr(self, field.name)) is not None
+        )
 
 
 class TionZoneDevice:
@@ -86,13 +99,17 @@ class TionZoneDevice:
         self.name = data.get("name")
         self.type = data.get("type")
         self.mac = data.get("mac")
-        self.data = TionZoneDeviceData(data.get("data", {}))
+        self.data = TionZoneDeviceData.from_dict(data.get("data", {}))
         self.firmware = data.get("firmware")
         self.hardware = data.get("hardware")
         self.max_speed = data.get("max_speed")
         self.t_max = data.get("t_max")
         self.t_min = data.get("t_min")
         self.is_online = data.get("is_online")
+        # Hardware zone id of the breezer's Bluetooth cluster. Breezers reach
+        # the cloud only through the MagicAir gateway sharing this id, even when
+        # the user has placed them in different logical zones.
+        self.zone_hwid = data.get("zone_hwid")
 
     @property
     def valid(self) -> bool:
@@ -101,6 +118,13 @@ class TionZoneDevice:
             return self.data.data_valid
 
         return self.guid is not None
+
+    def log_summary(self) -> str:
+        """Return a one-line summary of the device's raw cloud state."""
+        return (
+            f"{self.name} (online={self.is_online}, valid={self.valid}): "
+            f"{self.data.log_summary()}"
+        )
 
 
 class TionZone:
@@ -118,6 +142,15 @@ class TionZone:
         """Return if zone data valid."""
         return self.guid is not None
 
+    def log_summary(self) -> str:
+        """Return a multi-line summary of the zone and its devices."""
+        header = (
+            f"  zone '{self.name}' (valid={self.valid}, mode={self.mode.current}, "
+            f"target_co2={self.mode.auto_set.co2})"
+        )
+        devices = [f"    {device.log_summary()}" for device in self.devices]
+        return "\n".join([header, *devices])
+
 
 class TionLocation:
     """Tion location class."""
@@ -131,6 +164,11 @@ class TionLocation:
             for zone in data.get("zones", [])
             if not zone.get("is_virtual")
         ]
+
+    def log_summary(self) -> str:
+        """Return a multi-line summary of the location, its zones and devices."""
+        zones = [zone.log_summary() for zone in self.zones]
+        return "\n".join([f"location '{self.name}':", *zones])
 
 
 @dataclass(frozen=True)
@@ -231,7 +269,6 @@ class TionClient:
 
         self._locations: list[TionLocation] = []
         self._auth_update_listeners: list[Callable[[str, str], Awaitable[None]]] = []
-        self._active_profile_listeners: list[Callable[[str], Awaitable[None]]] = []
 
     @staticmethod
     def _normalize_auth(
@@ -269,12 +306,6 @@ class TionClient:
     def add_update_listener(self, coro: Callable[[str, str], Awaitable[None]]) -> None:
         """Add a listener notified as (profile_name, token) on re-auth."""
         self._auth_update_listeners.append(coro)
-
-    def add_active_profile_listener(
-        self, coro: Callable[[str], Awaitable[None]]
-    ) -> None:
-        """Add a listener notified with the profile name on a failover switch."""
-        self._active_profile_listeners.append(coro)
 
     async def async_validate_auth(self) -> dict[str, str | None]:
         """Validate credentials and return auth data for the serving profile."""
@@ -370,15 +401,15 @@ class TionClient:
                 last_error = err
                 index = (index + 1) % len(self._profiles)
                 continue
-            await self._set_active(index)
+            self._set_active(index)
             return TionApiResult(data=result, profile=target)
 
         if last_error is not None:
             raise last_error
         raise TionConnectionError("Error communicating with Tion API")
 
-    async def _set_active(self, index: int) -> None:
-        """Switch the active profile and notify listeners on change."""
+    def _set_active(self, index: int) -> None:
+        """Switch the active profile after a connection failover."""
         if index == self._active:
             return
 
@@ -387,8 +418,6 @@ class TionClient:
         _LOGGER.warning(
             "TionClient: switched to profile %s after a connection failure", name
         )
-        for coro in self._active_profile_listeners:
-            await coro(name)
 
     async def _request_profile(
         self,
@@ -419,13 +448,15 @@ class TionClient:
                     data = await response.json(content_type=None)
                 except (ContentTypeError, JSONDecodeError, ValueError) as err:
                     if status >= 400:
-                        data = {}
+                        data = await response.text()
                     else:
                         raise TionApiError(
                             f"Tion API returned a non-JSON response with status {status}"
                         ) from err
         except (ClientError, TimeoutError) as err:
-            raise TionConnectionError("Error communicating with Tion API") from err
+            raise TionConnectionError(
+                f"Error communicating with Tion API: {type(err).__name__}: {err}"
+            ) from err
 
         if status == 401 and auth_required:
             if retry_auth:
@@ -446,11 +477,13 @@ class TionClient:
         if auth_request and status in (400, 401, 403):
             raise TionAuthError("Invalid Tion credentials")
 
+        detail = f": {data}" if data else ""
+
         if status >= 500:
-            raise TionConnectionError(f"Tion API returned status {status}")
+            raise TionConnectionError(f"Tion API returned status {status}{detail}")
 
         if status >= 400:
-            raise TionApiError(f"Tion API returned status {status}")
+            raise TionApiError(f"Tion API returned status {status}{detail}")
 
         return data
 
@@ -463,7 +496,11 @@ class TionClient:
             raise TionApiError("Tion API returned invalid location data")
 
         self._locations = [TionLocation(location) for location in response]
-        _LOGGER.debug("TionClient: location data has been updated")
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "TionClient: location data has been updated\n%s",
+                "\n".join(location.log_summary() for location in self._locations),
+            )
         return self._locations
 
     async def get_zone(self, guid: str) -> TionZone | None:

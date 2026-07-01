@@ -247,6 +247,9 @@
       },
       "filter_replacement_days": {
         "name": "Days until filter replacement"
+      },
+      "api_profile": {
+        "name": "API profile"
       }
     },
     "switch": {

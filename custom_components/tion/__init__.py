@@ -10,7 +10,6 @@ from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .client import TionClient
 from .const import (
-    ACTIVE_PROFILE,
     AUTH_DATA,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -39,11 +38,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             entry, data={**entry.data, AUTH_DATA: auth}
         )
 
-    async def update_active_profile(profile_name: str) -> None:
-        hass.config_entries.async_update_entry(
-            entry, data={**entry.data, ACTIVE_PROFILE: profile_name}
-        )
-
     session = async_create_clientsession(hass)
     scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     client = TionClient(
@@ -52,10 +46,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         password=entry.data[CONF_PASSWORD],
         min_update_interval_sec=scan_interval,
         auth=entry.data.get(AUTH_DATA),
-        active_profile=entry.data.get(ACTIVE_PROFILE),
     )
     client.add_update_listener(update_auth_data)
-    client.add_active_profile_listener(update_active_profile)
 
     coordinator = TionDataUpdateCoordinator(hass, entry, client, scan_interval)
     pid_manager = TionPidManager(hass, entry, coordinator)

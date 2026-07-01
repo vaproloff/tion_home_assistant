@@ -1,10 +1,11 @@
 """Support for Tion breezer."""
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 import logging
-from typing import Any
+from typing import Any, Self
 
 from homeassistant.components.climate import (
-    ATTR_PRESET_MODE,
     FAN_AUTO,
     PRESET_NONE,
     ClimateEntity,
@@ -20,9 +21,9 @@ from homeassistant.const import (
     PRECISION_WHOLE,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .client import TionZoneDevice
@@ -36,9 +37,41 @@ from .const import (
     ZoneMode,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .presets import ATTR_SAVED_PRESET, Preset, PresetBaseline, TionPresetController
+from .presets import AutoPreset, ManualPreset, Preset, TionPresetController
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class TionRestoreData(ExtraStoredData):
+    """Climate state restored across restarts and reloads.
+
+    Persisted through ``extra_restore_state_data``, which Home Assistant captures
+    even while the entity is unavailable -- unlike state attributes, which are
+    dropped for an unavailable entity. This keeps local PID and the active preset
+    across a reload that lands while the breezer's gateway is offline.
+    """
+
+    pid_active: bool
+    preset_mode: str | None
+    preset_saved: dict[str, Any] | None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the payload to persist."""
+        return {
+            "pid_active": self.pid_active,
+            "preset_mode": self.preset_mode,
+            "preset_saved": self.preset_saved,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Self:
+        """Rebuild restore data from a persisted payload."""
+        return cls(
+            pid_active=bool(data.get("pid_active")),
+            preset_mode=data.get("preset_mode"),
+            preset_saved=data.get("preset_saved"),
+        )
 
 
 async def async_setup_entry(
@@ -77,7 +110,6 @@ class TionClimate(
         self._attr_max_temp = breezer.t_max
         self._attr_min_temp = breezer.t_min
         self._breezer_valid = breezer.valid
-        self._is_online = breezer.is_online
         self._is_on = breezer.data.is_on
         self._t_in = breezer.data.t_in
         self._t_out = breezer.data.t_out
@@ -132,10 +164,16 @@ class TionClimate(
 
     @property
     def available(self) -> bool:
-        """Return True if entity is available."""
+        """Return True if entity is available.
+
+        A breezer reaches the cloud only through its MagicAir gateway, so it is
+        available only while that gateway is online; its own ``is_online`` flag
+        freezes stale once the gateway drops.
+        """
         return bool(
             super().available
-            and self._is_online
+            and self.coordinator.data is not None
+            and self.coordinator.data.is_breezer_reachable(self._breezer_guid)
             and self._breezer_valid
             and self._zone_valid
         )
@@ -168,9 +206,6 @@ class TionClimate(
         attrs.update(
             self.coordinator.pid_manager.extra_state_attributes(self._breezer_guid)
         )
-
-        if self._presets.has_presets:
-            attrs.update(self._presets.restore_attributes())
 
         return attrs
 
@@ -217,16 +252,18 @@ class TionClimate(
     @property
     def hvac_mode(self) -> HVACMode | None:
         """Return current operation."""
-        if self._breezer_valid:
-            if not self._is_on:
-                return HVACMode.OFF
+        if not self._breezer_valid:
+            return None
 
-            if self.heater_enabled:
-                return HVACMode.HEAT
+        if not self._is_on and not self.coordinator.pid_manager.is_active(
+            self._breezer_guid
+        ):
+            return HVACMode.OFF
 
-            return HVACMode.FAN_ONLY
+        if self.heater_enabled:
+            return HVACMode.HEAT
 
-        return None
+        return HVACMode.FAN_ONLY
 
     @property
     def hvac_action(self) -> HVACAction | None:
@@ -237,6 +274,9 @@ class TionClimate(
 
         if hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
+
+        if not self._is_on:
+            return HVACAction.IDLE
 
         if self._heater_power or self._heater_enabled:
             return HVACAction.HEATING
@@ -277,7 +317,21 @@ class TionClimate(
         if self._mode == FAN_AUTO:
             return FAN_AUTO
 
-        return str(self.speed) if self.speed is not None else None
+        mode = str(self.speed) if self.speed is not None else None
+        return mode if mode in self._manual_fan_modes else None
+
+    def _exact_fan_mode(self) -> str:
+        """Return a log-friendly label for the current fan regime.
+
+        Distinguishes the two auto sources (``local_pid`` vs cloud ``auto``)
+        that ``fan_mode`` collapses into ``FAN_AUTO``, so logs make clear which
+        controller actually drives the breezer.
+        """
+        if self.coordinator.pid_manager.is_active(self._breezer_guid):
+            return "local_pid"
+        if self._mode == ZoneMode.AUTO:
+            return "cloud_auto"
+        return f"manual(speed={self.speed})"
 
     @property
     def swing_modes(self) -> list[SwingMode]:
@@ -321,7 +375,14 @@ class TionClimate(
 
     @property
     def speed(self) -> int | None:
-        """Return the current speed."""
+        """Return the current fan speed.
+
+        Reports 0 while the breezer is not running: is_on=False means no airflow
+        regardless of the stored setpoint, so the speed shown to automations and
+        dashboards matches reality (and the IDLE/OFF hvac_action).
+        """
+        if not self._is_on:
+            return 0
         try:
             return int(self._speed)
         except (TypeError, ValueError) as e:
@@ -358,31 +419,52 @@ class TionClimate(
         self._load_breezer()
         self._set_swing_modes()
         await super().async_added_to_hass()
-        if (last_state := await self.async_get_last_state()) is not None:
-            self._restore_local_pid(last_state)
-            self._restore_preset(last_state)
+        if (restored := await self.async_get_last_extra_data()) is not None:
+            data = TionRestoreData.from_dict(restored.as_dict())
+            self._restore_local_pid(data.pid_active)
+            self._restore_preset(data.preset_mode, data.preset_saved)
+
+    @property
+    def extra_restore_state_data(self) -> TionRestoreData:
+        """Return state to restore that must survive entity unavailability."""
+        saved = self._presets.saved
+        return TionRestoreData(
+            pid_active=self.coordinator.pid_manager.is_active(self._breezer_guid),
+            preset_mode=self.preset_mode,
+            preset_saved=saved.to_storage() if saved else None,
+        )
 
     @callback
-    def _restore_local_pid(self, last_state: State) -> None:
+    def _restore_local_pid(self, pid_active: bool) -> None:
         """Restore local PID active state after Home Assistant restart."""
         pid_manager = self.coordinator.pid_manager
-        if last_state.attributes.get(
-            "pid_active"
-        ) is True and pid_manager.is_configured(self._breezer_guid):
+        if not pid_manager.is_configured(self._breezer_guid):
+            return
+        if pid_active:
             _LOGGER.debug("%s: restoring active local PID", self.name)
             pid_manager.start_breezer_pid(self._breezer_guid)
+        else:
+            _LOGGER.debug(
+                "%s: no need to restore local PID (restored pid_active=%s)",
+                self.name,
+                pid_active,
+            )
 
     @callback
-    def _restore_preset(self, last_state: State) -> None:
+    def _restore_preset(
+        self, preset_mode: str | None, preset_saved: dict[str, Any] | None
+    ) -> None:
         """Restore active preset and saved preset after Home Assistant restart."""
         if not self._presets.has_presets:
             return
-        preset_mode = last_state.attributes.get(ATTR_PRESET_MODE)
         if preset_mode is None or preset_mode == PRESET_NONE:
+            _LOGGER.debug(
+                "%s: no preset to restore (restored preset_mode=%s)",
+                self.name,
+                preset_mode,
+            )
             return
-        saved = PresetBaseline.from_storage(
-            last_state.attributes.get(ATTR_SAVED_PRESET)
-        )
+        saved = Preset.from_storage(preset_saved)
         _LOGGER.debug(
             "%s: restoring preset '%s' with saved baseline %s",
             self.name,
@@ -412,6 +494,15 @@ class TionClimate(
                     self._presets.preset_mode,
                 )
                 self._presets.deactivate()
+        _LOGGER.debug(
+            "%s: state: preset=%s, fan_mode=%s, speed=%s, min=%s, max=%s",
+            self.name,
+            self.preset_mode,
+            self._exact_fan_mode(),
+            self.speed,
+            self._speed_min_set,
+            self._speed_max_set,
+        )
         super()._handle_coordinator_update()
 
     async def async_turn_on(self) -> None:
@@ -468,6 +559,11 @@ class TionClimate(
         """
         if self._presets.preset_mode == PRESET_NONE:
             return
+        _LOGGER.info(
+            "%s: releasing preset '%s' (manual command overlaps managed fields)",
+            self.name,
+            self._presets.preset_mode,
+        )
         self.coordinator.reconciler.release(
             self._breezer_guid, self._presets.managed_fields
         )
@@ -563,31 +659,61 @@ class TionClimate(
             )
             return
 
-        # The baseline comes from the desired overlay (not a live snapshot) and the
-        # desired write is synchronous: there is no await before it, so a
-        # restart-mode cancellation cannot interleave and pollute the baseline.
+        # The baseline is captured synchronously before any await, so a
+        # restart-mode cancellation cannot interleave and pollute it.
         if preset_mode == PRESET_NONE:
+            _LOGGER.debug(
+                "%s: leaving preset '%s', restoring baseline %s",
+                self.name,
+                self._presets.preset_mode,
+                self._presets.saved,
+            )
             self._restore_preset_baseline(self._presets.saved)
             self._presets.deactivate()
         else:
-            baseline = PresetBaseline(
-                overrides=self._managed_overrides(),
-                was_auto=self.fan_mode == FAN_AUTO,
+            baseline = self._capture_none_state()
+            _LOGGER.debug(
+                "%s: entering preset '%s' (from fan_mode=%s), saving baseline %s",
+                self.name,
+                preset_mode,
+                self._exact_fan_mode(),
+                baseline,
             )
             self._presets.activate(preset_mode, baseline)
             self._write_preset_desired(target)
 
-        _LOGGER.debug("%s: applied preset '%s'", self.name, preset_mode)
         await self._push()
+        _LOGGER.debug(
+            "%s: applied preset '%s': fan_mode=%s, speed=%s, min=%s, max=%s",
+            self.name,
+            preset_mode,
+            self._exact_fan_mode(),
+            self.speed,
+            self._speed_min_set,
+            self._speed_max_set,
+        )
 
-    def _managed_overrides(self) -> dict[str, Any]:
-        """Return the current desired overlay restricted to preset-managed fields."""
-        current = self.coordinator.reconciler.current_breezer(self._breezer_guid)
-        return {
-            field: current[field]
-            for field in self._presets.managed_fields
-            if field in current
-        }
+    def _capture_none_state(self) -> Preset:
+        """Model the current PRESET_NONE regime as the baseline to restore later.
+
+        The baseline mirrors the breezer's pre-preset regime: the auto-speed
+        limits when running auto, otherwise the manual speed and power state.
+        Each field is taken from the desired overlay when present, else from the
+        breezer's reported state -- the limits or speed the breezer holds with an
+        empty overlay. Reading the reported value is what lets returning to
+        ``PRESET_NONE`` command the pre-preset regime back, instead of leaving the
+        breezer pinned at the preset's values.
+        """
+        overlay = self.coordinator.reconciler.current_breezer(self._breezer_guid)
+        if self.fan_mode == FAN_AUTO:
+            return AutoPreset(
+                int(overlay.get("speed_min_set", self._speed_min_set)),
+                int(overlay.get("speed_max_set", self._speed_max_set)),
+            )
+        return ManualPreset(
+            int(overlay.get("speed", self._speed)),
+            bool(overlay.get("is_on", self._is_on)),
+        )
 
     def _write_preset_desired(self, preset: Preset) -> None:
         """Write a preset's desired fields and arm/disarm its mode."""
@@ -603,26 +729,18 @@ class TionClimate(
                     self._zone_guid, {"mode": ZoneMode.MANUAL}
                 )
 
-    def _restore_preset_baseline(self, baseline: PresetBaseline | None) -> None:
-        """Restore the desired overlay and mode saved before a preset."""
-        if baseline is None:
-            return
-        if baseline.overrides:
-            self.coordinator.reconciler.set_breezer(
-                self._breezer_guid, baseline.overrides
-            )
-        else:
-            self.coordinator.reconciler.release(
-                self._breezer_guid, self._presets.managed_fields
-            )
-        if baseline.was_auto:
-            self._enter_auto_desired()
-        else:
-            self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
-            if self._zone_guid is not None:
-                self.coordinator.reconciler.set_zone(
-                    self._zone_guid, {"mode": ZoneMode.MANUAL}
-                )
+    def _restore_preset_baseline(self, baseline: Preset | None) -> None:
+        """Restore the regime saved before a preset by re-applying it.
+
+        Drop every preset-managed field first so the leaving preset leaves no
+        footprint (e.g. its auto limits when the saved regime is manual), then
+        write the saved baseline through the same path used to apply a preset.
+        """
+        self.coordinator.reconciler.release(
+            self._breezer_guid, self._presets.managed_fields
+        )
+        if baseline is not None:
+            self._write_preset_desired(baseline)
 
     def _enter_auto_desired(self) -> None:
         """Write desired auto mode (local PID if configured, else cloud auto)."""
@@ -702,27 +820,6 @@ class TionClimate(
             self._t_out = device_data.data.t_out
             self._filter_time_seconds = device_data.data.filter_time_seconds
             self._filter_need_replace = device_data.data.filter_need_replace
-            self._is_online = device_data.is_online
-
-        _LOGGER.debug(
-            "%s: fetching breezer data: valid=%s, is_on=%s, t_set=%s, t_in: %s, t_out: %s, speed=%s, speed_min_set=%s, speed_max_set=%s, heater_enabled=%s, heater_mode=%s, heater_power: %s, gate=%s, filter_time_seconds=%s, filter_need_replace: %s, is_online: %s",
-            self.name,
-            self._breezer_valid,
-            self._is_on,
-            self._t_set,
-            self._t_in,
-            self._t_out,
-            self._speed,
-            self._speed_min_set,
-            self._speed_max_set,
-            self._heater_enabled,
-            self._heater_mode,
-            self._heater_power,
-            self._gate,
-            self._filter_time_seconds,
-            self._filter_need_replace,
-            self._is_online,
-        )
 
         return self.available
 
@@ -747,14 +844,5 @@ class TionClimate(
                     zone_data.mode.auto_set.co2,
                     e,
                 )
-
-            _LOGGER.debug(
-                "%s: fetching zone data: name: %s, valid: %s, mode=%s, target_co2=%s",
-                self.name,
-                self._zone_name,
-                self._zone_valid,
-                self._mode,
-                self._target_co2,
-            )
 
         return self.available
