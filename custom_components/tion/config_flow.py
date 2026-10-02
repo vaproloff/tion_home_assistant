@@ -127,7 +127,9 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         """Ask for the Tion account e-mail and password."""
         if user_input is not None:
             self._email = user_input[CONF_EMAIL]
-            await self.async_set_unique_id(self._unique_id(self._email))
+            await self.async_set_unique_id(
+                self._unique_id(self._email), raise_on_progress=False
+            )
             self._abort_if_unique_id_configured()
             return await self._async_start_login(user_input[CONF_PASSWORD])
 
@@ -174,9 +176,10 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
 
         # An external step may only end with external_step_done, so a failure
         # is carried back to the credentials form instead of shown here.
+        password, self._password = self._password, ""
         try:
             await self._require_auth().async_get_confirmation_code(
-                self._email, self._password, user_input[CONF_CAPTCHA_TOKEN]
+                self._email, password, user_input[CONF_CAPTCHA_TOKEN]
             )
         except TionLoginError as err:
             self._login_error = err.reason
@@ -255,6 +258,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_update_reload_and_abort(
                 self._get_reauth_entry(), title=self._email, data=data
             )
+        self._abort_if_unique_id_configured()
         return self.async_create_entry(title=self._email, data=data)
 
 

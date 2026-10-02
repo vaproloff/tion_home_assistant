@@ -41,6 +41,7 @@
     },
     "abort": {
       "already_configured": "This Tion account is already configured.",
+      "already_in_progress": "A Tion login for this account is already in progress.",
       "reauth_successful": "Signed in to Tion again. The integration has been reloaded.",
       "wrong_account": "This sign-in belongs to a different Tion account than the configured one.",
       "password_not_set": "This Tion account has no permanent password. Set one in the Tion MagicAir app and try again."

@@ -620,7 +620,18 @@ class FakeFlowConfigEntries:
         """Initialize with existing entries."""
         self.entries = entries
         self.reloaded: list[str] = []
-        self.flow = SimpleNamespace(async_progress_by_handler=lambda *a, **kw: [])
+        self.progress: list[dict[str, Any]] = []
+        self.flow = SimpleNamespace(async_progress_by_handler=self._progress_by_handler)
+
+    def _progress_by_handler(
+        self,
+        handler: str,
+        include_uninitialized: bool = False,
+        match_context: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the in-progress flows whose context contains match_context."""
+        wanted = (match_context or {}).items()
+        return [flow for flow in self.progress if wanted <= flow["context"].items()]
 
     def async_entry_for_domain_unique_id(
         self, domain: str, unique_id: str
@@ -737,6 +748,27 @@ async def test_user_submit_aborts_when_account_configured() -> None:
 
 
 @pytest.mark.asyncio
+async def test_user_submit_ignores_stranded_flow_for_same_account(
+    auths: list[FakeAuth],
+) -> None:
+    """A user flow that can no longer be resumed must not block a new attempt."""
+    hass = FakeFlowHass()
+    hass.config_entries.progress.append(
+        {
+            "flow_id": "stranded-flow-id",
+            "context": {"source": SOURCE_USER, "unique_id": EMAIL_UNIQUE_ID},
+        }
+    )
+    flow = _config_flow(hass)
+
+    result = await flow.async_step_user({CONF_EMAIL: EMAIL, CONF_PASSWORD: "secret"})
+
+    assert result["type"] is FlowResultType.EXTERNAL_STEP
+    assert result["step_id"] == "captcha"
+    assert len(auths) == 1
+
+
+@pytest.mark.asyncio
 async def test_captcha_token_requests_code(auths: list[FakeAuth]) -> None:
     """The captcha token is used at once and the flow moves to the code form."""
     flow = _config_flow(FakeFlowHass())
@@ -746,6 +778,28 @@ async def test_captcha_token_requests_code(auths: list[FakeAuth]) -> None:
 
     assert result["type"] is FlowResultType.EXTERNAL_STEP_DONE
     assert result["step_id"] == "code"
+    assert auths[0].calls == [("get_confirmation_code", (EMAIL, "secret", "dD0xtoken"))]
+
+
+@pytest.mark.parametrize(
+    "errors",
+    [
+        pytest.param((), id="success"),
+        pytest.param((TionLoginError(LOGIN_ERROR_INVALID_AUTH),), id="failure"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_captcha_phase_drops_the_password(
+    errors: tuple[Exception, ...], auths: list[FakeAuth]
+) -> None:
+    """The password is only needed for the code request and is not kept."""
+    flow = _config_flow(FakeFlowHass())
+    await flow.async_step_user({CONF_EMAIL: EMAIL, CONF_PASSWORD: "secret"})
+    auths[0].fail("get_confirmation_code", *errors)
+
+    await flow.async_step_captcha({CONF_CAPTCHA_TOKEN: "dD0xtoken"})
+
+    assert "secret" not in vars(flow).values()
     assert auths[0].calls == [("get_confirmation_code", (EMAIL, "secret", "dD0xtoken"))]
 
 
@@ -858,6 +912,27 @@ async def test_code_step_error_allows_retry(
     assert failed["step_id"] == "code"
     assert failed["errors"] == {"base": key}
     assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_code_step_aborts_when_account_configured_meanwhile(
+    auths: list[FakeAuth],
+) -> None:
+    """Another flow finishing first leaves no room for a duplicate entry."""
+    hass = FakeFlowHass()
+    flow = _config_flow(hass)
+    await _to_code_step(flow)
+    hass.config_entries.entries.append(_entry({CONF_EMAIL: EMAIL}))
+
+    with pytest.raises(AbortFlow) as exc_info:
+        await flow.async_step_code({CONF_CODE: "6483"})
+
+    assert exc_info.value.reason == "already_configured"
+    assert [call[0] for call in auths[0].calls] == [
+        "get_confirmation_code",
+        "check_confirmation_code",
+        "get_token",
+    ]
 
 
 @pytest.mark.asyncio
@@ -982,6 +1057,9 @@ def test_translations_cover_login_flow(language: str) -> None:
         "code_expired",
         "unknown",
     } <= set(config["error"])
-    assert {"already_configured", "password_not_set", "wrong_account"} <= set(
-        config["abort"]
-    )
+    assert {
+        "already_configured",
+        "already_in_progress",
+        "password_not_set",
+        "wrong_account",
+    } <= set(config["abort"])
