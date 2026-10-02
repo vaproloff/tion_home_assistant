@@ -104,6 +104,8 @@ class TionCloud:
         self._pending_commands: dict[int, asyncio.Future[DPUpdateResponse]] = {}
         self._listeners: list[Callable[[], None]] = []
         self._room_locks: dict[UUID, asyncio.Lock] = {}
+        # Serializes structure reloads with the subscription sync that follows.
+        self._structure_lock = asyncio.Lock()
         self._reconnect_task: asyncio.Task[None] | None = None
         self._structure_task: asyncio.Task[None] | None = None
         self._started = False
@@ -139,15 +141,17 @@ class TionCloud:
 
     async def async_refresh(self) -> None:
         """Re-read the structure and poll every device again."""
-        token = await self._auth.async_ensure_valid()
-        try:
-            await self._load_structure(token)
-        except TionAuthError:
-            await self._load_structure(
-                (await self._auth.async_renew_access()).access_token
-            )
+        async with self._structure_lock:
+            token = await self._auth.async_ensure_valid()
+            try:
+                await self._load_structure(token)
+            except TionAuthError:
+                await self._load_structure(
+                    (await self._auth.async_renew_access()).access_token
+                )
+            if (connection := self._connection) is not None:
+                await self._sync_subscriptions(connection)
         if self._connection is not None:
-            await self._sync_subscriptions(self._connection)
             await self._query_all()
         self._rebuild()
 
@@ -271,30 +275,36 @@ class TionCloud:
     async def _connect(self) -> None:
         """Open the live channel, renewing the access token once if refused."""
         attempt = object()
+        async with self._structure_lock:
+            try:
+                connection = await self._open_channel(attempt, renew=False)
+            except TionAuthError:
+                connection = await self._open_channel(attempt, renew=True)
+            self._connection = connection
+            self._attempt = attempt
+            self._subscriptions = {}
+            try:
+                await self._sync_subscriptions(connection)
+            except BaseException:
+                await self._abandon(connection)
+                raise
         try:
-            connection = await self._open_channel(attempt, renew=False)
-        except TionAuthError:
-            connection = await self._open_channel(attempt, renew=True)
-        self._connection = connection
-        self._attempt = attempt
-        self._subscriptions = {}
-        try:
-            await self._subscribe_and_poll(connection)
+            await self._query_all()
+            if self._connection is not connection:
+                raise TionConnectionError("Live channel lost while connecting")
         except BaseException:
-            if self._connection is connection:
-                self._connection = None
-                self._attempt = None
-                self._subscriptions = {}
-                self._fail_pending(TionConnectionError("Live channel closed"))
-            await connection.async_close()
+            await self._abandon(connection)
             raise
         self._set_connected(True)
 
-    async def _subscribe_and_poll(self, connection: NatsConnection) -> None:
-        await self._sync_subscriptions(connection)
-        await self._query_all()
-        if self._connection is not connection:
-            raise TionConnectionError("Live channel lost while connecting")
+    async def _abandon(self, connection: NatsConnection) -> None:
+        """Forget and close a connection whose setup failed."""
+        if self._connection is connection:
+            self._connection = None
+            self._attempt = None
+            self._subscriptions = {}
+            self._fail_pending(TionConnectionError("Live channel closed"))
+        await connection.async_close()
 
     async def _open_channel(self, attempt: object, *, renew: bool) -> NatsConnection:
         if renew:
@@ -313,12 +323,14 @@ class TionCloud:
 
     async def _sync_subscriptions(self, connection: NatsConnection) -> None:
         """Subscribe to new locations and drop vanished ones."""
+        # A disconnect replaces the dict; keep working on this connection's one.
+        subscriptions = self._subscriptions
         wanted = {location.sid for location in self._locations}
-        for sid in set(self._subscriptions) - wanted:
-            for subscription in self._subscriptions.pop(sid):
+        for sid in set(subscriptions) - wanted:
+            for subscription in subscriptions.pop(sid):
                 await connection.async_unsubscribe(subscription)
-        for sid in wanted - set(self._subscriptions):
-            self._subscriptions[sid] = [
+        for sid in wanted - set(subscriptions):
+            subscriptions[sid] = [
                 await connection.async_subscribe(
                     device_reports_subject(sid), self._on_device_message
                 ),

@@ -167,7 +167,8 @@ class FakeNats:
     async def async_subscribe(
         self, subject: str, callback: Callable[[str, bytes], None]
     ) -> str:
-        """Register a subscription."""
+        """Register a subscription, yielding like real I/O."""
+        await asyncio.sleep(0)
         sid = str(len(self.subscriptions) + len(self.published) + 1)
         while sid in self.subscriptions:
             sid += "x"
@@ -175,7 +176,8 @@ class FakeNats:
         return sid
 
     async def async_unsubscribe(self, sid: str) -> None:
-        """Drop a subscription."""
+        """Drop a subscription, yielding like real I/O."""
+        await asyncio.sleep(0)
         self.subscriptions.pop(sid)
 
     async def async_publish(self, subject: str, payload: bytes) -> None:
@@ -539,6 +541,58 @@ async def test_refresh_syncs_locations(harness: Harness) -> None:
     await harness.cloud.async_refresh()
 
     assert connection.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
+
+
+THREE_LOCATIONS = structure_response(
+    location(SID),
+    location("LOC0000002", location_id=UUID(int=2)),
+    location("LOC0000003", location_id=UUID(int=3)),
+)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_refreshes_drop_vanished_locations_once(
+    harness: Harness,
+) -> None:
+    """Overlapping refreshes unsubscribe every vanished location exactly once."""
+    harness.transport.answers["GetFullStructureLocations"] = [THREE_LOCATIONS]
+    await harness.cloud.async_start()
+    connection = harness.broker.last
+    harness.transport.answers["GetFullStructureLocations"] = [_structure()]
+
+    await asyncio.gather(harness.cloud.async_refresh(), harness.cloud.async_refresh())
+
+    assert connection.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
+
+
+@pytest.mark.asyncio
+async def test_drop_during_subscription_sync(harness: Harness) -> None:
+    """A drop while a refresh drops vanished locations breaks neither of them."""
+    harness.transport.answers["GetFullStructureLocations"] = [THREE_LOCATIONS]
+    await harness.cloud.async_start()
+    connection = harness.broker.last
+    harness.transport.answers["GetFullStructureLocations"] = [_structure()]
+
+    refresh = asyncio.create_task(harness.cloud.async_refresh())
+    await _eventually(lambda: len(connection.subscriptions) == 5)
+    connection.drop(TionConnectionError("gone"))
+    await refresh
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.broker.last.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_during_reconnect_subscribes_once(harness: Harness) -> None:
+    """A refresh overlapping a reconnect does not subscribe a location twice."""
+    await harness.cloud.async_start()
+    harness.broker.last.drop(TionConnectionError("gone"))
+    await _eventually(lambda: len(harness.broker.connections) == 2)
+
+    await harness.cloud.async_refresh()
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.broker.last.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
 
 
 @pytest.mark.asyncio
