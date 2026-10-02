@@ -233,3 +233,16 @@ def test_guid_known_bytes() -> None:
 def test_get_guid_absent_is_none() -> None:
     """A missing Guid field reads as None."""
     assert ProtoMessage.parse(b"").get_guid(1) is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # Oversized varint: 10 bytes with high bit set on last byte encodes 70 bits
+        pytest.param(b"\x08" + b"\xff" * 9 + b"\x7f", id="oversized_varint"),
+    ],
+)
+def test_oversized_varint_raises(payload: bytes) -> None:
+    """A varint wider than 64 bits is malformed."""
+    with pytest.raises(ProtobufDecodeError):
+        ProtoMessage.parse(payload)

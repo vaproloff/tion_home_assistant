@@ -90,6 +90,8 @@ def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
         pos += 1
         result |= (byte & 0x7F) << (7 * index)
         if not byte & 0x80:
+            if result > _UINT64_MASK:
+                raise ProtobufDecodeError("varint exceeds 64 bits")
             return result, pos
     raise ProtobufDecodeError("varint too long")
 
