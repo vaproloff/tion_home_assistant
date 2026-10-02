@@ -149,6 +149,9 @@ async def test_only_tion_flows_at_captcha_step_are_served(
     )
 
     assert response.status == 404
+    # A typed body, so a browser shows the error instead of saving an empty file.
+    assert response.content_type == "text/plain"
+    assert await response.text() == "404: Not Found"
     assert hass.config_entries.flow.configured == []
 
 

@@ -37,6 +37,11 @@ def captcha_page_url(flow_id: str) -> str:
     return f"{base.rstrip('/')}{captcha_url(flow_id)}"
 
 
+def _not_found() -> web.Response:
+    # A typed body, so a browser shows the error instead of saving an empty file.
+    return web.Response(status=HTTPStatus.NOT_FOUND, text="404: Not Found")
+
+
 @callback
 def async_register_captcha_view(hass: HomeAssistant) -> None:
     """Register the captcha view once per Home Assistant run."""
@@ -75,7 +80,7 @@ class TionCaptchaView(HomeAssistantView):
         """Return the captcha page."""
         hass = request.app[KEY_HASS]
         if not _captcha_flow_open(hass, flow_id):
-            return web.Response(status=HTTPStatus.NOT_FOUND)
+            return _not_found()
         if self._template is None:
             self._template = await hass.async_add_executor_job(
                 _TEMPLATE_PATH.read_text, "utf-8"
@@ -89,7 +94,7 @@ class TionCaptchaView(HomeAssistantView):
         """Accept the captcha token and resume the flow."""
         hass = request.app[KEY_HASS]
         if not _captcha_flow_open(hass, flow_id):
-            return web.Response(status=HTTPStatus.NOT_FOUND)
+            return _not_found()
         try:
             body = await request.json()
         except ValueError:
@@ -98,14 +103,14 @@ class TionCaptchaView(HomeAssistantView):
         if not isinstance(token, str) or not 0 < len(token) <= MAX_TOKEN_LENGTH:
             return web.Response(status=HTTPStatus.BAD_REQUEST)
         if flow_id in self._in_flight or not _captcha_flow_open(hass, flow_id):
-            return web.Response(status=HTTPStatus.NOT_FOUND)
+            return _not_found()
         self._in_flight.add(flow_id)
         try:
             await hass.config_entries.flow.async_configure(
                 flow_id=flow_id, user_input={CONF_CAPTCHA_TOKEN: token}
             )
         except UnknownFlow:
-            return web.Response(status=HTTPStatus.NOT_FOUND)
+            return _not_found()
         finally:
             self._in_flight.discard(flow_id)
         return web.Response(status=HTTPStatus.NO_CONTENT)
