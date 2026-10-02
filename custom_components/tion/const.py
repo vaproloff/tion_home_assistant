@@ -22,6 +22,7 @@ DEFAULT_PID_KI = 0.001
 DEFAULT_PID_KD = 0.0
 AUTH_DATA = "auth"
 CONF_ACCESS_EXPIRES_AT = "access_expires_at"
+CONF_CAPTCHA_TOKEN = "captcha_token"
 CONF_REFRESH_EXPIRES_AT = "refresh_expires_at"
 CONF_RENEW_SESSION_TOKEN = "renew_session_token"
 MANUFACTURER = "Tion"
