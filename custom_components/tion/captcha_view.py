@@ -9,6 +9,8 @@ from aiohttp import web
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import UnknownFlow
+from homeassistant.helpers.config_entry_oauth2_flow import HEADER_FRONTEND_BASE
+from homeassistant.helpers.http import current_request
 
 from .const import CONF_CAPTCHA_TOKEN, DOMAIN
 
@@ -23,6 +25,16 @@ _DATA_VIEW_REGISTERED = f"{DOMAIN}_captcha_view_registered"
 def captcha_url(flow_id: str) -> str:
     """Return the captcha page path for a flow."""
     return f"{CAPTCHA_PATH}/{flow_id}"
+
+
+def captcha_page_url(flow_id: str) -> str:
+    """Return the captcha page URL for the flow's external step."""
+    # The frontend only opens absolute http(s) external-step URLs; it sends its
+    # own origin with every config flow request.
+    request = current_request.get()
+    if request is None or not (base := request.headers.get(HEADER_FRONTEND_BASE)):
+        return captcha_url(flow_id)
+    return f"{base.rstrip('/')}{captcha_url(flow_id)}"
 
 
 @callback

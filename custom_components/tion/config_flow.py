@@ -34,7 +34,7 @@ from .auth import (
     TionTokens,
     async_create_auth,
 )
-from .captcha_view import CAPTCHA_STEP_ID, async_register_captcha_view, captcha_url
+from .captcha_view import CAPTCHA_STEP_ID, async_register_captcha_view, captcha_page_url
 from .const import (
     CONF_BREEZER_GUID,
     CONF_CAPTCHA_TOKEN,
@@ -171,7 +171,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             async_register_captcha_view(self.hass)
             return self.async_external_step(
-                step_id=CAPTCHA_STEP_ID, url=captcha_url(self.flow_id)
+                step_id=CAPTCHA_STEP_ID, url=captcha_page_url(self.flow_id)
             )
 
         # An external step may only end with external_step_done, so a failure

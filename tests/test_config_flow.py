@@ -70,6 +70,8 @@ from homeassistant.const import (
     CONF_USERNAME,
 )
 from homeassistant.data_entry_flow import AbortFlow, FlowResultType
+from homeassistant.helpers.config_entry_oauth2_flow import HEADER_FRONTEND_BASE
+from homeassistant.helpers.http import current_request
 from homeassistant.helpers.typing import UNDEFINED
 
 BREEZER_GUID = "breezer-guid"
@@ -721,15 +723,22 @@ async def test_user_step_shows_form() -> None:
 
 @pytest.mark.asyncio
 async def test_user_submit_opens_captcha_page(auths: list[FakeAuth]) -> None:
-    """Credentials lead to the captcha page for this flow."""
+    """Credentials lead to the captcha page for this flow, on the frontend's origin."""
     hass = FakeFlowHass()
     flow = _config_flow(hass)
+    request = SimpleNamespace(headers={HEADER_FRONTEND_BASE: "http://localhost:8123"})
 
-    result = await flow.async_step_user({CONF_EMAIL: EMAIL, CONF_PASSWORD: "secret"})
+    token = current_request.set(request)
+    try:
+        result = await flow.async_step_user(
+            {CONF_EMAIL: EMAIL, CONF_PASSWORD: "secret"}
+        )
+    finally:
+        current_request.reset(token)
 
     assert result["type"] is FlowResultType.EXTERNAL_STEP
     assert result["step_id"] == "captcha"
-    assert result["url"] == f"/api/tion/captcha/{FLOW_ID}"
+    assert result["url"] == f"http://localhost:8123/api/tion/captcha/{FLOW_ID}"
     assert flow.unique_id == EMAIL_UNIQUE_ID
     assert len(hass.registered_views) == 1
     assert len(auths) == 1

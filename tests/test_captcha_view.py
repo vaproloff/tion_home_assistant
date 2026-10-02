@@ -14,11 +14,14 @@ from custom_components.tion.captcha_view import (
     CAPTCHA_SITEKEY,
     TionCaptchaView,
     async_register_captcha_view,
+    captcha_page_url,
     captcha_url,
 )
 from custom_components.tion.const import CONF_CAPTCHA_TOKEN, DOMAIN
 from homeassistant.components.http import KEY_HASS
 from homeassistant.data_entry_flow import UnknownFlow
+from homeassistant.helpers.config_entry_oauth2_flow import HEADER_FRONTEND_BASE
+from homeassistant.helpers.http import current_request
 
 FLOW_ID = "0123456789abcdef0123456789abcdef"
 
@@ -240,3 +243,35 @@ def test_register_view_once(hass: FakeHass) -> None:
     assert len(hass.registered) == 1
     assert isinstance(hass.registered[0], TionCaptchaView)
     assert TionCaptchaView.requires_auth is False
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        pytest.param(
+            {HEADER_FRONTEND_BASE: "http://localhost:8123"},
+            f"http://localhost:8123/api/tion/captcha/{FLOW_ID}",
+            id="frontend_origin",
+        ),
+        pytest.param(
+            {HEADER_FRONTEND_BASE: "https://ha.example.org/"},
+            f"https://ha.example.org/api/tion/captcha/{FLOW_ID}",
+            id="trailing_slash",
+        ),
+        pytest.param({}, f"/api/tion/captcha/{FLOW_ID}", id="no_header"),
+    ],
+)
+def test_captcha_page_url_uses_frontend_origin(
+    headers: dict[str, str], expected: str
+) -> None:
+    """The frontend opens only absolute external-step URLs, so use its origin."""
+    token = current_request.set(SimpleNamespace(headers=headers))
+    try:
+        assert captcha_page_url(FLOW_ID) == expected
+    finally:
+        current_request.reset(token)
+
+
+def test_captcha_page_url_without_request() -> None:
+    """Outside an HTTP request the page path is the best available URL."""
+    assert captcha_page_url(FLOW_ID) == f"/api/tion/captcha/{FLOW_ID}"
