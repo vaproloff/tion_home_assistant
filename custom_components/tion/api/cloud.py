@@ -304,7 +304,7 @@ class TionCloud:
         await self._load_structure(token)
         return await self._connect_nats(
             self._transport.session,
-            user=NATS_USER_PREFIX + self._auth.device_key.key_id,
+            user=NATS_USER_PREFIX + self._auth.device_key.key_id(),
             auth_token=f"{token}:{self._wstoken}",
             on_disconnect=partial(self._on_disconnect, attempt),
             ssl_context=self._transport.ssl_context,

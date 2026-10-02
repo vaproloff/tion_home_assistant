@@ -3,13 +3,13 @@
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
 import pytest
 
 from custom_components.tion.api import cloud as cloud_module
+from custom_components.tion.api.auth import TionTokens
 from custom_components.tion.api.cloud import TionCloud
 from custom_components.tion.api.datapoints import (
     DPKind,
@@ -17,6 +17,7 @@ from custom_components.tion.api.datapoints import (
     decode_dp_value,
     encode_update_request,
 )
+from custom_components.tion.api.device_key import TionDeviceKey
 from custom_components.tion.api.exceptions import (
     TionApiError,
     TionAuthError,
@@ -50,6 +51,7 @@ SID = "LOC0000001"
 BREEZER = "BRZ0000001"
 STATION = "MAG0000001"
 SERVER_TIME = 1_790_865_786.0
+DEVICE_KEY = TionDeviceKey.generate()
 
 
 def _structure(*, wstoken: str = "ws-1", extra_location: bool = False) -> bytes:
@@ -125,19 +127,19 @@ class FakeAuth:
         self.token = "access-1"
         self.renewals = 0
         self.renew_error: TionError | None = None
-        self.device_key = SimpleNamespace(key_id="KEYID")
+        self.device_key = DEVICE_KEY
 
     async def async_ensure_valid(self) -> str:
         """Return the current token."""
         return self.token
 
-    async def async_renew_access(self) -> SimpleNamespace:
+    async def async_renew_access(self) -> TionTokens:
         """Renew, unless told to fail."""
         if self.renew_error is not None:
             raise self.renew_error
         self.renewals += 1
         self.token = f"access-{self.renewals + 1}"
-        return SimpleNamespace(access_token=self.token)
+        return TionTokens(self.token, "renew", SERVER_TIME + 900, SERVER_TIME + 86400)
 
 
 def _matches(pattern: str, subject: str) -> bool:
@@ -369,7 +371,7 @@ async def test_start(harness: Harness) -> None:
     connection = harness.broker.last
     assert connection.kwargs["session"] is harness.transport.session
     assert connection.kwargs["ssl_context"] is harness.transport.ssl_context
-    assert connection.kwargs["user"] == "mappKEYID"
+    assert connection.kwargs["user"] == "mapp" + DEVICE_KEY.key_id()
     assert connection.kwargs["auth_token"] == "access-1:ws-1"
     assert connection.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
     assert sorted(subject for subject, _ in connection.published) == [
