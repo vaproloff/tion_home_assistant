@@ -1,0 +1,700 @@
+"""Tests for TionCloud on fake gRPC, session and NATS."""
+
+import asyncio
+from collections.abc import Callable
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from uuid import UUID
+
+import pytest
+
+from custom_components.tion.api import cloud as cloud_module
+from custom_components.tion.api.cloud import TionCloud
+from custom_components.tion.api.datapoints import DPKind, DPValue, decode_dp_value
+from custom_components.tion.api.exceptions import (
+    TionApiError,
+    TionAuthError,
+    TionConnectionError,
+    TionError,
+)
+from custom_components.tion.api.model import AutoControl
+from custom_components.tion.api.protobuf import ProtoMessage
+from custom_components.tion.api.views import Breezer, Station, view
+
+from .payloads import (  # noqa: TID251
+    PROFILE_4S,
+    PROFILE_BS310,
+    PROFILE_CLEVER,
+    ROOM_ID,
+    auto_control,
+    auto_control_changed,
+    device,
+    error_response,
+    location,
+    room,
+    state_report,
+    structure_response,
+    update_response,
+)
+
+PROFILES = (Path(__file__).parent / "fixtures" / "device_profiles.bin").read_bytes()
+SID = "LOC0000001"
+BREEZER = "BRZ0000001"
+STATION = "MAG0000001"
+SERVER_TIME = 1_790_865_786.0
+
+
+def _structure(*, wstoken: str = "ws-1", extra_location: bool = False) -> bytes:
+    home = location(
+        SID,
+        rooms=(
+            room(
+                auto=auto_control(
+                    enabled=False, speed_min=1, speed_max=5, co2_target=800
+                )
+            ),
+        ),
+        devices=(
+            device(BREEZER, PROFILE_4S, parent_id=STATION),
+            device(STATION, PROFILE_BS310, is_gateway=True),
+            device("CLV0000001", PROFILE_CLEVER),
+        ),
+    )
+    locations = [home]
+    if extra_location:
+        locations.append(
+            location(
+                "LOC0000002",
+                location_id=UUID(int=9),
+                devices=(device("BRZ0000002", PROFILE_4S, room_id=None),),
+            )
+        )
+    return structure_response(*locations, wstoken=wstoken)
+
+
+class FakeTransport:
+    """gRPC calls answered from per-method queues (the last answer repeats)."""
+
+    def __init__(self) -> None:
+        """Answer profiles and structure."""
+        self.session = object()
+        self.ssl_context = object()
+        self.calls: list[tuple[str, str | None]] = []
+        self.answers: dict[str, list[bytes | Exception]] = {
+            "GetDeviceProfiles": [PROFILES],
+            "GetFullStructureLocations": [_structure()],
+        }
+
+    async def async_call(
+        self, service: str, method: str, payload: bytes, token: str | None = None
+    ) -> bytes:
+        """Record the call and answer it."""
+        self.calls.append((method, token))
+        queue = self.answers[method]
+        answer = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def server_time(self) -> float:
+        """Return a fixed server clock."""
+        return SERVER_TIME
+
+    def methods(self) -> list[str]:
+        """Return the called methods in order."""
+        return [method for method, _ in self.calls]
+
+
+class FakeAuth:
+    """A session whose renewals hand out access-2, access-3, ..."""
+
+    def __init__(self) -> None:
+        """Start with access-1."""
+        self.token = "access-1"
+        self.renewals = 0
+        self.renew_error: TionError | None = None
+        self.device_key = SimpleNamespace(key_id="KEYID")
+
+    async def async_ensure_valid(self) -> str:
+        """Return the current token."""
+        return self.token
+
+    async def async_renew_access(self) -> SimpleNamespace:
+        """Renew, unless told to fail."""
+        if self.renew_error is not None:
+            raise self.renew_error
+        self.renewals += 1
+        self.token = f"access-{self.renewals + 1}"
+        return SimpleNamespace(access_token=self.token)
+
+
+def _matches(pattern: str, subject: str) -> bool:
+    pattern_parts, subject_parts = pattern.split("."), subject.split(".")
+    for index, part in enumerate(pattern_parts):
+        if part == ">":
+            return len(subject_parts) > index
+        if index >= len(subject_parts) or part not in ("*", subject_parts[index]):
+            return False
+    return len(pattern_parts) == len(subject_parts)
+
+
+class FakeNats:
+    """One fake NATS connection routed through the broker."""
+
+    def __init__(self, broker: FakeBroker, kwargs: dict[str, Any]) -> None:
+        """Remember how the cloud connected."""
+        self.broker = broker
+        self.kwargs = kwargs
+        self.subscriptions: dict[str, tuple[str, Callable[[str, bytes], None]]] = {}
+        self.published: list[tuple[str, bytes]] = []
+        self.closed = False
+
+    async def async_subscribe(
+        self, subject: str, callback: Callable[[str, bytes], None]
+    ) -> str:
+        """Register a subscription."""
+        sid = str(len(self.subscriptions) + len(self.published) + 1)
+        while sid in self.subscriptions:
+            sid += "x"
+        self.subscriptions[sid] = (subject, callback)
+        return sid
+
+    async def async_unsubscribe(self, sid: str) -> None:
+        """Drop a subscription."""
+        self.subscriptions.pop(sid)
+
+    async def async_publish(self, subject: str, payload: bytes) -> None:
+        """Hand the message to the simulated devices."""
+        if self.closed:
+            raise TionConnectionError("closed")
+        self.published.append((subject, payload))
+        self.broker.on_publish(self, subject, payload)
+
+    async def async_close(self) -> None:
+        """Close silently."""
+        self.closed = True
+
+    def subjects(self) -> list[str]:
+        """Return the subscribed subjects."""
+        return sorted(subject for subject, _ in self.subscriptions.values())
+
+    def deliver(self, subject: str, payload: bytes) -> None:
+        """Deliver a message to matching subscriptions."""
+        for pattern, callback in list(self.subscriptions.values()):
+            if _matches(pattern, subject):
+                callback(subject, payload)
+
+    def drop(self, error: TionError) -> None:
+        """Simulate the server dropping the connection."""
+        self.closed = True
+        self.kwargs["on_disconnect"](error)
+
+
+class FakeBroker:
+    """Simulated devices answering queries and commands."""
+
+    def __init__(self) -> None:
+        """Devices report a few recorded values."""
+        self.connections: list[FakeNats] = []
+        self.connect_errors: list[Exception] = []
+        self.state: dict[str, tuple[DPValue, ...]] = {
+            BREEZER: (
+                DPValue(70, DPKind.BOOL, True),
+                DPValue(130, DPKind.INT, 150),
+                DPValue(140, DPKind.INT, 1),
+            ),
+            STATION: (DPValue(100, DPKind.INT, 244), DPValue(113, DPKind.INT, 405)),
+        }
+        self.silent: set[str] = set()
+        self.command_error: tuple[int, str] | None = None
+        self.answer_commands = True
+
+    async def connect(self, session: object, **kwargs: Any) -> FakeNats:
+        """Open a connection, or fail as scripted."""
+        if self.connect_errors:
+            raise self.connect_errors.pop(0)
+        connection = FakeNats(self, {"session": session, **kwargs})
+        self.connections.append(connection)
+        return connection
+
+    @property
+    def last(self) -> FakeNats:
+        """Return the newest connection."""
+        return self.connections[-1]
+
+    def on_publish(self, connection: FakeNats, subject: str, payload: bytes) -> None:
+        """Answer a query or a command like a device would."""
+        _, _, sid, service, device_id = subject.split(".")
+        message = ProtoMessage.parse(payload)
+        if service == "dps" and device_id not in self.silent:
+            connection.deliver(
+                f"hw.tx.{sid}.dps.{device_id}",
+                state_report(
+                    device_id,
+                    *self.state.get(device_id, ()),
+                    command_id=message.get_int(4),
+                ),
+            )
+        elif service == "dpu" and self.answer_commands:
+            command_id = message.get_int(2)
+            if self.command_error is not None:
+                code, text = self.command_error
+                answer = update_response(
+                    command_id, success=False, error_code=code, error_message=text
+                )
+            else:
+                values = [decode_dp_value(item) for item in message.get_messages(4)]
+                answer = update_response(command_id, *values)
+            connection.deliver(f"hw.tx.{sid}.dpu.{device_id}", answer)
+
+
+class Harness:
+    """A TionCloud wired to fakes, with recorded sleeps and notifications."""
+
+    def __init__(self) -> None:
+        """Build the fakes and the cloud."""
+        self.transport = FakeTransport()
+        self.auth = FakeAuth()
+        self.broker = FakeBroker()
+        self.sleeps: list[float] = []
+        self.notifications = 0
+        self.cloud = TionCloud(
+            self.transport,
+            self.auth,
+            connect=self.broker.connect,
+            sleep=self.sleep,
+        )
+        self.cloud.add_listener(self.listener)
+
+    async def sleep(self, delay: float) -> None:
+        """Record the delay and yield once."""
+        self.sleeps.append(delay)
+        await asyncio.sleep(0)
+
+    def listener(self) -> None:
+        """Count snapshot changes."""
+        self.notifications += 1
+
+    def breezer(self) -> Breezer:
+        """Return the view of the 4S."""
+        found = self.cloud.account.device(BREEZER)
+        assert found is not None
+        device_view = view(found)
+        assert isinstance(device_view, Breezer)
+        return device_view
+
+    def station(self) -> Station:
+        """Return the view of the MagicAir."""
+        found = self.cloud.account.device(STATION)
+        assert found is not None
+        device_view = view(found)
+        assert isinstance(device_view, Station)
+        return device_view
+
+
+async def _eventually(predicate: Callable[[], bool]) -> None:
+    """Let background tasks run until the predicate holds."""
+    for _ in range(200):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition never became true")
+
+
+@pytest.fixture
+def harness() -> Harness:
+    """A fresh harness."""
+    return Harness()
+
+
+@pytest.fixture
+def short_replies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make unanswered queries and commands time out quickly."""
+    monkeypatch.setattr(cloud_module, "REPLY_TIMEOUT", 0.05)
+
+
+@pytest.mark.asyncio
+async def test_start(harness: Harness) -> None:
+    """Start loads profiles and structure, connects, subscribes and polls."""
+    await harness.cloud.async_start()
+
+    assert harness.transport.calls == [
+        ("GetDeviceProfiles", "access-1"),
+        ("GetFullStructureLocations", "access-1"),
+    ]
+    connection = harness.broker.last
+    assert connection.kwargs["session"] is harness.transport.session
+    assert connection.kwargs["ssl_context"] is harness.transport.ssl_context
+    assert connection.kwargs["user"] == "mappKEYID"
+    assert connection.kwargs["auth_token"] == "access-1:ws-1"
+    assert connection.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
+    assert sorted(subject for subject, _ in connection.published) == [
+        f"hw.rx.{SID}.dps.{BREEZER}",
+        f"hw.rx.{SID}.dps.{STATION}",
+    ]
+    assert harness.cloud.connected
+    assert harness.cloud.account.connected
+    breezer = harness.breezer()
+    assert (breezer.is_on, breezer.speed, breezer.target_temperature) == (
+        True,
+        1,
+        15.0,
+    )
+    assert (harness.station().co2, harness.station().temperature) == (405, 24.4)
+    assert harness.notifications > 0
+
+
+@pytest.mark.asyncio
+async def test_query_asks_for_view_datapoints(harness: Harness) -> None:
+    """A device is polled for its view's datapoints."""
+    await harness.cloud.async_start()
+
+    payload = dict(harness.broker.last.published)[f"hw.rx.{SID}.dps.{STATION}"]
+    assert ProtoMessage.parse(payload).get_packed(3) == [10, 76, 100, 110, 113]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("short_replies")
+async def test_silent_device_is_not_an_error(harness: Harness) -> None:
+    """A device that does not answer keeps unknown values."""
+    harness.broker.silent.add(BREEZER)
+
+    await harness.cloud.async_start()
+
+    assert harness.breezer().speed is None
+    assert harness.station().co2 == 405
+
+
+@pytest.mark.asyncio
+async def test_push_applies_in_arrival_order(harness: Harness) -> None:
+    """Pushed reports update the snapshot and notify listeners."""
+    await harness.cloud.async_start()
+    before = harness.notifications
+
+    for speed in (2, 4):
+        harness.broker.last.deliver(
+            f"hw.tx.{SID}.dps.{BREEZER}",
+            state_report(BREEZER, DPValue(140, DPKind.INT, speed)),
+        )
+
+    assert harness.breezer().speed == 4
+    assert harness.notifications == before + 2
+
+
+@pytest.mark.parametrize(
+    ("success", "speed"),
+    [pytest.param(True, 3, id="success"), pytest.param(False, 1, id="refused")],
+)
+@pytest.mark.asyncio
+async def test_foreign_command_results(
+    harness: Harness, success: bool, speed: int
+) -> None:
+    """Results of the app's commands update the snapshot only on success."""
+    await harness.cloud.async_start()
+
+    harness.broker.last.deliver(
+        f"hw.tx.{SID}.dpu.{BREEZER}",
+        update_response(777, DPValue(140, DPKind.INT, 3), success=success),
+    )
+
+    assert harness.breezer().speed == speed
+
+
+@pytest.mark.parametrize(
+    "subject",
+    [
+        pytest.param(f"hw.tx.{SID}.dps.{BREEZER}", id="malformed_report"),
+        pytest.param(f"hw.tx.{SID}.evt.{BREEZER}", id="event"),
+        pytest.param(f"app.location.{SID}.{'AutoControlChanged'}", id="bad_event"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bad_or_ignored_messages(harness: Harness, subject: str) -> None:
+    """Malformed and uninteresting messages are skipped."""
+    await harness.cloud.async_start()
+    before = harness.cloud.account
+
+    harness.broker.last.deliver(subject, b"\xff")
+
+    assert harness.cloud.account == before
+    assert harness.cloud.connected
+
+
+@pytest.mark.parametrize(
+    ("removed", "expected"),
+    [
+        pytest.param(False, AutoControl(True, 2, 4, 700, 1), id="changed"),
+        pytest.param(True, None, id="removed"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_auto_control_changed_event(
+    harness: Harness, removed: bool, expected: AutoControl | None
+) -> None:
+    """Room auto mode follows AutoControlChanged events."""
+    await harness.cloud.async_start()
+
+    harness.broker.last.deliver(
+        f"app.location.{SID}.AutoControlChanged",
+        auto_control_changed(
+            ROOM_ID,
+            enabled=True,
+            speed_min=2,
+            speed_max=4,
+            co2_target=700,
+            removed=removed,
+        ),
+    )
+
+    room_info = harness.cloud.account.room(ROOM_ID)
+    assert room_info is not None
+    assert room_info.auto == expected
+
+
+@pytest.mark.asyncio
+async def test_location_event_refreshes_structure_once(harness: Harness) -> None:
+    """Other location events trigger one delayed structure refresh."""
+    await harness.cloud.async_start()
+    harness.transport.calls.clear()
+
+    harness.broker.last.deliver(f"app.location.{SID}.DeviceRegistered", b"")
+    harness.broker.last.deliver(f"app.location.{SID}.DeviceRenamed", b"")
+    await _eventually(
+        lambda: "GetFullStructureLocations" in harness.transport.methods()
+    )
+    await asyncio.sleep(0)
+
+    assert harness.sleeps == [cloud_module.STRUCTURE_REFRESH_DELAY]
+    assert harness.transport.methods() == ["GetFullStructureLocations"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_syncs_locations(harness: Harness) -> None:
+    """Refresh subscribes to new locations, drops vanished ones and polls."""
+    await harness.cloud.async_start()
+    connection = harness.broker.last
+    harness.transport.answers["GetFullStructureLocations"] = [
+        _structure(wstoken="ws-2", extra_location=True)
+    ]
+    connection.published.clear()
+
+    await harness.cloud.async_refresh()
+
+    assert connection.subjects() == [
+        f"app.location.{SID}.*",
+        "app.location.LOC0000002.*",
+        f"hw.tx.{SID}.>",
+        "hw.tx.LOC0000002.>",
+    ]
+    assert "hw.rx.LOC0000002.dps.BRZ0000002" in dict(connection.published)
+    assert harness.cloud.account.device("BRZ0000002") is not None
+
+    harness.transport.answers["GetFullStructureLocations"] = [_structure()]
+    await harness.cloud.async_refresh()
+
+    assert connection.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_while_disconnected_reads_structure(harness: Harness) -> None:
+    """Without the live channel, refresh only re-reads the structure."""
+    await harness.cloud.async_start()
+    await harness.cloud.async_stop()
+    harness.transport.calls.clear()
+
+    await harness.cloud.async_refresh()
+
+    assert harness.transport.methods() == ["GetFullStructureLocations"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_errors_propagate(harness: Harness) -> None:
+    """A failed structure read during refresh is raised."""
+    await harness.cloud.async_start()
+    harness.transport.answers["GetFullStructureLocations"] = [error_response(2, "x")]
+
+    with pytest.raises(TionApiError):
+        await harness.cloud.async_refresh()
+
+
+@pytest.mark.asyncio
+async def test_unknown_profile_reloads_catalog(harness: Harness) -> None:
+    """A device with an unknown profile triggers one catalog reload."""
+    unknown = structure_response(
+        location(SID, devices=(device("NEW0000001", UUID(int=77)),))
+    )
+    harness.transport.answers["GetFullStructureLocations"] = [unknown]
+
+    await harness.cloud.async_start()
+
+    assert harness.transport.methods() == [
+        "GetDeviceProfiles",
+        "GetFullStructureLocations",
+        "GetDeviceProfiles",
+        "GetFullStructureLocations",
+    ]
+    new_device = harness.cloud.account.device("NEW0000001")
+    assert new_device is not None
+    assert new_device.profile is None
+
+
+@pytest.mark.asyncio
+async def test_reconnect_after_drop(harness: Harness) -> None:
+    """A dropped channel reconnects with a fresh wstoken and polls again."""
+    await harness.cloud.async_start()
+    harness.transport.answers["GetFullStructureLocations"] = [
+        _structure(wstoken="ws-2")
+    ]
+    first = harness.broker.last
+    disconnected: list[bool] = []
+    harness.cloud.add_listener(lambda: disconnected.append(harness.cloud.connected))
+
+    first.drop(TionConnectionError("gone"))
+    await _eventually(lambda: len(harness.broker.connections) == 2)
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert disconnected[0] is False
+    assert harness.sleeps == [1.0]
+    assert harness.broker.last.kwargs["auth_token"] == "access-1:ws-2"
+    assert harness.broker.last.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_backs_off(harness: Harness) -> None:
+    """Failed attempts wait 1, 2, 4 ... seconds."""
+    await harness.cloud.async_start()
+    harness.broker.connect_errors = [
+        TionConnectionError("down"),
+        TionConnectionError("down"),
+    ]
+
+    harness.broker.last.drop(TionConnectionError("gone"))
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.sleeps == [1.0, 2.0, 4.0]
+
+
+@pytest.mark.asyncio
+async def test_rpc_auth_error_renews_once(harness: Harness) -> None:
+    """A rejected token is renewed once and the call retried."""
+    harness.transport.answers["GetDeviceProfiles"] = [
+        TionAuthError("401"),
+        PROFILES,
+    ]
+
+    await harness.cloud.async_start()
+
+    assert harness.transport.calls[:2] == [
+        ("GetDeviceProfiles", "access-1"),
+        ("GetDeviceProfiles", "access-2"),
+    ]
+    assert harness.auth.renewals == 1
+
+
+@pytest.mark.asyncio
+async def test_nats_auth_error_renews_and_rereads_structure(harness: Harness) -> None:
+    """A refused CONNECT renews the token and fetches a matching wstoken."""
+    harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
+    harness.transport.answers["GetFullStructureLocations"] = [
+        _structure(wstoken="ws-1"),
+        _structure(wstoken="ws-2"),
+    ]
+
+    await harness.cloud.async_start()
+
+    assert harness.broker.last.kwargs["auth_token"] == "access-2:ws-2"
+    assert harness.transport.calls[-1] == ("GetFullStructureLocations", "access-2")
+
+
+@pytest.mark.asyncio
+async def test_start_auth_failure_raises_and_cleans_up(harness: Harness) -> None:
+    """A login the server keeps refusing fails the start without leftovers."""
+    harness.broker.connect_errors = [
+        TionAuthError("Authorization Violation"),
+        TionAuthError("Authorization Violation"),
+    ]
+
+    with pytest.raises(TionAuthError):
+        await harness.cloud.async_start()
+
+    assert harness.broker.connections == []
+    assert not harness.cloud.connected
+
+
+@pytest.mark.asyncio
+async def test_start_failure_after_connect_stops_everything(
+    harness: Harness,
+) -> None:
+    """If the channel drops during the first poll, nothing keeps running."""
+    original = harness.broker.on_publish
+
+    def drop_on_first_query(connection: FakeNats, subject: str, payload: bytes) -> None:
+        connection.drop(TionConnectionError("gone"))
+
+    harness.broker.on_publish = drop_on_first_query
+
+    with pytest.raises(TionConnectionError):
+        await harness.cloud.async_start()
+    harness.broker.on_publish = original
+    await asyncio.sleep(0)
+
+    assert len(harness.broker.connections) == 1
+    assert harness.sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_reconnect_auth_failure_sets_auth_error(harness: Harness) -> None:
+    """A login refused in the background stops reconnecting and is reported."""
+    await harness.cloud.async_start()
+    harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
+    harness.auth.renew_error = TionAuthError("Renew session expired")
+    notified: list[TionAuthError | None] = []
+    harness.cloud.add_listener(lambda: notified.append(harness.cloud.auth_error))
+
+    harness.broker.last.drop(TionAuthError("User Authentication Expired"))
+    await _eventually(lambda: harness.cloud.auth_error is not None)
+
+    assert str(harness.cloud.auth_error) == "Renew session expired"
+    assert notified[-1] is harness.cloud.auth_error
+    assert len(harness.broker.connections) == 1
+    assert not harness.cloud.connected
+
+
+@pytest.mark.asyncio
+async def test_stop(harness: Harness) -> None:
+    """Stop closes the channel; a late drop does not reconnect."""
+    await harness.cloud.async_start()
+    connection = harness.broker.last
+
+    await harness.cloud.async_stop()
+    connection.kwargs["on_disconnect"](TionConnectionError("late"))
+    await asyncio.sleep(0)
+
+    assert connection.closed
+    assert not harness.cloud.connected
+    assert len(harness.broker.connections) == 1
+    assert harness.sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_listeners(harness: Harness) -> None:
+    """A failing listener does not stop others; unsubscribing works."""
+    calls: list[str] = []
+
+    def broken() -> None:
+        raise RuntimeError("listener bug")
+
+    harness.cloud.add_listener(broken)
+    unsubscribe = harness.cloud.add_listener(lambda: calls.append("seen"))
+    await harness.cloud.async_start()
+    unsubscribe()
+    count = len(calls)
+
+    harness.broker.last.deliver(
+        f"hw.tx.{SID}.dps.{BREEZER}",
+        state_report(BREEZER, DPValue(140, DPKind.INT, 2)),
+    )
+
+    assert count > 0
+    assert len(calls) == count
