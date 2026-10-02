@@ -655,6 +655,26 @@ async def test_unknown_profile_reloads_catalog(harness: Harness) -> None:
 
 
 @pytest.mark.asyncio
+async def test_unknown_profile_reloads_catalog_only_once(harness: Harness) -> None:
+    """A profile the reloaded catalog lacks does not reload it again."""
+    await harness.cloud.async_start()
+    harness.transport.answers["GetFullStructureLocations"] = [
+        structure_response(location(SID, devices=(device("NEW0000001", UUID(int=77)),)))
+    ]
+    harness.transport.calls.clear()
+
+    await harness.cloud.async_refresh()
+    await harness.cloud.async_refresh()
+
+    assert harness.transport.methods() == [
+        "GetFullStructureLocations",
+        "GetDeviceProfiles",
+        "GetFullStructureLocations",
+        "GetFullStructureLocations",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reconnect_after_drop(harness: Harness) -> None:
     """A dropped channel reconnects with a fresh wstoken and polls again."""
     await harness.cloud.async_start()
@@ -709,6 +729,21 @@ async def test_reconnect_backoff_resets_after_success(harness: Harness) -> None:
         await _eventually(lambda: harness.cloud.connected)
 
     assert harness.sleeps == [1.0, 2.0, 1.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_survives_unexpected_error(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A bug in one attempt is logged and the next attempt still runs."""
+    await harness.cloud.async_start()
+    harness.broker.connect_errors = [RuntimeError("connector bug")]
+
+    harness.broker.last.drop(TionConnectionError("gone"))
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.sleeps == [1.0, 2.0]
+    assert "connector bug" in caplog.text
 
 
 @pytest.mark.asyncio

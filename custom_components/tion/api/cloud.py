@@ -93,6 +93,7 @@ class TionCloud:
         self._connect_nats = connect
         self._sleep = sleep
         self._profiles: dict[UUID, DeviceProfile] = {}
+        self._profiles_retried: set[UUID] = set()
         self._locations: tuple[Location, ...] = ()
         self._wstoken = ""
         self._dps: dict[str, dict[int, DPValue]] = {}
@@ -263,8 +264,11 @@ class TionCloud:
     async def _load_structure(self, token: str) -> None:
         """Read the structure with this token; the wstoken is bound to it."""
         structure = await self._read_structure(token)
-        if structure.profile_ids() - self._profiles.keys():
+        unknown = structure.profile_ids() - self._profiles.keys()
+        # One catalog reload per unknown profile; then the device stays without one.
+        if unknown - self._profiles_retried:
             await self._load_profiles()
+            self._profiles_retried |= unknown
             structure = await self._read_structure(token)
         self._locations = structure.locations
         self._wstoken = structure.wstoken
@@ -492,6 +496,11 @@ class TionCloud:
                 return
             except TionError as err:
                 _LOGGER.debug("Reconnect attempt %s failed: %s", attempt + 1, err)
+                attempt += 1
+            except Exception:
+                _LOGGER.exception(
+                    "Unexpected error in reconnect attempt %s", attempt + 1
+                )
                 attempt += 1
             else:
                 return
