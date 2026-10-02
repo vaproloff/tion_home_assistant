@@ -162,6 +162,9 @@ async def test_login_chain_sends_linked_verifiers_and_registers_key() -> None:
     proof = request.get_message(3)
     assert proof.get_str(1) == "com.tion.magicair4"
     assert proof.get_str(2) == device_key.key_id()
+    assert proof.get_str(3) == device_key.device_proof_public_key().public_key
+    assert proof.get_str(4) == "x963"
+    assert proof.get_str(5) == "ES256"
     assert proof.get_int(6) == 1
     assert proof.get_str(7) == "linux"
     assert proof.get_str(8) == "software"
@@ -305,10 +308,25 @@ async def test_code_retry_reuses_email_verifier() -> None:
     assert second.get_bytes(2) == EMAIL_TOKEN
 
 
+@pytest.mark.asyncio
+async def test_get_token_login_token_expired_needs_new_login() -> None:
+    """An expired LoginToken is reported so the flow can restart the login."""
+    transport = FakeTransport(
+        encode_bytes(1, EMAIL_TOKEN), encode_bytes(2, LOGIN_TOKEN), _error(2, 2)
+    )
+    auth = await _auth_with_code_sent(transport)
+    await auth.async_check_confirmation_code("1111")
+
+    with pytest.raises(TionLoginError) as exc_info:
+        await auth.async_get_token()
+
+    assert exc_info.value.reason == LOGIN_ERROR_CODE_EXPIRED
+    assert auth.tokens is None
+
+
 @pytest.mark.parametrize(
     ("response", "error"),
     [
-        pytest.param(_error(2, 2), TionLoginError, id="login_token_expired"),
         pytest.param(_error(2, 5), TionApiError, id="get_token_error"),
         pytest.param(_token(renew=None), TionApiError, id="incomplete_token"),
     ],
