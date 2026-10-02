@@ -2,8 +2,8 @@
 
 import pytest
 
-from custom_components.tion.exceptions import TionApiError
-from custom_components.tion.protobuf import (
+from custom_components.tion.api.exceptions import TionApiError
+from custom_components.tion.api.protobuf import (
     ProtobufDecodeError,
     ProtoMessage,
     encode_bytes,

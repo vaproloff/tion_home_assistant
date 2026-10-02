@@ -9,10 +9,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .api.exceptions import TionError
 from .client import TionZoneDevice
 from .const import DOMAIN, TionDeviceType
 from .coordinator import TionDataUpdateCoordinator
-from .exceptions import TionError
 
 _LOGGER = logging.getLogger(__name__)
 

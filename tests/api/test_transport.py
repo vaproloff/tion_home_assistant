@@ -8,13 +8,13 @@ from aiohttp import ClientConnectionError
 from multidict import CIMultiDict
 import pytest
 
-from custom_components.tion import transport
-from custom_components.tion.exceptions import (
+from custom_components.tion.api import transport
+from custom_components.tion.api.exceptions import (
     TionApiError,
     TionAuthError,
     TionConnectionError,
 )
-from custom_components.tion.transport import (
+from custom_components.tion.api.transport import (
     API_URL,
     TionTransport,
     create_ssl_context,

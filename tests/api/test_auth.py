@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
-from custom_components.tion.auth import (
+from custom_components.tion.api.auth import (
     LOGIN_ERROR_CODE_EXPIRED,
     LOGIN_ERROR_INVALID_AUTH,
     LOGIN_ERROR_INVALID_CAPTCHA,
@@ -21,13 +21,13 @@ from custom_components.tion.auth import (
     TionLoginError,
     TionTokens,
 )
-from custom_components.tion.device_key import TionDeviceKey, sha256_b64url
-from custom_components.tion.exceptions import (
+from custom_components.tion.api.device_key import TionDeviceKey, sha256_b64url
+from custom_components.tion.api.exceptions import (
     TionApiError,
     TionAuthError,
     TionConnectionError,
 )
-from custom_components.tion.protobuf import (
+from custom_components.tion.api.protobuf import (
     ProtoMessage,
     encode_bytes,
     encode_string,

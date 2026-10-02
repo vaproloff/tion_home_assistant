@@ -14,11 +14,6 @@ from homeassistant.const import CONF_ACCESS_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import (
-    CONF_ACCESS_EXPIRES_AT,
-    CONF_REFRESH_EXPIRES_AT,
-    CONF_RENEW_SESSION_TOKEN,
-)
 from .device_key import (
     APP_ID,
     KEY_ALGORITHM,
@@ -33,6 +28,10 @@ from .protobuf import ProtoMessage, encode_bytes, encode_string, encode_varint
 from .transport import TionTransport, create_ssl_context
 
 _LOGGER = logging.getLogger(__name__)
+
+CONF_ACCESS_EXPIRES_AT = "access_expires_at"
+CONF_REFRESH_EXPIRES_AT = "refresh_expires_at"
+CONF_RENEW_SESSION_TOKEN = "renew_session_token"
 
 SVC_ACCOUNT = "api.v1.user.account.AccountService"
 CONFIRMATION_CODE_TYPE_LOGIN = 5

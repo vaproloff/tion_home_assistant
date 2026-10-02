@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from custom_components.tion import config_flow
-from custom_components.tion.auth import (
+from custom_components.tion.api.auth import (
     LOGIN_ERROR_CODE_EXPIRED,
     LOGIN_ERROR_INVALID_AUTH,
     LOGIN_ERROR_INVALID_CAPTCHA,
@@ -19,6 +19,8 @@ from custom_components.tion.auth import (
     TionLoginError,
     TionTokens,
 )
+from custom_components.tion.api.device_key import TionDeviceKey
+from custom_components.tion.api.exceptions import TionApiError, TionConnectionError
 from custom_components.tion.config_flow import (
     CONF_LOCAL_PID_ACTION,
     CONF_OPTIONS_ACTION,
@@ -59,8 +61,6 @@ from custom_components.tion.const import (
     TionDeviceType,
     TionPresetType,
 )
-from custom_components.tion.device_key import TionDeviceKey
-from custom_components.tion.exceptions import TionApiError, TionConnectionError
 from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
 from homeassistant.const import (
     CONF_CODE,

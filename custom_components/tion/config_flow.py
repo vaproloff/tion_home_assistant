@@ -26,7 +26,7 @@ from homeassistant.const import (
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .auth import (
+from .api.auth import (
     LOGIN_ERROR_CODE_EXPIRED,
     LOGIN_ERROR_PASSWORD_NOT_SET,
     TionAuth,
@@ -34,6 +34,8 @@ from .auth import (
     TionTokens,
     async_create_auth,
 )
+from .api.device_key import TionDeviceKey
+from .api.exceptions import TionConnectionError
 from .captcha_view import CAPTCHA_STEP_ID, async_register_captcha_view, captcha_page_url
 from .const import (
     CONF_BREEZER_GUID,
@@ -63,8 +65,6 @@ from .const import (
     TionPresetType,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .device_key import TionDeviceKey
-from .exceptions import TionConnectionError
 
 _LOGGER = logging.getLogger(__name__)
 
