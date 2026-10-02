@@ -2,17 +2,13 @@
 
 import asyncio
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import logging
 import re
 import secrets
 import string
 from typing import Any
-
-from homeassistant.const import CONF_ACCESS_TOKEN
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .device_key import (
     APP_ID,
@@ -25,13 +21,15 @@ from .device_key import (
 )
 from .exceptions import TionApiError, TionAuthError
 from .protobuf import ProtoMessage, encode_bytes, encode_string, encode_varint
-from .transport import TionTransport, create_ssl_context
+from .transport import TionTransport
 
 _LOGGER = logging.getLogger(__name__)
 
-CONF_ACCESS_EXPIRES_AT = "access_expires_at"
-CONF_REFRESH_EXPIRES_AT = "refresh_expires_at"
-CONF_RENEW_SESSION_TOKEN = "renew_session_token"
+# Keys of TionTokens.as_dict(); the config entry stores the tokens under them.
+TOKEN_ACCESS = "access_token"
+TOKEN_RENEW_SESSION = "renew_session_token"
+TOKEN_ACCESS_EXPIRES_AT = "access_expires_at"
+TOKEN_REFRESH_EXPIRES_AT = "refresh_expires_at"
 
 SVC_ACCOUNT = "api.v1.user.account.AccountService"
 CONFIRMATION_CODE_TYPE_LOGIN = 5
@@ -88,28 +86,28 @@ class TionLoginError(TionAuthError):
 class TionTokens:
     """Session tokens; expiry times are Unix seconds on the server clock."""
 
-    access_token: str
-    renew_session_token: str
+    access_token: str = field(repr=False)
+    renew_session_token: str = field(repr=False)
     access_expires_at: float
     refresh_expires_at: float
 
-    def as_entry_data(self) -> dict[str, Any]:
-        """Return the tokens as config entry data."""
+    def as_dict(self) -> dict[str, Any]:
+        """Return the tokens as a plain dict, e.g. for config entry data."""
         return {
-            CONF_ACCESS_TOKEN: self.access_token,
-            CONF_RENEW_SESSION_TOKEN: self.renew_session_token,
-            CONF_ACCESS_EXPIRES_AT: self.access_expires_at,
-            CONF_REFRESH_EXPIRES_AT: self.refresh_expires_at,
+            TOKEN_ACCESS: self.access_token,
+            TOKEN_RENEW_SESSION: self.renew_session_token,
+            TOKEN_ACCESS_EXPIRES_AT: self.access_expires_at,
+            TOKEN_REFRESH_EXPIRES_AT: self.refresh_expires_at,
         }
 
     @classmethod
-    def from_entry_data(cls, data: Mapping[str, Any]) -> TionTokens:
-        """Build tokens from config entry data."""
+    def from_dict(cls, data: Mapping[str, Any]) -> TionTokens:
+        """Build tokens from a dict produced by as_dict()."""
         return cls(
-            access_token=data[CONF_ACCESS_TOKEN],
-            renew_session_token=data[CONF_RENEW_SESSION_TOKEN],
-            access_expires_at=data[CONF_ACCESS_EXPIRES_AT],
-            refresh_expires_at=data[CONF_REFRESH_EXPIRES_AT],
+            access_token=data[TOKEN_ACCESS],
+            renew_session_token=data[TOKEN_RENEW_SESSION],
+            access_expires_at=data[TOKEN_ACCESS_EXPIRES_AT],
+            refresh_expires_at=data[TOKEN_REFRESH_EXPIRES_AT],
         )
 
 
@@ -385,14 +383,3 @@ class TionAuth:
         if (reason := reasons.get(code)) is not None:
             return TionLoginError(reason, message)
         return TionApiError(f"Login rejected ({code}): {message}")
-
-
-async def async_create_auth(
-    hass: HomeAssistant,
-    device_key: TionDeviceKey,
-    tokens: TionTokens | None = None,
-) -> TionAuth:
-    """Create a session on Home Assistant's shared HTTP client."""
-    ssl_context = await hass.async_add_executor_job(create_ssl_context)
-    transport = TionTransport(async_get_clientsession(hass), ssl_context)
-    return TionAuth(transport, device_key, tokens)

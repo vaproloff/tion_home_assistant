@@ -32,7 +32,6 @@ from .api.auth import (
     TionAuth,
     TionLoginError,
     TionTokens,
-    async_create_auth,
 )
 from .api.device_key import TionDeviceKey
 from .api.exceptions import TionConnectionError
@@ -65,6 +64,7 @@ from .const import (
     TionPresetType,
 )
 from .coordinator import TionDataUpdateCoordinator
+from .session import async_create_auth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -251,7 +251,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_EMAIL: self._email,
             CONF_DEVICE_KEY: device_key.to_pem(),
             CONF_DEVICE_KEY_ID: device_key.key_id(),
-            **tokens.as_entry_data(),
+            **tokens.as_dict(),
         }
         if self.source == SOURCE_REAUTH:
             self._abort_if_unique_id_mismatch(reason="wrong_account")

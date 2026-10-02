@@ -884,7 +884,7 @@ async def test_code_step_creates_entry_without_password(
         CONF_EMAIL: EMAIL,
         CONF_DEVICE_KEY: device_key.to_pem(),
         CONF_DEVICE_KEY_ID: device_key.key_id(),
-        **TOKENS.as_entry_data(),
+        **TOKENS.as_dict(),
     }
     assert TionDeviceKey.from_pem(result["data"][CONF_DEVICE_KEY]).key_id() == (
         device_key.key_id()
@@ -1008,7 +1008,7 @@ async def test_reauth_replaces_entry_data(
         CONF_EMAIL: EMAIL,
         CONF_DEVICE_KEY: auths[0].device_key.to_pem(),
         CONF_DEVICE_KEY_ID: auths[0].device_key.key_id(),
-        **TOKENS.as_entry_data(),
+        **TOKENS.as_dict(),
     }
     assert hass.config_entries.reloaded == [REAUTH_ENTRY_ID]
 

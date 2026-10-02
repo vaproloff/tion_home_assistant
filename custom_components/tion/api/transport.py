@@ -116,6 +116,16 @@ class TionTransport:
         self._base_url = base_url
         self.server_time_offset = 0.0
 
+    @property
+    def session(self) -> ClientSession:
+        """Return the HTTP session, shared with the NATS client."""
+        return self._session
+
+    @property
+    def ssl_context(self) -> ssl.SSLContext:
+        """Return the SSL context that trusts Tion's certificate chain."""
+        return self._ssl_context
+
     def server_time(self) -> float:
         """Return the current Unix time on the server's clock."""
         return time.time() + self.server_time_offset
