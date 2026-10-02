@@ -10,24 +10,9 @@ from typing import Any, Self
 from aiohttp import ClientError, ClientSession, ContentTypeError
 
 from .const import Heater, ZoneMode
+from .exceptions import TionApiError, TionAuthError, TionConnectionError
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class TionError(Exception):
-    """Base Tion client error."""
-
-
-class TionAuthError(TionError):
-    """Tion authentication error."""
-
-
-class TionConnectionError(TionError):
-    """Tion connection error."""
-
-
-class TionApiError(TionError):
-    """Unexpected Tion API error."""
 
 
 class TionZoneModeAutoSet:

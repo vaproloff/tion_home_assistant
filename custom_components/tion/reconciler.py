@@ -12,8 +12,9 @@ from collections.abc import Iterable, Mapping
 import logging
 from typing import TYPE_CHECKING, Any
 
-from .client import TionError, TionZone, TionZoneDevice
+from .client import TionZone, TionZoneDevice
 from .desired_state import DesiredBreezer, DesiredZone
+from .exceptions import TionError
 
 if TYPE_CHECKING:
     from .coordinator import TionData, TionDataUpdateCoordinator
