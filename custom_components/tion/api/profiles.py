@@ -1,7 +1,7 @@
 """Device profiles: what each datapoint of a Tion model means."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import IntEnum
 from uuid import UUID
 
@@ -110,15 +110,15 @@ def _decode_spec(message: ProtoMessage) -> DPSpec | None:
         access = DPAccess(message.get_int(5))
     except ValueError:
         return None
-    base = {
-        "dp_id": message.get_int(1),
-        "code": message.get_str(2),
-        "type": dp_type,
-        "access": access,
-    }
+    spec = DPSpec(
+        dp_id=message.get_int(1),
+        code=message.get_str(2),
+        type=dp_type,
+        access=access,
+    )
     if (prop := message.get_message(8)) is not None:
-        return DPSpec(
-            **base,
+        return replace(
+            spec,
             minimum=prop.get_sint64(1),
             maximum=prop.get_sint64(2),
             step=prop.get_sint64(3),
@@ -126,8 +126,8 @@ def _decode_spec(message: ProtoMessage) -> DPSpec | None:
             unit=prop.get_str(5),
         )
     if (prop := message.get_message(13)) is not None:
-        return DPSpec(
-            **base,
+        return replace(
+            spec,
             minimum=prop.get_float(1),
             maximum=prop.get_float(2),
             step=prop.get_float(3),
@@ -135,9 +135,9 @@ def _decode_spec(message: ProtoMessage) -> DPSpec | None:
             unit=prop.get_str(5),
         )
     if (prop := message.get_message(9)) is not None:
-        return DPSpec(**base, labels=prop.get_map(1))
+        return replace(spec, labels=prop.get_map(1))
     if (prop := message.get_message(12)) is not None:
-        return DPSpec(**base, labels=prop.get_map(1))
+        return replace(spec, labels=prop.get_map(1))
     if (prop := message.get_message(14)) is not None:
-        return DPSpec(**base, labels={1: prop.get_str(1), 0: prop.get_str(2)})
-    return DPSpec(**base)
+        return replace(spec, labels={1: prop.get_str(1), 0: prop.get_str(2)})
+    return spec

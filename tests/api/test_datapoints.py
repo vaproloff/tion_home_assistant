@@ -48,6 +48,12 @@ def test_dp_value_roundtrip(value: DPValue) -> None:
     assert decode_dp_value(ProtoMessage.parse(encode_dp_value(value))) == value
 
 
+def test_raw_dp_value_must_be_bytes() -> None:
+    """A RAW value is sent as given, never made up from a number."""
+    with pytest.raises(TypeError):
+        encode_dp_value(DPValue(30, DPKind.RAW, 2))
+
+
 def test_dp_value_ignores_gateway_timestamp() -> None:
     """Field 9 is a gateway counter, not a clock; it is not kept."""
     payload = encode_varint(2, 387) + encode_varint(8, 110) + encode_varint(9, 96608568)

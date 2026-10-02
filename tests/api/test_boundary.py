@@ -32,7 +32,9 @@ def test_api_package_is_scanned() -> None:
 
 
 @pytest.mark.parametrize(
-    "path", sorted(API_DIR.glob("*.py")), ids=lambda path: path.name
+    "path",
+    sorted(API_DIR.rglob("*.py")),
+    ids=lambda path: path.relative_to(API_DIR).as_posix(),
 )
 def test_api_module_is_home_assistant_free(path: Path) -> None:
     """No module in api/ imports Home Assistant or the integration root."""

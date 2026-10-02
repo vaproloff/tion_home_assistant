@@ -79,7 +79,9 @@ def encode_dp_value(dp: DPValue) -> bytes:
         case DPKind.STRING:
             value = encode_string(DPKind.STRING, str(dp.value))
         case DPKind.RAW:
-            value = encode_bytes(DPKind.RAW, bytes(dp.value))
+            if not isinstance(dp.value, bytes):
+                raise TypeError(f"RAW datapoint {dp.dp_id} needs bytes")
+            value = encode_bytes(DPKind.RAW, dp.value)
         case DPKind.FLOAT:
             value = encode_float(DPKind.FLOAT, float(dp.value))
     payload = value + encode_varint(_DP_ID, dp.dp_id)

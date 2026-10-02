@@ -212,7 +212,7 @@ class TionCloud:
         co2_target: int | None = None,
     ) -> None:
         """Change a room's auto mode; unset fields keep their current values."""
-        changes = {
+        changes: dict[str, Any] = {
             name: value
             for name, value in (
                 ("enabled", enabled),
