@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import replace
+from functools import partial
 import logging
 from typing import Any
 from uuid import UUID
@@ -86,6 +87,7 @@ class TionCloud:
         self._dps: dict[str, dict[int, DPValue]] = {}
         self._account = TionAccount()
         self._connection: NatsConnection | None = None
+        self._attempt: object | None = None
         self._subscriptions: dict[str, list[str]] = {}
         self._pending_queries: dict[int, asyncio.Future[None]] = {}
         self._pending_commands: dict[int, asyncio.Future[DPUpdateResponse]] = {}
@@ -145,6 +147,7 @@ class TionCloud:
             if task is not None:
                 task.cancel()
         self._fail_pending(TionConnectionError("Tion cloud stopped"))
+        self._attempt = None
         if (connection := self._connection) is not None:
             self._connection = None
             await connection.async_close()
@@ -183,22 +186,33 @@ class TionCloud:
 
     async def _connect(self) -> None:
         """Open the live channel, renewing the access token once if refused."""
+        attempt = object()
         try:
-            connection = await self._open_channel(renew=False)
+            connection = await self._open_channel(attempt, renew=False)
         except TionAuthError:
-            connection = await self._open_channel(renew=True)
+            connection = await self._open_channel(attempt, renew=True)
         self._connection = connection
+        self._attempt = attempt
         self._subscriptions = {}
         try:
-            await self._sync_subscriptions(connection)
-        except TionError:
-            self._connection = None
+            await self._subscribe_and_poll(connection)
+        except BaseException:
+            if self._connection is connection:
+                self._connection = None
+                self._attempt = None
+                self._subscriptions = {}
+                self._fail_pending(TionConnectionError("Live channel closed"))
             await connection.async_close()
             raise
         self._set_connected(True)
-        await self._query_all()
 
-    async def _open_channel(self, *, renew: bool) -> NatsConnection:
+    async def _subscribe_and_poll(self, connection: NatsConnection) -> None:
+        await self._sync_subscriptions(connection)
+        await self._query_all()
+        if self._connection is not connection:
+            raise TionConnectionError("Live channel lost while connecting")
+
+    async def _open_channel(self, attempt: object, *, renew: bool) -> NatsConnection:
         if renew:
             token = (await self._auth.async_renew_access()).access_token
         else:
@@ -208,7 +222,7 @@ class TionCloud:
             self._transport.session,
             user=NATS_USER_PREFIX + self._auth.device_key.key_id,
             auth_token=f"{token}:{self._wstoken}",
-            on_disconnect=self._on_disconnect,
+            on_disconnect=partial(self._on_disconnect, attempt),
             ssl_context=self._transport.ssl_context,
             create_task=self._create_task,
         )
@@ -336,9 +350,13 @@ class TionCloud:
         except TionError as err:
             _LOGGER.debug("Structure refresh after a location event failed: %s", err)
 
-    def _on_disconnect(self, error: TionError) -> None:
+    def _on_disconnect(self, attempt: object, error: TionError) -> None:
+        if attempt is not self._attempt:
+            _LOGGER.debug("Ignoring a stale live channel disconnect: %s", error)
+            return
         _LOGGER.debug("Tion live channel lost: %s", error)
         self._connection = None
+        self._attempt = None
         self._subscriptions = {}
         self._fail_pending(TionConnectionError(f"Live channel lost: {error}"))
         self._set_connected(False)

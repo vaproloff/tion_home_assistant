@@ -149,6 +149,7 @@ class FakeNats:
         self.subscriptions: dict[str, tuple[str, Callable[[str, bytes], None]]] = {}
         self.published: list[tuple[str, bytes]] = []
         self.closed = False
+        self.close_calls = 0
 
     async def async_subscribe(
         self, subject: str, callback: Callable[[str, bytes], None]
@@ -174,6 +175,7 @@ class FakeNats:
     async def async_close(self) -> None:
         """Close silently."""
         self.closed = True
+        self.close_calls += 1
 
     def subjects(self) -> list[str]:
         """Return the subscribed subjects."""
@@ -300,6 +302,36 @@ async def _eventually(predicate: Callable[[], bool]) -> None:
             return
         await asyncio.sleep(0)
     raise AssertionError("condition never became true")
+
+
+def _drop_after_last_reply(harness: Harness) -> None:
+    """Once, let the server drop the channel right after the last poll reply."""
+    original = harness.broker.on_publish
+
+    def on_publish(connection: FakeNats, subject: str, payload: bytes) -> None:
+        original(connection, subject, payload)
+        if subject == f"hw.rx.{SID}.dps.{STATION}":
+            harness.broker.on_publish = original
+            connection.drop(TionConnectionError("gone"))
+
+    harness.broker.on_publish = on_publish
+
+
+def _fail_publish(harness: Harness) -> None:
+    """Make the next publish fail without the connection reporting a loss."""
+    original = harness.broker.on_publish
+
+    def on_publish(connection: FakeNats, subject: str, payload: bytes) -> None:
+        harness.broker.on_publish = original
+        raise TionConnectionError("send failed")
+
+    harness.broker.on_publish = on_publish
+
+
+BROKEN_POLLS = [
+    pytest.param(_drop_after_last_reply, id="dropped_after_last_reply"),
+    pytest.param(_fail_publish, id="publish_failed"),
+]
 
 
 @pytest.fixture
@@ -641,6 +673,94 @@ async def test_start_failure_after_connect_stops_everything(
 
     assert len(harness.broker.connections) == 1
     assert harness.sleeps == []
+
+
+@pytest.mark.parametrize("break_poll", BROKEN_POLLS)
+@pytest.mark.asyncio
+async def test_start_fails_when_channel_breaks_during_poll(
+    harness: Harness, break_poll: Callable[[Harness], None]
+) -> None:
+    """A channel that breaks while connecting fails the start and is closed."""
+    break_poll(harness)
+
+    with pytest.raises(TionConnectionError):
+        await harness.cloud.async_start()
+    await asyncio.sleep(0)
+
+    connection = harness.broker.last
+    assert connection.close_calls == 1
+    assert not harness.cloud.connected
+    assert len(harness.broker.connections) == 1
+    assert harness.sleeps == []
+    published = len(connection.published)
+    harness.transport.calls.clear()
+    await harness.cloud.async_refresh()
+    assert harness.transport.methods() == ["GetFullStructureLocations"]
+    assert len(connection.published) == published
+
+
+@pytest.mark.parametrize("break_poll", BROKEN_POLLS)
+@pytest.mark.asyncio
+async def test_reconnect_retries_when_channel_breaks_during_poll(
+    harness: Harness, break_poll: Callable[[Harness], None]
+) -> None:
+    """A channel that breaks while reconnecting counts as a failed attempt."""
+    await harness.cloud.async_start()
+    first = harness.broker.last
+    break_poll(harness)
+
+    first.drop(TionConnectionError("gone"))
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.sleeps == [1.0, 2.0]
+    assert len(harness.broker.connections) == 3
+    assert [connection.close_calls for connection in harness.broker.connections] == [
+        0,
+        1,
+        0,
+    ]
+    assert harness.broker.last.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
+
+
+@pytest.mark.asyncio
+async def test_connected_only_after_the_poll(harness: Harness) -> None:
+    """The channel is reported connected once subscriptions and poll are done."""
+    seen: list[bool] = []
+    original = harness.broker.on_publish
+
+    def record(connection: FakeNats, subject: str, payload: bytes) -> None:
+        seen.append(harness.cloud.connected)
+        original(connection, subject, payload)
+
+    harness.broker.on_publish = record
+
+    await harness.cloud.async_start()
+
+    assert seen == [False, False]
+    assert harness.cloud.connected
+
+
+@pytest.mark.asyncio
+async def test_stale_disconnect_is_ignored(harness: Harness) -> None:
+    """A late drop report of a replaced connection leaves the new one alone."""
+    await harness.cloud.async_start()
+    first = harness.broker.last
+    first.drop(TionConnectionError("gone"))
+    await _eventually(lambda: harness.cloud.connected)
+    second = harness.broker.last
+    before = harness.notifications
+    published = len(second.published)
+
+    first.kwargs["on_disconnect"](TionConnectionError("stale"))
+    await asyncio.sleep(0)
+
+    assert harness.cloud.connected
+    assert harness.notifications == before
+    assert harness.sleeps == [1.0]
+    assert len(harness.broker.connections) == 2
+    await harness.cloud.async_refresh()
+    assert len(second.published) > published
+    assert second.close_calls == 0
 
 
 @pytest.mark.asyncio
