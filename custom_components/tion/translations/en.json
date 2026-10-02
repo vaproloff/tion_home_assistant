@@ -4,19 +4,33 @@
     "step": {
       "user": {
         "title": "Add Tion account",
-        "description": "Sign in with the same Tion account used in the official app. Home Assistant will validate the credentials and load available locations, zones, and devices.",
+        "description": "Sign in with the Tion account used in the MagicAir app. Home Assistant then opens a captcha page, and Tion e-mails you a confirmation code.",
         "data": {
-          "username": "Username",
+          "email": "Email",
           "password": "Password"
         },
         "data_description": {
-          "username": "Tion account login, usually an email address.",
-          "password": "Tion account password. It is stored in the integration settings so Home Assistant can refresh auth tokens."
+          "email": "Email address of the Tion account.",
+          "password": "Tion account password. It is only used to sign in and is not stored."
+        }
+      },
+      "captcha": {
+        "title": "Captcha",
+        "description": "Complete the check on the page opened in a new window. Home Assistant continues automatically when it is done."
+      },
+      "code": {
+        "title": "Confirmation code",
+        "description": "Tion has sent a confirmation code to {email}. Enter it to finish signing in.",
+        "data": {
+          "code": "Code"
+        },
+        "data_description": {
+          "code": "The code from the Tion e-mail."
         }
       },
       "reauth_confirm": {
-        "title": "Update Tion credentials",
-        "description": "Home Assistant can no longer authenticate with Tion. Enter the current password for the already configured account; use Add integration to connect a different account.",
+        "title": "Sign in to Tion again",
+        "description": "The Tion session for {email} has ended; it lasts at most 30 days. Enter the password to sign in again; a captcha and an e-mail code follow.",
         "data": {
           "password": "Password"
         },
@@ -27,12 +41,16 @@
     },
     "abort": {
       "already_configured": "This Tion account is already configured.",
-      "reauth_successful": "Tion credentials were updated successfully. The integration has been reloaded.",
-      "wrong_account": "The password belongs to a different Tion account. Enter the password for the account already configured."
+      "reauth_successful": "Signed in to Tion again. The integration has been reloaded.",
+      "wrong_account": "This sign-in belongs to a different Tion account than the configured one.",
+      "password_not_set": "This Tion account has no permanent password. Set one in the Tion MagicAir app and try again."
     },
     "error": {
       "cannot_connect": "Failed to connect",
-      "invalid_auth": "Invalid authentication",
+      "invalid_auth": "Invalid email or password",
+      "invalid_captcha": "The captcha was not accepted or has expired. Submit the form to try again.",
+      "invalid_code": "Wrong confirmation code.",
+      "code_expired": "The confirmation code has expired. Submit the form to get a new one.",
       "unknown": "Unexpected error"
     }
   },

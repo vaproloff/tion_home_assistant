@@ -22,9 +22,16 @@ The integration is a fairly standard HA cloud-polling integration with a few qui
 
 ### Cloud client (`client.py`)
 - `TionClient` wraps the Tion REST API with OAuth-style password grant against `idsrv/oauth2/token`. The bearer token is cached on the client and persisted back into the config entry via the `update_auth_data` listener wired up in `__init__.py` — the `AUTH_DATA` key in `entry.data` is the source of truth across restarts.
-- `_request` transparently re-authenticates on a single 401 (`retry_auth=True` recursion). Errors are normalized to three exception types — `TionAuthError`, `TionConnectionError`, `TionApiError` (all subclasses of `TionError`) — and the coordinator maps `TionAuthError` to `ConfigEntryAuthFailed` to trigger the reauth flow.
+- `_request` transparently re-authenticates on a single 401 (`retry_auth=True` recursion). Errors are normalized to three exception types — `TionAuthError`, `TionConnectionError`, `TionApiError` (all subclasses of `TionError`, defined in `exceptions.py`) — and the coordinator maps `TionAuthError` to `ConfigEntryAuthFailed` to trigger the reauth flow.
 - Write operations (`send_breezer`, `send_zone`, `send_settings`) POST to the API which returns a `task_id`; `_wait_for_task` polls `task/{id}` every 500 ms up to 5 s waiting for `status == "completed"`. The whole command path is therefore async and may take seconds.
 - The API response shape is mirrored by plain wrapper classes (`TionLocation` → `TionZone` → `TionZoneDevice` → `TionZoneDeviceData`). These are constructed defensively with `.get()`; new fields just need to be added to `TionZoneDeviceData.__init__`.
+
+### Tion v4 login (`protobuf.py`, `transport.py`, `device_key.py`, `auth.py`, `captcha_view.py`)
+The new Tion cloud ("v4", gRPC-Web on `api-v4.magicair.tion.ru:5000`) replaces the REST API. Only login and the session lifecycle exist so far; wiring the v4 session into `__init__.py`/the coordinator belongs to the transition spec.
+- `transport.py`: `TionTransport.async_call(service, method, payload, token)` frames gRPC-Web over aiohttp with its own SSL context (`create_ssl_context`, blocking — run in an executor) that trusts the original GlobalSign intermediate because Tion serves a corrupted copy. Every response updates `server_time_offset` from `x-server-time-ms`/`Date`; errors are normalized to the three `TionError` types. `protobuf.py` is the minimal codec for the account messages (no `grpcio`/`protobuf`).
+- `device_key.py`: pure P-256 logic — keyId, the `GetToken` key registration (declared `HardwareBacked=true`: the server requires it and has no attestation) and the seven-line `RenewAccess` signature.
+- `auth.py`: `TionAuth` owns the session — `GetConfirmationCode` (captcha) → `CheckConfirmationCode` (e-mail code) → `GetToken`, then `RenewAccess` (Bearer + signed proof, server-clock `ts`, under a lock). Terminal renew failures and the fixed 30-day window raise `TionAuthError` (→ reauth). `TionTokens.as_entry_data()` is the `entry.data` shape; `add_update_listener` reports renewed tokens.
+- `captcha_view.py`: unauthenticated `/api/tion/captcha/{flow_id}` serving `captcha.html` (invisible Yandex SmartCaptcha) and posting the token back into the flow. It only serves a Tion flow at the `captcha` step. The config flow registers it on first use because HA does not run `async_setup` before a config flow (hence `"dependencies": ["http"]`).
 
 ### Coordinator (`coordinator.py`) — stale-data guard + PID hook
 `TionDataUpdateCoordinator` extends `DataUpdateCoordinator[TionData]`. Two behaviours here are easy to miss and must be preserved when changing the update path:
@@ -71,9 +78,9 @@ Each file in `custom_components/tion/{binary_sensor,button,climate,number,sensor
 - treats Auto specially: if the breezer has a local PID configured, selecting Auto starts the PID (the zone goes MANUAL); otherwise it falls back to the cloud's auto mode. PID runtime attributes are merged into `extra_state_attributes`.
 
 ### Config flow (`config_flow.py`)
-- Unique ID is `sha256(username)` — keep this stable so existing installs don't get duplicated entries.
-- Username/password validation goes through `TionClient.async_validate_auth`, which both fetches a token and pulls locations (catches accounts where auth succeeds but the user has no devices).
-- `async_step_reauth_confirm` reuses the original username and asks only for the new password.
+- Unique ID is `sha256(email)` (the e-mail as typed; equals the old `sha256(username)`) — keep this stable so existing installs don't get duplicated entries.
+- Login is v4: `async_step_user` (e-mail + password) → `async_step_captcha` (external step; `TionCaptchaView` resumes it with the captcha token, which is used at once for `GetConfirmationCode`) → `async_step_code` (code from the e-mail → `GetToken`). An external step can only end with `external_step_done`, so captcha-phase errors are stored and shown on the credentials form. `entry.data` holds the e-mail, the device key PEM/keyId and the tokens — never the password.
+- `async_step_reauth_confirm` asks only for the password of the stored e-mail (`CONF_EMAIL`, or `CONF_USERNAME` on pre-v4 entries) and runs the same captcha + code steps, replacing `entry.data` wholesale.
 - The options flow is **multi-step**, dispatched from `async_step_init` (which sets `CONF_SCAN_INTERVAL`, min 10 s / default `DEFAULT_SCAN_INTERVAL` = 60 s, and asks what to configure next):
   - **Local PID branch:** `async_step_local_pid` picks the breezer, then `async_step_breezer` edits that breezer's PID config (CO2 sensor entity, enabled flag, `base_output`, `kp`, `ki`, `kd`).
   - **Presets branch:** `async_step_presets` picks the breezer, then `async_step_preset_add` (name + type) and `async_step_preset_config` (speed for manual, min/max for auto).
