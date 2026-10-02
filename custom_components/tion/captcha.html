@@ -60,6 +60,9 @@ function start() {
       window.smartCaptcha.subscribe(widgetId, event, () =>
         setStatus("Ошибка капчи / Captcha error: " + event, true));
     }
+    window.smartCaptcha.subscribe(widgetId, "challenge-hidden", () => {
+      if (!sending) setStatus("Проверка прервана / Check cancelled", true);
+    });
   } else {
     window.smartCaptcha.reset(widgetId);
   }
