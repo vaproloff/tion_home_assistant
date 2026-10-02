@@ -32,6 +32,7 @@ The new Tion cloud ("v4", gRPC-Web on `api-v4.magicair.tion.ru:5000`) replaces t
 - `device_key.py`: pure P-256 logic — keyId, the `GetToken` key registration (declared `HardwareBacked=true`: the server requires it and has no attestation) and the seven-line `RenewAccess` signature.
 - `auth.py`: `TionAuth` owns the session — `GetConfirmationCode` (captcha) → `CheckConfirmationCode` (e-mail code) → `GetToken`, then `RenewAccess` (Bearer + signed proof, server-clock `ts`, under a lock). Terminal renew failures and the fixed 30-day window raise `TionAuthError` (→ reauth). `TionTokens.as_entry_data()` is the `entry.data` shape; `add_update_listener` reports renewed tokens.
 - `captcha_view.py`: unauthenticated `/api/tion/captcha/{flow_id}` serving `captcha.html` (invisible Yandex SmartCaptcha) and posting the token back into the flow. It only serves a Tion flow at the `captcha` step. The config flow registers it on first use because HA does not run `async_setup` before a config flow (hence `"dependencies": ["http"]`).
+- Intermediate state: entries created or re-authenticated through the v4 flow are not loadable by the current `__init__.py` (it still reads `CONF_USERNAME`, so setup fails with `KeyError: 'username'`) until the transition spec wires the v4 session in. Do not merge this work into `master` or cut a release before that.
 
 ### Coordinator (`coordinator.py`) — stale-data guard + PID hook
 `TionDataUpdateCoordinator` extends `DataUpdateCoordinator[TionData]`. Two behaviours here are easy to miss and must be preserved when changing the update path:
