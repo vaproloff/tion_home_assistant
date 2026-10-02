@@ -590,6 +590,7 @@ async def test_drop_during_subscription_sync(harness: Harness) -> None:
     harness.transport.answers["GetFullStructureLocations"] = [_structure()]
 
     refresh = asyncio.create_task(harness.cloud.async_refresh())
+    # Drop once the first of the four vanished subscriptions is gone.
     await _eventually(lambda: len(connection.subscriptions) == 5)
     connection.drop(TionConnectionError("gone"))
     await refresh
@@ -603,6 +604,7 @@ async def test_refresh_during_reconnect_subscribes_once(harness: Harness) -> Non
     """A refresh overlapping a reconnect does not subscribe a location twice."""
     await harness.cloud.async_start()
     harness.broker.last.drop(TionConnectionError("gone"))
+    # The reconnect is subscribing on the new connection now.
     await _eventually(lambda: len(harness.broker.connections) == 2)
 
     await harness.cloud.async_refresh()
