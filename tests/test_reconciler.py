@@ -7,9 +7,10 @@ from typing import Any
 
 import pytest
 
-from custom_components.tion.client import TionError, TionLocation
+from custom_components.tion.client import TionLocation
 from custom_components.tion.const import ZoneMode
 from custom_components.tion.coordinator import TionData
+from custom_components.tion.exceptions import TionError
 from custom_components.tion.reconciler import TionReconciler
 
 BREEZER_GUID = "breezer-guid"

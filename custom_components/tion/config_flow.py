@@ -9,12 +9,15 @@ import voluptuous as vol
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
+    SOURCE_REAUTH,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
 )
 from homeassistant.const import (
+    CONF_CODE,
+    CONF_EMAIL,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
@@ -22,13 +25,22 @@ from homeassistant.const import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers import selector
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
-from .client import TionApiError, TionAuthError, TionClient, TionConnectionError
+from .auth import (
+    LOGIN_ERROR_CODE_EXPIRED,
+    LOGIN_ERROR_PASSWORD_NOT_SET,
+    TionAuth,
+    TionLoginError,
+    TionTokens,
+    async_create_auth,
+)
+from .captcha_view import CAPTCHA_STEP_ID, async_register_captcha_view, captcha_page_url
 from .const import (
-    AUTH_DATA,
     CONF_BREEZER_GUID,
+    CONF_CAPTCHA_TOKEN,
     CONF_CO2_SENSOR_ENTITY_ID,
+    CONF_DEVICE_KEY,
+    CONF_DEVICE_KEY_ID,
     CONF_PID_BASE_OUTPUT,
     CONF_PID_BREEZERS,
     CONF_PID_ENABLED,
@@ -51,6 +63,8 @@ from .const import (
     TionPresetType,
 )
 from .coordinator import TionDataUpdateCoordinator
+from .device_key import TionDeviceKey
+from .exceptions import TionConnectionError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,43 +88,32 @@ PRESETS_ACTION_DONE = "done"
 PRESETS_ACTION_EDIT = "edit"
 PRESETS_ACTION_REMOVE = "remove"
 
+STEP_USER_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_EMAIL): str,
+        vol.Required(CONF_PASSWORD): str,
+    }
+)
+STEP_REAUTH_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
+STEP_CODE_SCHEMA = vol.Schema({vol.Required(CONF_CODE): str})
+
 
 class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     """Tion config flow."""
 
     VERSION = 1
 
-    @staticmethod
-    def _unique_id(username: str) -> str:
-        """Return config entry unique id."""
-        sha256_hash = hashlib.new("sha256")
-        sha256_hash.update(username.encode())
-        return sha256_hash.hexdigest()
+    def __init__(self) -> None:
+        """Initialize the flow."""
+        self._email = ""
+        self._password = ""
+        self._auth: TionAuth | None = None
+        self._login_error: str | None = None
 
-    async def _async_get_auth_data(
-        self,
-        user: str,
-        password: str,
-        interval: int,
-        auth_data: str | dict[str, str | None] | None = None,
-    ) -> tuple[dict[str, str | None] | None, str | None]:
-        """Get auth data and map client errors to config flow errors."""
-        session = async_create_clientsession(self.hass)
-        api = TionClient(
-            session, user, password, min_update_interval_sec=interval, auth=auth_data
-        )
-        try:
-            return await api.async_validate_auth(), None
-        except TionAuthError:
-            return None, "invalid_auth"
-        except TionConnectionError:
-            return None, "cannot_connect"
-        except TionApiError as err:
-            _LOGGER.warning("Unexpected Tion API response during auth: %s", err)
-            return None, "unknown"
-        except Exception:
-            _LOGGER.exception("Unexpected exception during Tion auth")
-            return None, "unknown"
+    @staticmethod
+    def _unique_id(email: str) -> str:
+        """Return config entry unique id."""
+        return hashlib.sha256(email.encode()).hexdigest()
 
     @staticmethod
     @callback
@@ -121,91 +124,142 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step user."""
-
-        errors: dict[str, str] = {}
+        """Ask for the Tion account e-mail and password."""
         if user_input is not None:
-            self._async_abort_entries_match({CONF_USERNAME: user_input[CONF_USERNAME]})
-
-            auth_data, error = await self._async_get_auth_data(
-                user_input[CONF_USERNAME],
-                user_input[CONF_PASSWORD],
-                DEFAULT_SCAN_INTERVAL,
+            self._email = user_input[CONF_EMAIL]
+            await self.async_set_unique_id(
+                self._unique_id(self._email), raise_on_progress=False
             )
-
-            if error is not None:
-                errors["base"] = error
-            else:
-                await self.async_set_unique_id(
-                    self._unique_id(user_input[CONF_USERNAME])
-                )
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title=user_input[CONF_USERNAME],
-                    data={
-                        CONF_USERNAME: user_input[CONF_USERNAME],
-                        CONF_PASSWORD: user_input[CONF_PASSWORD],
-                        AUTH_DATA: auth_data,
-                    },
-                )
+            self._abort_if_unique_id_configured()
+            return await self._async_start_login(user_input[CONF_PASSWORD])
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_USERNAME, default=""): str,
-                    vol.Required(CONF_PASSWORD, default=""): str,
-                }
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_USER_SCHEMA, {CONF_EMAIL: self._email}
             ),
-            errors=errors,
+            errors=self._pop_login_error(),
         )
 
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
-        """Perform reauth upon an API authentication error."""
+        """Start a new login for the configured account."""
+        # Entries created before the v4 login keep the e-mail as the username.
+        self._email = entry_data.get(CONF_EMAIL) or entry_data[CONF_USERNAME]
+        await self.async_set_unique_id(self._unique_id(self._email))
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Dialog that informs the user that reauth is required."""
-        errors: dict[str, str] = {}
+        """Ask for the password of the configured account."""
         if user_input is not None:
-            reauth_entry = self._get_reauth_entry()
-            username = reauth_entry.data[CONF_USERNAME]
-            auth_data, error = await self._async_get_auth_data(
-                username,
-                user_input[CONF_PASSWORD],
-                reauth_entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-            )
-
-            if error is not None:
-                errors["base"] = error
-            elif auth_data is not None:
-                await self.async_set_unique_id(self._unique_id(username))
-                self._abort_if_unique_id_mismatch(reason="wrong_account")
-
-                return self.async_update_reload_and_abort(
-                    reauth_entry,
-                    title=username,
-                    data={
-                        **reauth_entry.data,
-                        CONF_PASSWORD: user_input[CONF_PASSWORD],
-                        AUTH_DATA: auth_data,
-                    },
-                )
+            return await self._async_start_login(user_input[CONF_PASSWORD])
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_PASSWORD, default=""): str,
-                }
-            ),
+            data_schema=STEP_REAUTH_SCHEMA,
+            description_placeholders={"email": self._email},
+            errors=self._pop_login_error(),
+        )
+
+    async def async_step_captcha(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Send the user to the captcha page; resumed by the captcha view."""
+        if user_input is None:
+            async_register_captcha_view(self.hass)
+            return self.async_external_step(
+                step_id=CAPTCHA_STEP_ID, url=captcha_page_url(self.flow_id)
+            )
+
+        # An external step may only end with external_step_done, so a failure
+        # is carried back to the credentials form instead of shown here.
+        password, self._password = self._password, ""
+        try:
+            await self._require_auth().async_get_confirmation_code(
+                self._email, password, user_input[CONF_CAPTCHA_TOKEN]
+            )
+        except TionLoginError as err:
+            self._login_error = err.reason
+        except TionConnectionError:
+            self._login_error = "cannot_connect"
+        except Exception:
+            _LOGGER.exception("Unexpected error requesting the Tion e-mail code")
+            self._login_error = "unknown"
+        else:
+            return self.async_external_step_done(next_step_id="code")
+        return self.async_external_step_done(next_step_id=self._credentials_step_id)
+
+    async def async_step_code(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for the code from the e-mail and finish the login."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            auth = self._require_auth()
+            try:
+                await auth.async_check_confirmation_code(user_input[CONF_CODE])
+                tokens = await auth.async_get_token()
+            except TionLoginError as err:
+                if err.reason == LOGIN_ERROR_PASSWORD_NOT_SET:
+                    return self.async_abort(reason=LOGIN_ERROR_PASSWORD_NOT_SET)
+                if err.reason == LOGIN_ERROR_CODE_EXPIRED:
+                    self._login_error = err.reason
+                    if self.source == SOURCE_REAUTH:
+                        return await self.async_step_reauth_confirm()
+                    return await self.async_step_user()
+                errors["base"] = err.reason
+            except TionConnectionError:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected error finishing the Tion login")
+                errors["base"] = "unknown"
+            else:
+                return self._finish_login(auth.device_key, tokens)
+
+        return self.async_show_form(
+            step_id="code",
+            data_schema=STEP_CODE_SCHEMA,
+            description_placeholders={"email": self._email},
             errors=errors,
         )
+
+    @property
+    def _credentials_step_id(self) -> str:
+        return "reauth_confirm" if self.source == SOURCE_REAUTH else "user"
+
+    async def _async_start_login(self, password: str) -> ConfigFlowResult:
+        self._password = password
+        self._auth = await async_create_auth(self.hass, TionDeviceKey.generate())
+        return await self.async_step_captcha()
+
+    def _require_auth(self) -> TionAuth:
+        if self._auth is None:
+            raise RuntimeError("The credentials step creates the session first")
+        return self._auth
+
+    def _pop_login_error(self) -> dict[str, str]:
+        error, self._login_error = self._login_error, None
+        return {"base": error} if error else {}
+
+    def _finish_login(
+        self, device_key: TionDeviceKey, tokens: TionTokens
+    ) -> ConfigFlowResult:
+        data = {
+            CONF_EMAIL: self._email,
+            CONF_DEVICE_KEY: device_key.to_pem(),
+            CONF_DEVICE_KEY_ID: device_key.key_id(),
+            **tokens.as_entry_data(),
+        }
+        if self.source == SOURCE_REAUTH:
+            self._abort_if_unique_id_mismatch(reason="wrong_account")
+            return self.async_update_reload_and_abort(
+                self._get_reauth_entry(), title=self._email, data=data
+            )
+        self._abort_if_unique_id_configured()
+        return self.async_create_entry(title=self._email, data=data)
 
 
 class TionOptionsFlow(OptionsFlow):

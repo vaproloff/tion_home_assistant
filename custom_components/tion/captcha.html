@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tion</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0 auto; padding: 24px; max-width: 480px; }
+  .error { color: #b00020; }
+</style>
+</head>
+<body>
+<h1>Tion</h1>
+<p id="status">Загрузка проверки… / Loading the check…</p>
+<button id="retry" type="button" hidden>Повторить / Retry</button>
+<div id="captcha"></div>
+<script>
+const SITEKEY = __SITEKEY__;
+const POST_URL = __POST_URL__;
+let widgetId = null;
+let sending = false;
+
+function setStatus(text, isError) {
+  const status = document.getElementById("status");
+  status.textContent = text;
+  status.className = isError ? "error" : "";
+  document.getElementById("retry").hidden = !isError;
+}
+
+async function onToken(token) {
+  if (sending) return;
+  sending = true;
+  setStatus("Отправка… / Sending…", false);
+  try {
+    const response = await fetch(POST_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: token }),
+    });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+  } catch (err) {
+    sending = false;
+    setStatus("Не удалось отправить / Could not send: " + err.message, true);
+    return;
+  }
+  setStatus("Готово, вернитесь в Home Assistant. / Done, return to Home Assistant.", false);
+  window.close();
+}
+
+function start() {
+  setStatus("Проверка… / Checking…", false);
+  if (widgetId === null) {
+    widgetId = window.smartCaptcha.render(document.getElementById("captcha"), {
+      sitekey: SITEKEY,
+      hl: "ru",
+      invisible: true,
+      callback: onToken,
+    });
+    for (const event of ["network-error", "javascript-error"]) {
+      window.smartCaptcha.subscribe(widgetId, event, () =>
+        setStatus("Ошибка капчи / Captcha error: " + event, true));
+    }
+    window.smartCaptcha.subscribe(widgetId, "challenge-hidden", () => {
+      if (!sending) setStatus("Проверка прервана / Check cancelled", true);
+    });
+  } else {
+    window.smartCaptcha.reset(widgetId);
+  }
+  window.smartCaptcha.execute(widgetId);
+}
+
+function onCaptchaLoad() {
+  start();
+}
+
+document.getElementById("retry").addEventListener("click", start);
+</script>
+<script src="https://smartcaptcha.cloud.yandex.ru/captcha.js?render=onload&onload=onCaptchaLoad" defer></script>
+</body>
+</html>
