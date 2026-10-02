@@ -34,6 +34,7 @@ class FakeNatsServer:
         self.received = bytearray()
         self.client_frames = asyncio.Queue[bytes]()
         self.ws: web.WebSocketResponse | None = None
+        self.hung_up = asyncio.Event()
 
     async def handler(self, request: web.Request) -> web.WebSocketResponse:
         """Accept the WebSocket and play the script."""
@@ -60,6 +61,7 @@ class FakeNatsServer:
                     await ws.close()
             elif message.data == b"PING\r\n" and self.answer_pings:
                 await ws.send_bytes(b"PONG\r\n")
+        self.hung_up.set()
         return ws
 
     async def send(self, data: bytes) -> None:
@@ -172,6 +174,7 @@ async def test_handshake(
             TionConnectionError,
             id="other_error",
         ),
+        pytest.param(b"MSG s 1 x\r\n", TionConnectionError, id="malformed"),
     ],
 )
 @pytest.mark.asyncio
@@ -182,11 +185,31 @@ async def test_handshake_rejected(
     reply: bytes,
     error: type[TionError],
 ) -> None:
-    """A refused login raises by its kind."""
+    """A refused or garbled login raises by its kind and closes the socket."""
     server.handshake_reply = reply
 
     with pytest.raises(error):
         await _connect(server, session, create_task)
+
+    async with asyncio.timeout(2):
+        await server.hung_up.wait()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_handshake_closes_socket(
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
+) -> None:
+    """Cancelling the connect mid-handshake closes the WebSocket."""
+    server.handshake_reply = None
+    connecting = asyncio.create_task(_connect(server, session, create_task))
+    await _until(server, b"CONNECT ")
+
+    connecting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await connecting
+
+    async with asyncio.timeout(2):
+        await server.hung_up.wait()
 
 
 @pytest.mark.asyncio
@@ -395,6 +418,36 @@ async def test_server_error_right_after_login(
         await disconnects.event.wait()
 
     assert [type(item) for item in disconnects.errors] == [error]
+    assert connection.closed
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param(b"MSG s 1 x\r\n", id="size_not_a_number"),
+        pytest.param(b"MSG s 1 -1\r\n", id="negative_size"),
+        pytest.param(b"HMSG s 1 2 1\r\nx\r\n", id="headers_beyond_size"),
+        pytest.param(b"MSG\r\n", id="no_arguments"),
+        pytest.param(b"MSG \xff 1 1\r\nx\r\n", id="subject_not_utf8"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_malformed_message_reports_disconnect(
+    server: FakeNatsServer,
+    session: ClientSession,
+    create_task: TaskFactory | None,
+    data: bytes,
+) -> None:
+    """A garbled MSG after login drops the connection at once."""
+    disconnects = Disconnects()
+    connection = await _connect(server, session, create_task, disconnects)
+    await connection.async_subscribe("s", lambda subject, payload: None)
+
+    await server.send(data)
+    async with asyncio.timeout(2):
+        await disconnects.event.wait()
+
+    assert [type(error) for error in disconnects.errors] == [TionConnectionError]
     assert connection.closed
 
 

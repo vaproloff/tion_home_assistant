@@ -108,7 +108,7 @@ class NatsConnection:
         except TimeoutError as err:
             await ws.close()
             raise TionConnectionError("NATS handshake timed out") from err
-        except TionError:
+        except BaseException:
             await ws.close()
             raise
         connection._start()
@@ -246,13 +246,19 @@ class NatsConnection:
 
     def _take_message(self, op: bytes, args: list[bytes], start: int) -> bool:
         """Consume one MSG/HMSG; False if its payload has not arrived yet."""
-        total = int(args[-1])
-        header_length = int(args[-2]) if op == b"HMSG" else 0
+        try:
+            total = int(args[-1])
+            header_length = int(args[-2]) if op == b"HMSG" else 0
+            # A subject that is not UTF-8 raises UnicodeDecodeError, a ValueError.
+            subject, sid = args[0].decode(), args[1].decode()
+        except (ValueError, IndexError) as err:
+            raise TionConnectionError("NATS protocol error") from err
+        if not 0 <= header_length <= total:
+            raise TionConnectionError("NATS protocol error")
         if len(self._buffer) < start + total + len(_CRLF):
             return False
         body = bytes(self._buffer[start + header_length : start + total])
         del self._buffer[: start + total + len(_CRLF)]
-        subject, sid = args[0].decode(), args[1].decode()
         if (callback := self._subscriptions.get(sid)) is not None:
             try:
                 callback(subject, body)
