@@ -11,16 +11,23 @@ import pytest
 
 from custom_components.tion.api import cloud as cloud_module
 from custom_components.tion.api.cloud import TionCloud
-from custom_components.tion.api.datapoints import DPKind, DPValue, decode_dp_value
+from custom_components.tion.api.datapoints import (
+    DPKind,
+    DPValue,
+    decode_dp_value,
+    encode_update_request,
+)
 from custom_components.tion.api.exceptions import (
     TionApiError,
     TionAuthError,
+    TionCommandError,
     TionConnectionError,
     TionError,
 )
 from custom_components.tion.api.model import AutoControl
-from custom_components.tion.api.protobuf import ProtoMessage
-from custom_components.tion.api.views import Breezer, Station, view
+from custom_components.tion.api.protobuf import ProtoMessage, encode_varint
+from custom_components.tion.api.structure import encode_set_auto_control
+from custom_components.tion.api.views import Breezer, DeviceCommand, Station, view
 
 from .payloads import (  # noqa: TID251
     PROFILE_4S,
@@ -81,16 +88,20 @@ class FakeTransport:
         self.session = object()
         self.ssl_context = object()
         self.calls: list[tuple[str, str | None]] = []
+        self.payloads: list[tuple[str, bytes]] = []
         self.answers: dict[str, list[bytes | Exception]] = {
             "GetDeviceProfiles": [PROFILES],
             "GetFullStructureLocations": [_structure()],
+            "SetAutoControlParams": [encode_varint(1, 1)],
         }
 
     async def async_call(
         self, service: str, method: str, payload: bytes, token: str | None = None
     ) -> bytes:
-        """Record the call and answer it."""
+        """Record the call and answer it, yielding like real I/O."""
         self.calls.append((method, token))
+        self.payloads.append((method, payload))
+        await asyncio.sleep(0)
         queue = self.answers[method]
         answer = queue.pop(0) if len(queue) > 1 else queue[0]
         if isinstance(answer, Exception):
@@ -818,3 +829,206 @@ async def test_listeners(harness: Harness) -> None:
 
     assert count > 0
     assert len(calls) == count
+
+
+@pytest.mark.asyncio
+async def test_command_success(harness: Harness) -> None:
+    """A command is published and the answer's state lands in the snapshot."""
+    await harness.cloud.async_start()
+    connection = harness.broker.last
+    connection.published.clear()
+    before = harness.notifications
+
+    await harness.cloud.async_command(harness.breezer().command(speed=3))
+
+    ((subject, payload),) = connection.published
+    assert subject == f"hw.rx.{SID}.dpu.{BREEZER}"
+    request = ProtoMessage.parse(payload)
+    assert payload == encode_update_request(
+        request.get_int(2), int(SERVER_TIME), [DPValue(140, DPKind.INT, 3)]
+    )
+    assert harness.breezer().speed == 3
+    assert harness.notifications > before
+
+
+@pytest.mark.asyncio
+async def test_command_refused(harness: Harness) -> None:
+    """A device refusal raises TionCommandError with its code."""
+    await harness.cloud.async_start()
+    harness.broker.command_error = (5, "busy")
+
+    with pytest.raises(TionCommandError) as caught:
+        await harness.cloud.async_command(harness.breezer().command(speed=3))
+
+    assert (caught.value.code, caught.value.message) == (5, "busy")
+    assert harness.breezer().speed == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("short_replies")
+async def test_command_unanswered(harness: Harness) -> None:
+    """A device that does not answer in time is a connection error."""
+    await harness.cloud.async_start()
+    harness.broker.answer_commands = False
+
+    with pytest.raises(TionConnectionError):
+        await harness.cloud.async_command(harness.breezer().command(speed=3))
+
+
+@pytest.mark.asyncio
+async def test_command_when_disconnected(harness: Harness) -> None:
+    """Without the live channel commands fail at once."""
+    await harness.cloud.async_start()
+    command = harness.breezer().command(speed=3)
+    await harness.cloud.async_stop()
+
+    with pytest.raises(TionConnectionError):
+        await harness.cloud.async_command(command)
+
+
+@pytest.mark.asyncio
+async def test_command_interrupted_by_drop(harness: Harness) -> None:
+    """A drop while waiting for the answer fails the command."""
+    await harness.cloud.async_start()
+
+    def drop_on_command(connection: FakeNats, subject: str, payload: bytes) -> None:
+        connection.drop(TionConnectionError("gone"))
+
+    harness.broker.on_publish = drop_on_command
+
+    with pytest.raises(TionConnectionError):
+        await harness.cloud.async_command(harness.breezer().command(speed=3))
+
+
+@pytest.mark.asyncio
+async def test_command_for_unknown_device(harness: Harness) -> None:
+    """Commands must target a device of the account."""
+    await harness.cloud.async_start()
+
+    with pytest.raises(ValueError):
+        await harness.cloud.async_command(
+            DeviceCommand("NOPE000001", (DPValue(70, DPKind.BOOL, True),))
+        )
+
+
+def _sent_auto_controls(harness: Harness) -> list[bytes]:
+    return [
+        payload
+        for method, payload in harness.transport.payloads
+        if method == "SetAutoControlParams"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        pytest.param({"enabled": True}, AutoControl(True, 1, 5, 800, 1), id="enable"),
+        pytest.param(
+            {"speed_min": 2, "speed_max": 4},
+            AutoControl(False, 2, 4, 800, 1),
+            id="limits",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_set_auto_control_merges(
+    harness: Harness, changes: dict[str, Any], expected: AutoControl
+) -> None:
+    """Partial changes are merged onto the room's current auto mode."""
+    await harness.cloud.async_start()
+
+    await harness.cloud.async_set_auto_control(ROOM_ID, **changes)
+
+    assert _sent_auto_controls(harness) == [encode_set_auto_control(ROOM_ID, expected)]
+    room_info = harness.cloud.account.room(ROOM_ID)
+    assert room_info is not None
+    assert room_info.auto == expected
+
+
+@pytest.mark.asyncio
+async def test_set_auto_control_serializes_per_room(harness: Harness) -> None:
+    """Concurrent partial changes of one room do not lose a field."""
+    await harness.cloud.async_start()
+
+    await asyncio.gather(
+        harness.cloud.async_set_auto_control(ROOM_ID, enabled=True),
+        harness.cloud.async_set_auto_control(ROOM_ID, co2_target=900),
+    )
+
+    assert _sent_auto_controls(harness)[-1] == encode_set_auto_control(
+        ROOM_ID, AutoControl(True, 1, 5, 900, 1)
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_auto_control_server_error(harness: Harness) -> None:
+    """A refusal raises and leaves the room unchanged."""
+    await harness.cloud.async_start()
+    harness.transport.answers["SetAutoControlParams"] = [error_response(4, "busy")]
+
+    with pytest.raises(TionApiError):
+        await harness.cloud.async_set_auto_control(ROOM_ID, enabled=True)
+
+    room_info = harness.cloud.account.room(ROOM_ID)
+    assert room_info is not None
+    assert room_info.auto == AutoControl(False, 1, 5, 800, 1)
+
+
+@pytest.mark.asyncio
+async def test_set_auto_control_on_room_without_auto(harness: Harness) -> None:
+    """A room without auto mode needs every field; AVERAGE is assumed."""
+    harness.transport.answers["GetFullStructureLocations"] = [
+        structure_response(location(SID, rooms=(room(),)))
+    ]
+    await harness.cloud.async_start()
+
+    with pytest.raises(ValueError):
+        await harness.cloud.async_set_auto_control(ROOM_ID, enabled=True)
+    await harness.cloud.async_set_auto_control(
+        ROOM_ID, enabled=True, speed_min=1, speed_max=3, co2_target=800
+    )
+
+    room_info = harness.cloud.account.room(ROOM_ID)
+    assert room_info is not None
+    assert room_info.auto == AutoControl(True, 1, 3, 800, 1)
+
+
+@pytest.mark.parametrize(
+    ("room_id", "changes"),
+    [
+        pytest.param(ROOM_ID, {"speed_min": 6}, id="min_above_max"),
+        pytest.param(UUID(int=404), {"enabled": True}, id="unknown_room"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_set_auto_control_rejects(
+    harness: Harness, room_id: UUID, changes: dict[str, Any]
+) -> None:
+    """Invalid requests fail before reaching the server."""
+    await harness.cloud.async_start()
+
+    with pytest.raises(ValueError):
+        await harness.cloud.async_set_auto_control(room_id, **changes)
+
+    assert _sent_auto_controls(harness) == []
+
+
+@pytest.mark.asyncio
+async def test_command_uses_device_location(harness: Harness) -> None:
+    """A device of a second location is addressed on that location's subject."""
+    harness.transport.answers["GetFullStructureLocations"] = [
+        _structure(extra_location=True)
+    ]
+    await harness.cloud.async_start()
+    connection = harness.broker.last
+    connection.published.clear()
+    second = harness.cloud.account.device("BRZ0000002")
+    assert second is not None
+    second_view = view(second)
+    assert isinstance(second_view, Breezer)
+
+    await harness.cloud.async_command(second_view.command(is_on=True))
+
+    assert [subject for subject, _ in connection.published] == [
+        "hw.rx.LOC0000002.dpu.BRZ0000002"
+    ]

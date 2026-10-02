@@ -1,4 +1,4 @@
-"""TionCloud: the account's live state over gRPC and NATS."""
+"""TionCloud: the account's live state over gRPC and NATS, and its commands."""
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
@@ -19,25 +19,36 @@ from .datapoints import (
     device_reports_subject,
     device_subject,
     encode_state_query,
+    encode_update_request,
     location_events_subject,
     new_command_id,
     parse_device_subject,
     parse_location_event,
 )
-from .exceptions import TionApiError, TionAuthError, TionConnectionError, TionError
+from .exceptions import (
+    TionApiError,
+    TionAuthError,
+    TionCommandError,
+    TionConnectionError,
+    TionError,
+)
 from .model import AutoControl, Device, Location, TionAccount
 from .nats import NatsConnection, TaskFactory
 from .profiles import METHOD_GET_PROFILES, SVC_PROFILES, DeviceProfile, decode_profiles
 from .structure import (
     EVENT_AUTO_CONTROL_CHANGED,
     METHOD_GET_STRUCTURE,
+    METHOD_SET_AUTO_CONTROL,
     SVC_LOCATION_READER,
+    SVC_ROOM_WRITER,
     Structure,
+    check_set_auto_control,
     decode_auto_control_changed,
     decode_structure,
+    encode_set_auto_control,
 )
 from .transport import TionTransport
-from .views import view
+from .views import DeviceCommand, view
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,6 +103,7 @@ class TionCloud:
         self._pending_queries: dict[int, asyncio.Future[None]] = {}
         self._pending_commands: dict[int, asyncio.Future[DPUpdateResponse]] = {}
         self._listeners: list[Callable[[], None]] = []
+        self._room_locks: dict[UUID, asyncio.Lock] = {}
         self._reconnect_task: asyncio.Task[None] | None = None
         self._structure_task: asyncio.Task[None] | None = None
         self._started = False
@@ -152,6 +164,78 @@ class TionCloud:
             self._connection = None
             await connection.async_close()
         self._set_connected(False)
+
+    async def async_command(self, command: DeviceCommand) -> None:
+        """Send datapoint values to a device and wait for its answer."""
+        device = self._account.device(command.device_id)
+        location = self._account.location_of(device) if device is not None else None
+        if location is None:
+            raise ValueError(f"Unknown device {command.device_id}")
+        if (connection := self._connection) is None:
+            raise TionConnectionError("Tion live channel is not connected")
+        command_id = new_command_id()
+        future: asyncio.Future[DPUpdateResponse] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._pending_commands[command_id] = future
+        try:
+            await connection.async_publish(
+                device_subject(location.sid, SERVICE_UPDATE, command.device_id),
+                encode_update_request(
+                    command_id, int(self._transport.server_time()), command.values
+                ),
+            )
+            async with asyncio.timeout(REPLY_TIMEOUT):
+                response = await future
+        except TimeoutError as err:
+            raise TionConnectionError(
+                f"Device {command.device_id} did not answer the command"
+            ) from err
+        finally:
+            self._pending_commands.pop(command_id, None)
+            _discard(future)
+        if not response.success:
+            raise TionCommandError(response.error_code, response.error_message)
+
+    async def async_set_auto_control(
+        self,
+        room_id: UUID,
+        *,
+        enabled: bool | None = None,
+        speed_min: int | None = None,
+        speed_max: int | None = None,
+        co2_target: int | None = None,
+    ) -> None:
+        """Change a room's auto mode; unset fields keep their current values."""
+        changes = {
+            name: value
+            for name, value in (
+                ("enabled", enabled),
+                ("speed_min", speed_min),
+                ("speed_max", speed_max),
+                ("co2_target", co2_target),
+            )
+            if value is not None
+        }
+        async with self._room_locks.setdefault(room_id, asyncio.Lock()):
+            if (room := self._account.room(room_id)) is None:
+                raise ValueError(f"Unknown room {room_id}")
+            if room.auto is not None:
+                auto = replace(room.auto, **changes)
+            elif len(changes) == 4:
+                auto = AutoControl(**changes)
+            else:
+                raise ValueError(f"Room {room_id} has no auto mode; pass every field")
+            if auto.speed_min > auto.speed_max:
+                raise ValueError("speed_min must not exceed speed_max")
+            check_set_auto_control(
+                await self._call(
+                    SVC_ROOM_WRITER,
+                    METHOD_SET_AUTO_CONTROL,
+                    encode_set_auto_control(room_id, auto),
+                )
+            )
+            self._update_room(room_id, auto)
 
     async def _call(self, service: str, method: str, payload: bytes = b"") -> bytes:
         """Call an RPC, renewing the access token once if the server rejects it."""
