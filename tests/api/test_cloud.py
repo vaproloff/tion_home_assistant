@@ -462,7 +462,7 @@ async def test_bad_or_ignored_messages(harness: Harness, subject: str) -> None:
 
     harness.broker.last.deliver(subject, b"\xff")
 
-    assert harness.cloud.account == before
+    assert harness.cloud.account is before
     assert harness.cloud.connected
 
 
@@ -605,19 +605,55 @@ async def test_reconnect_after_drop(harness: Harness) -> None:
     assert harness.broker.last.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
 
 
+@pytest.mark.parametrize(
+    ("failures", "expected"),
+    [
+        pytest.param(2, [1.0, 2.0, 4.0], id="doubling"),
+        pytest.param(
+            8, [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0, 60.0, 60.0], id="capped"
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_reconnect_backs_off(harness: Harness) -> None:
-    """Failed attempts wait 1, 2, 4 ... seconds."""
+async def test_reconnect_backs_off(
+    harness: Harness, failures: int, expected: list[float]
+) -> None:
+    """Failed attempts wait 1, 2, 4 ... seconds, at most 60."""
     await harness.cloud.async_start()
-    harness.broker.connect_errors = [
-        TionConnectionError("down"),
-        TionConnectionError("down"),
-    ]
+    harness.broker.connect_errors = [TionConnectionError("down")] * failures
 
     harness.broker.last.drop(TionConnectionError("gone"))
     await _eventually(lambda: harness.cloud.connected)
 
-    assert harness.sleeps == [1.0, 2.0, 4.0]
+    assert harness.sleeps == expected
+
+
+@pytest.mark.asyncio
+async def test_reconnect_backoff_resets_after_success(harness: Harness) -> None:
+    """The next disconnect starts again at the shortest pause."""
+    await harness.cloud.async_start()
+
+    for reason in ("gone", "gone again"):
+        harness.broker.connect_errors = [TionConnectionError("down")]
+        harness.broker.last.drop(TionConnectionError(reason))
+        await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.sleeps == [1.0, 2.0, 1.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_survives_unreachable_renewal(harness: Harness) -> None:
+    """A token renewal that cannot reach the server is only a failed attempt."""
+    await harness.cloud.async_start()
+    harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
+    harness.auth.renew_error = TionConnectionError("offline")
+
+    harness.broker.last.drop(TionConnectionError("gone"))
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.sleeps == [1.0, 2.0]
+    assert harness.cloud.auth_error is None
+    assert len(harness.broker.connections) == 2
 
 
 @pytest.mark.asyncio
