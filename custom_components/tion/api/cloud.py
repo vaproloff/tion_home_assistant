@@ -289,13 +289,16 @@ class TionCloud:
                 await self._abandon(connection)
                 raise
         try:
-            await self._query_all()
-            if self._connection is not connection:
-                raise TionConnectionError("Live channel lost while connecting")
+            await self._poll_connecting(connection)
         except BaseException:
             await self._abandon(connection)
             raise
         self._set_connected(True)
+
+    async def _poll_connecting(self, connection: NatsConnection) -> None:
+        await self._query_all()
+        if self._connection is not connection:
+            raise TionConnectionError("Live channel lost while connecting")
 
     async def _abandon(self, connection: NatsConnection) -> None:
         """Forget and close a connection whose setup failed."""
