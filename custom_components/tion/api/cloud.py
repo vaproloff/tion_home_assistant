@@ -297,7 +297,9 @@ class TionCloud:
 
     async def _poll_connecting(self, connection: NatsConnection) -> None:
         await self._query_all()
-        if self._connection is not connection:
+        # An eager reader can lose the connection before async_connect returns,
+        # when its disconnect report still looks stale.
+        if self._connection is not connection or connection.closed:
             raise TionConnectionError("Live channel lost while connecting")
 
     async def _abandon(self, connection: NatsConnection) -> None:

@@ -14,7 +14,7 @@ from custom_components.tion.api.exceptions import (
     TionConnectionError,
     TionError,
 )
-from custom_components.tion.api.nats import NatsConnection, nats_error
+from custom_components.tion.api.nats import NatsConnection, TaskFactory, nats_error
 
 INFO = b'INFO {"server_id":"test","version":"2.14.6","auth_required":true}\r\n'
 # A device message as the Tion broker delivers it (MQTT bridge header).
@@ -28,6 +28,7 @@ class FakeNatsServer:
         """Start with a server that accepts the login."""
         self.url = ""
         self.handshake_reply: bytes | None = b"PONG\r\n"
+        self.after_login: bytes | None = None
         self.answer_pings = True
         self.protocol: str | None = None
         self.received = bytearray()
@@ -52,7 +53,10 @@ class FakeNatsServer:
                 if self.handshake_reply is None:
                     continue
                 await ws.send_bytes(self.handshake_reply)
-                if self.handshake_reply.startswith(b"-ERR"):
+                if self.after_login is not None:
+                    await ws.send_bytes(self.after_login)
+                    await ws.close()
+                elif self.handshake_reply.startswith(b"-ERR"):
                     await ws.close()
             elif message.data == b"PING\r\n" and self.answer_pings:
                 await ws.send_bytes(b"PONG\r\n")
@@ -107,6 +111,7 @@ class Disconnects:
 async def _connect(
     server: FakeNatsServer,
     session: ClientSession,
+    create_task: TaskFactory | None,
     disconnects: Disconnects | None = None,
     **kwargs: float,
 ) -> NatsConnection:
@@ -116,6 +121,7 @@ async def _connect(
         user="mappKEYID",
         auth_token="access:wstoken",
         on_disconnect=disconnects or Disconnects(),
+        create_task=create_task,
         **kwargs,
     )
 
@@ -128,9 +134,11 @@ async def _until(server: FakeNatsServer, data: bytes) -> None:
 
 
 @pytest.mark.asyncio
-async def test_handshake(server: FakeNatsServer, session: ClientSession) -> None:
+async def test_handshake(
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
+) -> None:
     """The client speaks maprot and sends the app's CONNECT, then PING."""
-    connection = await _connect(server, session)
+    connection = await _connect(server, session, create_task)
 
     assert server.protocol == "maprot"
     assert server.connect_options() == {
@@ -170,6 +178,7 @@ async def test_handshake(server: FakeNatsServer, session: ClientSession) -> None
 async def test_handshake_rejected(
     server: FakeNatsServer,
     session: ClientSession,
+    create_task: TaskFactory | None,
     reply: bytes,
     error: type[TionError],
 ) -> None:
@@ -177,18 +186,18 @@ async def test_handshake_rejected(
     server.handshake_reply = reply
 
     with pytest.raises(error):
-        await _connect(server, session)
+        await _connect(server, session, create_task)
 
 
 @pytest.mark.asyncio
 async def test_handshake_without_pong_times_out(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """A server that never answers the PING fails the connect."""
     server.handshake_reply = None
 
     with pytest.raises(TionConnectionError):
-        await _connect(server, session, connect_timeout=0.2)
+        await _connect(server, session, create_task, connect_timeout=0.2)
 
 
 @pytest.mark.asyncio
@@ -206,10 +215,10 @@ async def test_unreachable_server(session: ClientSession) -> None:
 
 @pytest.mark.asyncio
 async def test_messages_reach_subscribers(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """MSG and HMSG are delivered, even split across frames or batched."""
-    connection = await _connect(server, session)
+    connection = await _connect(server, session, create_task)
     received: list[tuple[str, bytes]] = []
     done = asyncio.Event()
 
@@ -247,10 +256,10 @@ async def test_messages_reach_subscribers(
 
 @pytest.mark.asyncio
 async def test_text_frames_are_accepted(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """Protocol data in WebSocket text frames is read like binary frames."""
-    connection = await _connect(server, session)
+    connection = await _connect(server, session, create_task)
     received: list[bytes] = []
     done = asyncio.Event()
 
@@ -271,10 +280,10 @@ async def test_text_frames_are_accepted(
 
 @pytest.mark.asyncio
 async def test_subscriber_error_does_not_stop_reading(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """A failing callback is logged; later messages still arrive."""
-    connection = await _connect(server, session)
+    connection = await _connect(server, session, create_task)
     received: list[bytes] = []
     done = asyncio.Event()
 
@@ -296,10 +305,10 @@ async def test_subscriber_error_does_not_stop_reading(
 
 @pytest.mark.asyncio
 async def test_publish_and_unsubscribe_bytes(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """PUB carries the payload length; UNSUB names the subscription."""
-    connection = await _connect(server, session)
+    connection = await _connect(server, session, create_task)
     sid = await connection.async_subscribe("s", lambda subject, payload: None)
 
     await connection.async_publish("hw.rx.LOC0000001.dpu.DEV0000001", b"\x10\x01")
@@ -312,10 +321,10 @@ async def test_publish_and_unsubscribe_bytes(
 
 @pytest.mark.asyncio
 async def test_server_ping_gets_pong(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """The client answers the server's keepalive."""
-    connection = await _connect(server, session)
+    connection = await _connect(server, session, create_task)
     server.received.clear()
 
     await server.send(b"PING\r\n")
@@ -326,12 +335,12 @@ async def test_server_ping_gets_pong(
 
 @pytest.mark.asyncio
 async def test_keepalive_timeout_reports_disconnect(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """Unanswered client PINGs drop the connection."""
     disconnects = Disconnects()
     connection = await _connect(
-        server, session, disconnects, ping_interval=0.05, pong_timeout=0.05
+        server, session, create_task, disconnects, ping_interval=0.05, pong_timeout=0.05
     )
     server.answer_pings = False
 
@@ -342,25 +351,24 @@ async def test_keepalive_timeout_reports_disconnect(
     assert connection.closed
 
 
-@pytest.mark.parametrize(
-    ("data", "error"),
-    [
-        pytest.param(
-            b"-ERR 'User Authentication Expired'\r\n", TionAuthError, id="auth"
-        ),
-        pytest.param(b"-ERR 'Stale Connection'\r\n", TionConnectionError, id="stale"),
-    ],
-)
+FATAL_ERRORS = [
+    pytest.param(b"-ERR 'User Authentication Expired'\r\n", TionAuthError, id="auth"),
+    pytest.param(b"-ERR 'Stale Connection'\r\n", TionConnectionError, id="stale"),
+]
+
+
+@pytest.mark.parametrize(("data", "error"), FATAL_ERRORS)
 @pytest.mark.asyncio
 async def test_server_error_reports_disconnect(
     server: FakeNatsServer,
     session: ClientSession,
+    create_task: TaskFactory | None,
     data: bytes,
     error: type[TionError],
 ) -> None:
     """A fatal -ERR after login is reported once, by kind."""
     disconnects = Disconnects()
-    await _connect(server, session, disconnects)
+    await _connect(server, session, create_task, disconnects)
 
     await server.send(data)
     async with asyncio.timeout(2):
@@ -369,13 +377,34 @@ async def test_server_error_reports_disconnect(
     assert [type(item) for item in disconnects.errors] == [error]
 
 
+@pytest.mark.parametrize(("data", "error"), FATAL_ERRORS)
+@pytest.mark.asyncio
+async def test_server_error_right_after_login(
+    server: FakeNatsServer,
+    session: ClientSession,
+    create_task: TaskFactory | None,
+    data: bytes,
+    error: type[TionError],
+) -> None:
+    """A fatal -ERR right behind the login PONG is reported by kind."""
+    server.after_login = data
+    disconnects = Disconnects()
+    connection = await _connect(server, session, create_task, disconnects)
+
+    async with asyncio.timeout(2):
+        await disconnects.event.wait()
+
+    assert [type(item) for item in disconnects.errors] == [error]
+    assert connection.closed
+
+
 @pytest.mark.asyncio
 async def test_server_close_reports_disconnect(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """The server hanging up is a connection error."""
     disconnects = Disconnects()
-    await _connect(server, session, disconnects)
+    await _connect(server, session, create_task, disconnects)
 
     assert server.ws is not None
     await server.ws.close()
@@ -387,11 +416,11 @@ async def test_server_close_reports_disconnect(
 
 @pytest.mark.asyncio
 async def test_permissions_violation_keeps_connection(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """A refused subscription is not fatal."""
     disconnects = Disconnects()
-    connection = await _connect(server, session, disconnects)
+    connection = await _connect(server, session, create_task, disconnects)
     server.received.clear()
 
     await server.send(b"-ERR 'Permissions Violation for Subscription to \"x\"'\r\n")
@@ -405,11 +434,11 @@ async def test_permissions_violation_keeps_connection(
 
 @pytest.mark.asyncio
 async def test_close_is_silent_and_final(
-    server: FakeNatsServer, session: ClientSession
+    server: FakeNatsServer, session: ClientSession, create_task: TaskFactory | None
 ) -> None:
     """Closing does not report a disconnect; later publishes fail."""
     disconnects = Disconnects()
-    connection = await _connect(server, session, disconnects)
+    connection = await _connect(server, session, create_task, disconnects)
 
     await connection.async_close()
     await asyncio.sleep(0.05)

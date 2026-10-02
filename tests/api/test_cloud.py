@@ -1,12 +1,16 @@
 """Tests for TionCloud on fake gRPC, session and NATS."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from aiohttp import ClientSession, WSMsgType, web
+from aiohttp.test_utils import TestServer
 import pytest
+import pytest_asyncio
 
 from custom_components.tion.api import cloud as cloud_module
 from custom_components.tion.api.auth import TionTokens
@@ -26,6 +30,7 @@ from custom_components.tion.api.exceptions import (
     TionError,
 )
 from custom_components.tion.api.model import AutoControl
+from custom_components.tion.api.nats import NatsConnection, TaskFactory
 from custom_components.tion.api.protobuf import ProtoMessage, encode_varint
 from custom_components.tion.api.structure import encode_set_auto_control
 from custom_components.tion.api.views import Breezer, DeviceCommand, Station, view
@@ -226,6 +231,7 @@ class FakeBroker:
         self.silent: set[str] = set()
         self.command_error: tuple[int, str] | None = None
         self.answer_commands = True
+        self.logins_lost = 0
 
     async def connect(self, session: object, **kwargs: Any) -> FakeNats:
         """Open a connection, or fail as scripted."""
@@ -233,6 +239,10 @@ class FakeBroker:
             raise self.connect_errors.pop(0)
         connection = FakeNats(self, {"session": session, **kwargs})
         self.connections.append(connection)
+        if self.logins_lost:
+            # An eager reader can see the loss before the connect returns.
+            self.logins_lost -= 1
+            connection.drop(TionConnectionError("lost after login"))
         return connection
 
     @property
@@ -269,7 +279,7 @@ class FakeBroker:
 class Harness:
     """A TionCloud wired to fakes, with recorded sleeps and notifications."""
 
-    def __init__(self) -> None:
+    def __init__(self, create_task: TaskFactory | None) -> None:
         """Build the fakes and the cloud."""
         self.transport = FakeTransport()
         self.auth = FakeAuth()
@@ -279,6 +289,7 @@ class Harness:
         self.cloud = TionCloud(
             self.transport,
             self.auth,
+            create_task=create_task,
             connect=self.broker.connect,
             sleep=self.sleep,
         )
@@ -350,9 +361,9 @@ BROKEN_POLLS = [
 
 
 @pytest.fixture
-def harness() -> Harness:
-    """A fresh harness."""
-    return Harness()
+def harness(create_task: TaskFactory | None) -> Harness:
+    """A fresh harness, with a lazy or an eager task factory."""
+    return Harness(create_task)
 
 
 @pytest.fixture
@@ -823,6 +834,68 @@ async def test_reconnect_retries_when_channel_breaks_during_poll(
         0,
     ]
     assert harness.broker.last.subjects() == [f"app.location.{SID}.*", f"hw.tx.{SID}.>"]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_retries_when_lost_during_login(harness: Harness) -> None:
+    """A connection already lost when handed over is never reported connected."""
+    harness.transport.answers["GetFullStructureLocations"] = [structure_response()]
+    await harness.cloud.async_start()
+    harness.broker.logins_lost = 1
+
+    harness.broker.last.drop(TionConnectionError("gone"))
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.sleeps == [1.0, 2.0]
+    assert len(harness.broker.connections) == 3
+    assert not harness.broker.last.closed
+
+
+@pytest_asyncio.fixture
+async def hanging_up_nats_url() -> AsyncIterator[str]:
+    """A NATS server that accepts the login, then reports an error and hangs up."""
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse(protocols=("maprot",))
+        await ws.prepare(request)
+        await ws.send_bytes(b"INFO {}\r\n")
+        async for message in ws:
+            if message.type is WSMsgType.BINARY and message.data.startswith(b"CONNECT"):
+                await ws.send_bytes(b"PONG\r\n")
+                await ws.send_bytes(b"-ERR 'Stale Connection'\r\n")
+                await ws.close()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/", handler)
+    server = TestServer(app, host="127.0.0.1")
+    await server.start_server()
+    yield str(server.make_url("/")).replace("http://", "ws://")
+    await server.close()
+
+
+@pytest.mark.parametrize("create_task", ["eager"], indirect=True)
+@pytest.mark.asyncio
+async def test_start_fails_when_real_channel_is_lost_during_login(
+    create_task: TaskFactory | None, hanging_up_nats_url: str
+) -> None:
+    """An eager reader that sees the loss inside the connect fails the start."""
+    transport = FakeTransport()
+    transport.answers["GetFullStructureLocations"] = [structure_response()]
+    transport.ssl_context = True
+
+    async with ClientSession() as session:
+        transport.session = session
+        cloud = TionCloud(
+            transport,
+            FakeAuth(),
+            create_task=create_task,
+            connect=partial(NatsConnection.async_connect, url=hanging_up_nats_url),
+        )
+        with pytest.raises(TionConnectionError):
+            await cloud.async_start()
+
+    assert not cloud.connected
 
 
 @pytest.mark.asyncio

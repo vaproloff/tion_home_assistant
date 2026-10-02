@@ -68,6 +68,8 @@ class NatsConnection:
         self._pongs: list[asyncio.Future[None]] = []
         self._handshake_error: TionError | None = None
         self._closed = False
+        # Set before the tasks exist: an eager reader runs inside _start().
+        self._running = False
         self._tasks: list[asyncio.Task[None]] = []
 
     @classmethod
@@ -144,6 +146,7 @@ class NatsConnection:
         raise TionConnectionError(f"NATS connection closed ({message.type.name})")
 
     def _start(self) -> None:
+        self._running = True
         self._tasks = [
             self._create_task(self._read_loop(), "tion_nats_reader"),
             self._create_task(self._ping_loop(), "tion_nats_keepalive"),
@@ -271,7 +274,7 @@ class NatsConnection:
                 _LOGGER.warning("NATS: %s", text)
                 return
             error = nats_error(text)
-            if self._tasks:
+            if self._running:
                 self._lost(error)
             else:
                 self._handshake_error = error
