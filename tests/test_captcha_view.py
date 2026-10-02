@@ -1,5 +1,6 @@
 """Tests for the captcha page that resumes the config flow."""
 
+import asyncio
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
@@ -188,6 +189,47 @@ async def test_flow_gone_during_configure_is_404(
     response = await client.post(captcha_url(FLOW_ID), json={"token": "dD0xtoken"})
 
     assert response.status == 404
+
+
+@pytest.mark.asyncio
+async def test_concurrent_post_is_rejected(hass: FakeHass, client: TestClient) -> None:
+    """A second POST arriving while the first is configuring gets 404."""
+    configure_event = asyncio.Event()
+
+    async def blocking_configure(
+        flow_id: str, user_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Block until released."""
+        hass.config_entries.flow.configured.append((flow_id, user_input))
+        await configure_event.wait()
+        hass.config_entries.flow.flows[flow_id] = {
+            **hass.config_entries.flow.flows[flow_id],
+            "step_id": "code",
+        }
+        return hass.config_entries.flow.flows[flow_id]
+
+    hass.config_entries.flow.async_configure = blocking_configure
+
+    # Send first POST and let it start blocking in async_configure
+    first_task = asyncio.create_task(
+        client.post(captcha_url(FLOW_ID), json={"token": "first"})
+    )
+    await asyncio.sleep(0.01)
+
+    # Send second POST while first is blocked
+    response = await client.post(captcha_url(FLOW_ID), json={"token": "second"})
+
+    assert response.status == 404
+    assert len(hass.config_entries.flow.configured) == 1
+    assert hass.config_entries.flow.configured[0] == (
+        FLOW_ID,
+        {CONF_CAPTCHA_TOKEN: "first"},
+    )
+
+    # Let first POST complete
+    configure_event.set()
+    first_response = await first_task
+    assert first_response.status == 204
 
 
 def test_register_view_once(hass: FakeHass) -> None:

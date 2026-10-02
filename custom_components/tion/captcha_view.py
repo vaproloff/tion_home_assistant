@@ -57,6 +57,7 @@ class TionCaptchaView(HomeAssistantView):
     def __init__(self) -> None:
         """Initialize the view."""
         self._template: str | None = None
+        self._in_flight: set[str] = set()
 
     async def get(self, request: web.Request, flow_id: str) -> web.Response:
         """Return the captcha page."""
@@ -84,10 +85,15 @@ class TionCaptchaView(HomeAssistantView):
         token = body.get("token") if isinstance(body, dict) else None
         if not isinstance(token, str) or not 0 < len(token) <= MAX_TOKEN_LENGTH:
             return web.Response(status=HTTPStatus.BAD_REQUEST)
+        if flow_id in self._in_flight or not _captcha_flow_open(hass, flow_id):
+            return web.Response(status=HTTPStatus.NOT_FOUND)
+        self._in_flight.add(flow_id)
         try:
             await hass.config_entries.flow.async_configure(
                 flow_id=flow_id, user_input={CONF_CAPTCHA_TOKEN: token}
             )
         except UnknownFlow:
             return web.Response(status=HTTPStatus.NOT_FOUND)
+        finally:
+            self._in_flight.discard(flow_id)
         return web.Response(status=HTTPStatus.NO_CONTENT)
