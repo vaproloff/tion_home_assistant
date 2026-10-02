@@ -1,7 +1,7 @@
 """Location structure: GetFullStructureLocations and room auto mode messages."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from .exceptions import TionApiError
@@ -161,19 +161,44 @@ def check_set_auto_control(payload: bytes) -> None:
         raise TionApiError(f"{METHOD_SET_AUTO_CONTROL}: unrecognized response")
 
 
-def decode_auto_control_changed(payload: bytes) -> tuple[UUID, AutoControl | None]:
-    """Decode an AutoControlChanged event into the room and its new auto mode."""
+@dataclass(frozen=True, slots=True)
+class AutoControlChange:
+    """An AutoControlChanged event; auto is None when it carries no params."""
+
+    room_id: UUID
+    enabled: bool
+    auto: AutoControl | None
+    removed: bool = False
+
+    def apply(self, current: AutoControl | None) -> AutoControl | None:
+        """Return the room's auto mode after the event, given the one before."""
+        if self.removed:
+            return None
+        if self.auto is not None:
+            return self.auto
+        # Without params only the switch changed; keep the user's settings.
+        return replace(current, enabled=self.enabled) if current is not None else None
+
+
+def decode_auto_control_changed(payload: bytes) -> AutoControlChange:
+    """Decode an AutoControlChanged event."""
     event = ProtoMessage.parse(payload)
     room_id = _wrapped_guid(event, 2)
     if room_id is None:
         raise TionApiError(f"{EVENT_AUTO_CONTROL_CHANGED} without a room")
+    enabled = event.get_bool(3)
     if event.get_bool(6):
-        return room_id, None
-    params = _wrapped(event, 5)
-    return room_id, AutoControl(
-        enabled=event.get_bool(3),
-        speed_min=params.get_int(1),
-        speed_max=params.get_int(2),
-        co2_target=params.get_int(3),
-        algorithm=params.get_int(4),
+        return AutoControlChange(room_id, enabled, None, removed=True)
+    if (params := event.get_message(5)) is None:
+        return AutoControlChange(room_id, enabled, None)
+    return AutoControlChange(
+        room_id,
+        enabled,
+        AutoControl(
+            enabled=enabled,
+            speed_min=params.get_int(1),
+            speed_max=params.get_int(2),
+            co2_target=params.get_int(3),
+            algorithm=params.get_int(4),
+        ),
     )

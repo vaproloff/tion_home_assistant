@@ -203,22 +203,55 @@ def test_check_set_auto_control_ok() -> None:
     check_set_auto_control(encode_varint(1, 1))
 
 
+CURRENT_AUTO = AutoControl(False, 1, 5, 800, 2)
+
+
 @pytest.mark.parametrize(
-    ("removed", "expected"),
+    ("payload", "current", "expected"),
     [
-        pytest.param(False, AutoControl(True, 2, 4, 700, 1), id="changed"),
-        pytest.param(True, None, id="removed"),
+        pytest.param(
+            auto_control_changed(
+                ROOM_ID, enabled=True, speed_min=2, speed_max=4, co2_target=700
+            ),
+            CURRENT_AUTO,
+            AutoControl(True, 2, 4, 700, 1),
+            id="changed",
+        ),
+        pytest.param(
+            auto_control_changed(
+                ROOM_ID,
+                enabled=True,
+                speed_min=2,
+                speed_max=4,
+                co2_target=700,
+                removed=True,
+            ),
+            CURRENT_AUTO,
+            None,
+            id="removed",
+        ),
+        pytest.param(
+            auto_control_changed(ROOM_ID, enabled=True),
+            CURRENT_AUTO,
+            AutoControl(True, 1, 5, 800, 2),
+            id="switch_only",
+        ),
+        pytest.param(
+            auto_control_changed(ROOM_ID, enabled=True),
+            None,
+            None,
+            id="switch_only_without_auto",
+        ),
     ],
 )
 def test_decode_auto_control_changed(
-    removed: bool, expected: AutoControl | None
+    payload: bytes, current: AutoControl | None, expected: AutoControl | None
 ) -> None:
-    """The event names the room and its new auto mode, or None when removed."""
-    payload = auto_control_changed(
-        ROOM_ID, enabled=True, speed_min=2, speed_max=4, co2_target=700, removed=removed
-    )
+    """The event names the room; without params only the switch changes."""
+    change = decode_auto_control_changed(payload)
 
-    assert decode_auto_control_changed(payload) == (ROOM_ID, expected)
+    assert change.room_id == ROOM_ID
+    assert change.apply(current) == expected
 
 
 def test_auto_control_changed_without_room() -> None:

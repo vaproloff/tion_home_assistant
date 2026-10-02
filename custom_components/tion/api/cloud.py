@@ -32,7 +32,7 @@ from .exceptions import (
     TionConnectionError,
     TionError,
 )
-from .model import AutoControl, Device, Location, TionAccount
+from .model import AutoControl, AutoControlAlgorithm, Device, Location, TionAccount
 from .nats import NatsConnection, TaskFactory
 from .profiles import METHOD_GET_PROFILES, SVC_PROFILES, DeviceProfile, decode_profiles
 from .structure import (
@@ -224,8 +224,11 @@ class TionCloud:
         async with self._room_locks.setdefault(room_id, asyncio.Lock()):
             if (room := self._account.room(room_id)) is None:
                 raise ValueError(f"Unknown room {room_id}")
-            if room.auto is not None:
-                auto = replace(room.auto, **changes)
+            # speed_max 0 is an unset auto mode (e.g. an empty message), not settings.
+            if (current := room.auto) is not None and current.speed_max > 0:
+                if current.algorithm not in AutoControlAlgorithm:
+                    current = replace(current, algorithm=AutoControlAlgorithm.AVERAGE)
+                auto = replace(current, **changes)
             elif len(changes) == 4:
                 auto = AutoControl(**changes)
             else:
@@ -239,7 +242,7 @@ class TionCloud:
                     encode_set_auto_control(room_id, auto),
                 )
             )
-            self._update_room(room_id, auto)
+            self._update_room(room_id, lambda _: auto)
 
     async def _call(self, service: str, method: str, payload: bytes = b"") -> bytes:
         """Call an RPC, renewing the access token once if the server rejects it."""
@@ -404,11 +407,11 @@ class TionCloud:
             self._schedule_structure_refresh()
             return
         try:
-            room_id, auto = decode_auto_control_changed(payload)
+            change = decode_auto_control_changed(payload)
         except TionApiError as err:
             _LOGGER.warning("Skipping malformed %s: %s", event, err)
             return
-        self._update_room(room_id, auto)
+        self._update_room(change.room_id, change.apply)
 
     @staticmethod
     def _resolve(pending: dict[int, asyncio.Future[Any]], key: int, value: Any) -> None:
@@ -424,12 +427,19 @@ class TionCloud:
             current[value.dp_id] = value
         self._rebuild()
 
-    def _update_room(self, room_id: UUID, auto: AutoControl | None) -> None:
+    def _update_room(
+        self,
+        room_id: UUID,
+        update: Callable[[AutoControl | None], AutoControl | None],
+    ) -> None:
+        """Replace the room's auto mode with update(current auto mode)."""
         self._locations = tuple(
             replace(
                 location,
                 rooms=tuple(
-                    replace(room, auto=auto) if room.id == room_id else room
+                    replace(room, auto=update(room.auto))
+                    if room.id == room_id
+                    else room
                     for room in location.rooms
                 ),
             )

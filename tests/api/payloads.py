@@ -168,23 +168,21 @@ def auto_control_changed(
     room_id: UUID,
     *,
     enabled: bool,
-    speed_min: int,
-    speed_max: int,
-    co2_target: int,
+    speed_min: int | None = None,
+    speed_max: int | None = None,
+    co2_target: int | None = None,
     removed: bool = False,
 ) -> bytes:
-    """Encode an app.events.AutoControlChanged event."""
-    params = (
-        encode_varint(1, speed_min)
-        + encode_varint(2, speed_max)
-        + encode_varint(3, co2_target)
-        + encode_varint(4, 1)
-    )
-    payload = (
-        _wrapped_guid(2, room_id)
-        + encode_varint(3, int(enabled))
-        + encode_bytes(5, params)
-    )
+    """Encode an app.events.AutoControlChanged event; params only with all limits."""
+    payload = _wrapped_guid(2, room_id) + encode_varint(3, int(enabled))
+    if speed_min is not None and speed_max is not None and co2_target is not None:
+        params = (
+            encode_varint(1, speed_min)
+            + encode_varint(2, speed_max)
+            + encode_varint(3, co2_target)
+            + encode_varint(4, 1)
+        )
+        payload += encode_bytes(5, params)
     if removed:
         payload += encode_varint(6, 1)
     return payload

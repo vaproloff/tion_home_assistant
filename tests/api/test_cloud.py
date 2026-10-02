@@ -480,30 +480,35 @@ async def test_bad_or_ignored_messages(harness: Harness, subject: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("removed", "expected"),
+    ("payload", "expected"),
     [
-        pytest.param(False, AutoControl(True, 2, 4, 700, 1), id="changed"),
-        pytest.param(True, None, id="removed"),
+        pytest.param(
+            auto_control_changed(
+                ROOM_ID, enabled=True, speed_min=2, speed_max=4, co2_target=700
+            ),
+            AutoControl(True, 2, 4, 700, 1),
+            id="changed",
+        ),
+        pytest.param(
+            auto_control_changed(ROOM_ID, enabled=True, removed=True),
+            None,
+            id="removed",
+        ),
+        pytest.param(
+            auto_control_changed(ROOM_ID, enabled=True),
+            AutoControl(True, 1, 5, 800, 1),
+            id="switch_only",
+        ),
     ],
 )
 @pytest.mark.asyncio
 async def test_auto_control_changed_event(
-    harness: Harness, removed: bool, expected: AutoControl | None
+    harness: Harness, payload: bytes, expected: AutoControl | None
 ) -> None:
     """Room auto mode follows AutoControlChanged events."""
     await harness.cloud.async_start()
 
-    harness.broker.last.deliver(
-        f"app.location.{SID}.AutoControlChanged",
-        auto_control_changed(
-            ROOM_ID,
-            enabled=True,
-            speed_min=2,
-            speed_max=4,
-            co2_target=700,
-            removed=removed,
-        ),
-    )
+    harness.broker.last.deliver(f"app.location.{SID}.AutoControlChanged", payload)
 
     room_info = harness.cloud.account.room(ROOM_ID)
     assert room_info is not None
@@ -1139,11 +1144,24 @@ async def test_set_auto_control_server_error(harness: Harness) -> None:
     assert room_info.auto == AutoControl(False, 1, 5, 800, 1)
 
 
+@pytest.mark.parametrize(
+    "auto",
+    [
+        pytest.param(None, id="no_auto"),
+        pytest.param(b"", id="empty_auto"),
+        pytest.param(
+            auto_control(enabled=True, speed_min=0, speed_max=0, co2_target=0),
+            id="zero_speed_max",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_set_auto_control_on_room_without_auto(harness: Harness) -> None:
-    """A room without auto mode needs every field; AVERAGE is assumed."""
+async def test_set_auto_control_on_room_without_auto(
+    harness: Harness, auto: bytes | None
+) -> None:
+    """A room without a usable auto mode needs every field; AVERAGE is assumed."""
     harness.transport.answers["GetFullStructureLocations"] = [
-        structure_response(location(SID, rooms=(room(),)))
+        structure_response(location(SID, rooms=(room(auto=auto),)))
     ]
     await harness.cloud.async_start()
 
@@ -1156,6 +1174,46 @@ async def test_set_auto_control_on_room_without_auto(harness: Harness) -> None:
     room_info = harness.cloud.account.room(ROOM_ID)
     assert room_info is not None
     assert room_info.auto == AutoControl(True, 1, 3, 800, 1)
+
+
+@pytest.mark.parametrize(
+    ("algorithm", "expected"),
+    [
+        pytest.param(0, 1, id="unset"),
+        pytest.param(2, 2, id="maximum"),
+        pytest.param(7, 1, id="unknown"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_set_auto_control_algorithm(
+    harness: Harness, algorithm: int, expected: int
+) -> None:
+    """A known algorithm is kept; anything else is written as AVERAGE."""
+    harness.transport.answers["GetFullStructureLocations"] = [
+        structure_response(
+            location(
+                SID,
+                rooms=(
+                    room(
+                        auto=auto_control(
+                            enabled=False,
+                            speed_min=1,
+                            speed_max=5,
+                            co2_target=800,
+                            algorithm=algorithm,
+                        )
+                    ),
+                ),
+            )
+        )
+    ]
+    await harness.cloud.async_start()
+
+    await harness.cloud.async_set_auto_control(ROOM_ID, enabled=True)
+
+    assert _sent_auto_controls(harness) == [
+        encode_set_auto_control(ROOM_ID, AutoControl(True, 1, 5, 800, expected))
+    ]
 
 
 @pytest.mark.parametrize(
