@@ -18,7 +18,8 @@ _LOGGER = logging.getLogger(__name__)
 NATS_URL = "wss://hwgate-v4.magicair.tion.ru:443"
 SUBPROTOCOL = "maprot"
 CONNECT_TIMEOUT = 10.0
-PING_INTERVAL = 30.0
+# Gateway drops clients that ping less often; the Tion app pings every 15 s.
+PING_INTERVAL = 15.0
 PONG_TIMEOUT = 10.0
 # The Tion app's client identity; the server sees no difference from it.
 CLIENT_INFO = {"name": "mappV1.1.1225", "lang": "nats.ws", "version": "3.3.1"}
