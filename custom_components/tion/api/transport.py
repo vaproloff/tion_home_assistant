@@ -8,6 +8,7 @@ import ssl
 import struct
 import time
 from urllib.parse import unquote
+from uuid import UUID
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 import certifi
@@ -131,7 +132,13 @@ class TionTransport:
         return time.time() + self.server_time_offset
 
     async def async_call(
-        self, service: str, method: str, payload: bytes, token: str | None = None
+        self,
+        service: str,
+        method: str,
+        payload: bytes,
+        token: str | None = None,
+        *,
+        location_id: UUID | None = None,
     ) -> bytes:
         """Call a unary RPC and return the response message bytes."""
         headers = {
@@ -141,6 +148,8 @@ class TionTransport:
         }
         if token:
             headers["authorization"] = f"Bearer {token}"
+        if location_id is not None:
+            headers["locationid"] = str(location_id)
         try:
             async with self._session.post(
                 f"{self._base_url}/{service}/{method}",

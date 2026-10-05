@@ -36,6 +36,7 @@ from custom_components.tion.api.structure import encode_set_auto_control
 from custom_components.tion.api.views import Breezer, DeviceCommand, Station, view
 
 from .payloads import (  # noqa: TID251
+    LOCATION_ID,
     PROFILE_4S,
     PROFILE_BS310,
     PROFILE_CLEVER,
@@ -56,6 +57,8 @@ SID = "LOC0000001"
 BREEZER = "BRZ0000001"
 STATION = "MAG0000001"
 SERVER_TIME = 1_790_865_786.0
+SECOND_LOCATION_ID = UUID(int=9)
+SECOND_ROOM_ID = UUID(int=10)
 DEVICE_KEY = TionDeviceKey.generate()
 
 
@@ -80,7 +83,15 @@ def _structure(*, wstoken: str = "ws-1", extra_location: bool = False) -> bytes:
         locations.append(
             location(
                 "LOC0000002",
-                location_id=UUID(int=9),
+                location_id=SECOND_LOCATION_ID,
+                rooms=(
+                    room(
+                        SECOND_ROOM_ID,
+                        auto=auto_control(
+                            enabled=False, speed_min=1, speed_max=5, co2_target=800
+                        ),
+                    ),
+                ),
                 devices=(device("BRZ0000002", PROFILE_4S, room_id=None),),
             )
         )
@@ -96,6 +107,7 @@ class FakeTransport:
         self.ssl_context = object()
         self.calls: list[tuple[str, str | None]] = []
         self.payloads: list[tuple[str, bytes]] = []
+        self.location_ids: list[tuple[str, UUID | None]] = []
         self.answers: dict[str, list[bytes | Exception]] = {
             "GetDeviceProfiles": [PROFILES],
             "GetFullStructureLocations": [_structure()],
@@ -103,10 +115,17 @@ class FakeTransport:
         }
 
     async def async_call(
-        self, service: str, method: str, payload: bytes, token: str | None = None
+        self,
+        service: str,
+        method: str,
+        payload: bytes,
+        token: str | None = None,
+        *,
+        location_id: UUID | None = None,
     ) -> bytes:
         """Record the call and answer it, yielding like real I/O."""
         self.calls.append((method, token))
+        self.location_ids.append((method, location_id))
         self.payloads.append((method, payload))
         await asyncio.sleep(0)
         queue = self.answers[method]
@@ -1292,3 +1311,61 @@ async def test_command_uses_device_location(harness: Harness) -> None:
     assert [subject for subject, _ in connection.published] == [
         "hw.rx.LOC0000002.dpu.BRZ0000002"
     ]
+
+
+def _location_ids(harness: Harness, method: str) -> list[UUID | None]:
+    return [
+        location_id
+        for called, location_id in harness.transport.location_ids
+        if called == method
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_auto_control_sends_the_rooms_location_id(
+    harness: Harness,
+) -> None:
+    """The room RPC names the location that holds the room."""
+    await harness.cloud.async_start()
+
+    await harness.cloud.async_set_auto_control(ROOM_ID, enabled=True)
+
+    assert _location_ids(harness, "SetAutoControlParams") == [LOCATION_ID]
+
+
+@pytest.mark.asyncio
+async def test_set_auto_control_uses_room_location(harness: Harness) -> None:
+    """A room of a second location sends that location's id."""
+    harness.transport.answers["GetFullStructureLocations"] = [
+        _structure(extra_location=True)
+    ]
+    await harness.cloud.async_start()
+
+    await harness.cloud.async_set_auto_control(SECOND_ROOM_ID, enabled=True)
+
+    assert _location_ids(harness, "SetAutoControlParams") == [SECOND_LOCATION_ID]
+
+
+@pytest.mark.asyncio
+async def test_set_auto_control_retry_keeps_location_id(harness: Harness) -> None:
+    """The retry after a token renewal still carries the location id."""
+    await harness.cloud.async_start()
+    harness.transport.answers["SetAutoControlParams"] = [
+        TionAuthError("401"),
+        encode_varint(1, 1),
+    ]
+
+    await harness.cloud.async_set_auto_control(ROOM_ID, enabled=True)
+
+    assert _location_ids(harness, "SetAutoControlParams") == [LOCATION_ID] * 2
+
+
+@pytest.mark.asyncio
+async def test_structure_and_profile_calls_have_no_location_id(
+    harness: Harness,
+) -> None:
+    """Only room RPCs are location-scoped."""
+    await harness.cloud.async_start()
+
+    assert _location_ids(harness, "GetFullStructureLocations") == [None]
+    assert _location_ids(harness, "GetDeviceProfiles") == [None]

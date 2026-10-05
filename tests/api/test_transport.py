@@ -3,6 +3,7 @@
 import ssl
 from types import SimpleNamespace
 from typing import Any, Self
+from uuid import UUID
 
 from aiohttp import ClientConnectionError
 from multidict import CIMultiDict
@@ -145,6 +146,31 @@ async def test_call_without_token_sends_no_authorization() -> None:
     await TionTransport(session, SSL_CONTEXT).async_call("s", "m", b"")
 
     assert "authorization" not in session.calls[0].headers
+
+
+@pytest.mark.asyncio
+async def test_call_sends_location_id_header() -> None:
+    """A location-scoped call carries the location UUID as a lowercase string."""
+    session = FakeSession(_ok())
+    location_id = UUID("0A1B2C3D-0000-4000-8000-00000000ABCD")
+
+    await TionTransport(session, SSL_CONTEXT).async_call(
+        "s", "m", b"", "jwt", location_id=location_id
+    )
+
+    assert session.calls[0].headers["locationid"] == (
+        "0a1b2c3d-0000-4000-8000-00000000abcd"
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_without_location_id_sends_no_header() -> None:
+    """Calls that are not location-scoped send no locationid header."""
+    session = FakeSession(_ok())
+
+    await TionTransport(session, SSL_CONTEXT).async_call("s", "m", b"", "jwt")
+
+    assert "locationid" not in session.calls[0].headers
 
 
 @pytest.mark.asyncio

@@ -223,7 +223,15 @@ class TionCloud:
             if value is not None
         }
         async with self._room_locks.setdefault(room_id, asyncio.Lock()):
-            if (room := self._account.room(room_id)) is None:
+            location = next(
+                (
+                    location
+                    for location in self._account.locations
+                    if any(room.id == room_id for room in location.rooms)
+                ),
+                None,
+            )
+            if location is None or (room := self._account.room(room_id)) is None:
                 raise ValueError(f"Unknown room {room_id}")
             # speed_max 0 is an unset auto mode (e.g. an empty message), not settings.
             if (current := room.auto) is not None and current.speed_max > 0:
@@ -241,19 +249,33 @@ class TionCloud:
                     SVC_ROOM_WRITER,
                     METHOD_SET_AUTO_CONTROL,
                     encode_set_auto_control(room_id, auto),
+                    location_id=location.id,
                 )
             )
             self._update_room(room_id, lambda _: auto)
 
-    async def _call(self, service: str, method: str, payload: bytes = b"") -> bytes:
+    async def _call(
+        self,
+        service: str,
+        method: str,
+        payload: bytes = b"",
+        *,
+        location_id: UUID | None = None,
+    ) -> bytes:
         """Call an RPC, renewing the access token once if the server rejects it."""
         token = await self._auth.async_ensure_valid()
         try:
-            return await self._transport.async_call(service, method, payload, token)
+            return await self._transport.async_call(
+                service, method, payload, token, location_id=location_id
+            )
         except TionAuthError:
             tokens = await self._auth.async_renew_access()
             return await self._transport.async_call(
-                service, method, payload, tokens.access_token
+                service,
+                method,
+                payload,
+                tokens.access_token,
+                location_id=location_id,
             )
 
     async def _load_profiles(self) -> None:
