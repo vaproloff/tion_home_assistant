@@ -1,6 +1,7 @@
 """Tests for the Tion cloud objects bound to Home Assistant."""
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from aiohttp import ClientSession
@@ -9,6 +10,7 @@ import pytest
 from custom_components.tion import session
 from custom_components.tion.api.auth import TionAuth, TionTokens
 from custom_components.tion.api.device_key import TionDeviceKey
+from custom_components.tion.api.nats import TaskFactory
 from custom_components.tion.api.transport import TionTransport, create_ssl_context
 
 TOKENS = TionTokens(
@@ -66,3 +68,35 @@ async def test_create_auth_binds_key_and_tokens() -> None:
     assert isinstance(auth, TionAuth)
     assert auth.device_key is key
     assert auth.tokens == TOKENS
+
+
+class RecordingCloud:
+    """Records how the session helper builds the cloud."""
+
+    def __init__(
+        self, transport: TionTransport, auth: TionAuth, *, create_task: TaskFactory
+    ) -> None:
+        """Keep the arguments."""
+        self.transport = transport
+        self.auth = auth
+        self.create_task = create_task
+
+
+@pytest.mark.asyncio
+async def test_create_cloud_binds_session_and_task_factory(
+    monkeypatch: pytest.MonkeyPatch, shared_session: ClientSession
+) -> None:
+    """The cloud gets the logged-in session, HA's client and the task factory."""
+    monkeypatch.setattr(session, "TionCloud", RecordingCloud)
+    key = TionDeviceKey.generate()
+
+    def create_task(coro: Coroutine[Any, Any, None], name: str) -> asyncio.Task[None]:
+        raise AssertionError("not started here")
+
+    auth, cloud = await session.async_create_cloud(FakeHass(), key, TOKENS, create_task)
+
+    assert isinstance(cloud, RecordingCloud)
+    assert (auth.device_key, auth.tokens) == (key, TOKENS)
+    assert cloud.auth is auth
+    assert cloud.transport.session is shared_session
+    assert cloud.create_task is create_task

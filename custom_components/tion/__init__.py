@@ -1,114 +1,113 @@
-"""The Tion component."""
+"""The Tion integration."""
 
 import logging
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
-from .client import TionClient
-from .const import (
-    AUTH_DATA,
-    DEFAULT_SCAN_INTERVAL,
-    DOMAIN,
-    MANUFACTURER,
-    MODELS_SUPPORTED,
-    PLATFORMS,
+from .api import (
+    TionAccount,
+    TionAuthError,
+    TionConnectionError,
+    TionDeviceKey,
+    TionError,
+    TionTokens,
+    view,
 )
-from .coordinator import TionDataUpdateCoordinator
-from .pid_manager import TionPidManager
+from .const import CONF_DEVICE_KEY, DOMAIN, MANUFACTURER, MODEL_NAMES, PLATFORMS
+from .coordinator import TionConfigEntry, TionCoordinator
+from .session import async_create_cloud
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
-    """Set up this integration using UI."""
-    _LOGGER.debug("Setting up %s config entry %s", DOMAIN, entry.entry_id)
+async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool:
+    """Set up a Tion account from a config entry."""
+    try:
+        device_key = TionDeviceKey.from_pem(entry.data[CONF_DEVICE_KEY])
+        tokens = TionTokens.from_dict(entry.data)
+    except (KeyError, TypeError, ValueError) as err:
+        # Entries from before the v4 login hold a username and a password.
+        raise ConfigEntryAuthFailed(
+            translation_domain=DOMAIN, translation_key="auth_failed"
+        ) from err
 
-    hass.data.setdefault(DOMAIN, {})
-
-    async def update_auth_data(profile_name: str, token: str) -> None:
-        entry_data = entry.data.get(AUTH_DATA)
-        auth = dict(entry_data) if isinstance(entry_data, dict) else {}
-        auth[profile_name] = token
-
-        hass.config_entries.async_update_entry(
-            entry, data={**entry.data, AUTH_DATA: auth}
-        )
-
-    session = async_create_clientsession(hass)
-    scan_interval = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-    client = TionClient(
-        session,
-        username=entry.data[CONF_USERNAME],
-        password=entry.data[CONF_PASSWORD],
-        min_update_interval_sec=scan_interval,
-        auth=entry.data.get(AUTH_DATA),
+    auth, cloud = await async_create_cloud(
+        hass,
+        device_key,
+        tokens,
+        lambda coro, name: entry.async_create_background_task(hass, coro, name),
     )
-    client.add_update_listener(update_auth_data)
 
-    coordinator = TionDataUpdateCoordinator(hass, entry, client, scan_interval)
-    pid_manager = TionPidManager(hass, entry, coordinator)
-    coordinator.pid_manager = pid_manager
-    await coordinator.async_config_entry_first_refresh()
-    entry.async_on_unload(pid_manager.async_start())
-    hass.data[DOMAIN][entry.entry_id] = coordinator
-
-    device_registry = dr.async_get(hass)
-
-    for device in coordinator.get_devices():
-        _LOGGER.debug(
-            "Adding device: type - %s, device name - %s", device.type, device.name
+    @callback
+    def _save_tokens(new_tokens: TionTokens) -> None:
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, **new_tokens.as_dict()}
         )
-        if not device.guid:
-            _LOGGER.debug("Skipped device %s without guid", device.name)
-            continue
 
-        if device.type in MODELS_SUPPORTED:
-            connections = (
-                {(dr.CONNECTION_NETWORK_MAC, device.mac)} if device.mac else set()
-            )
-            device_registry.async_get_or_create(
-                config_entry_id=entry.entry_id,
-                connections=connections,
-                identifiers={(DOMAIN, device.guid)},
-                manufacturer=MANUFACTURER,
-                model=MODELS_SUPPORTED.get(device.type),
-                model_id=device.type,
-                name=device.name,
-                sw_version=device.firmware,
-                hw_version=device.hardware,
-            )
-        else:
-            _LOGGER.debug("Unsupported device type: %s", device.type)
+    entry.async_on_unload(auth.add_update_listener(_save_tokens))
 
-    entry.async_on_unload(entry.add_update_listener(async_update_options))
+    try:
+        await cloud.async_start()
+    except TionAuthError as err:
+        raise ConfigEntryAuthFailed(
+            translation_domain=DOMAIN, translation_key="auth_failed"
+        ) from err
+    except TionConnectionError as err:
+        raise ConfigEntryNotReady(
+            translation_domain=DOMAIN, translation_key="cloud_unavailable"
+        ) from err
+    except TionError as err:
+        raise ConfigEntryNotReady(
+            translation_domain=DOMAIN,
+            translation_key="cloud_error",
+            translation_placeholders={"message": str(err)},
+        ) from err
+    # Unload callbacks run last-in first-out: the coordinator, registered
+    # below, stops listening before the cloud stops.
+    entry.async_on_unload(cloud.async_stop)
 
+    entry.runtime_data = TionCoordinator(hass, entry, cloud)
+    _register_devices(hass, entry, cloud.account)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     return True
 
 
-async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
-    """Handle updating entry options."""
-    _LOGGER.debug("Updating %s config entry options %s", DOMAIN, entry.entry_id)
-    await hass.config_entries.async_reload(entry.entry_id)
+async def async_unload_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool:
+    """Unload a config entry."""
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Handle removal of an entry."""
-    _LOGGER.debug("Unloading %s config entry %s", DOMAIN, entry.entry_id)
-    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unloaded:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: TionConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow removing a device the account no longer has."""
+    account = entry.runtime_data.data
+    return not any(
+        domain == DOMAIN and account.device(device_id) is not None
+        for domain, device_id in device_entry.identifiers
+    )
 
-    return unloaded
 
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    _LOGGER.debug("Reloading %s config entry %s", DOMAIN, entry.entry_id)
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
+def _register_devices(
+    hass: HomeAssistant, entry: TionConfigEntry, account: TionAccount
+) -> None:
+    registry = dr.async_get(hass)
+    for device in account.devices():
+        if view(device) is None:
+            _LOGGER.debug("Skipping unsupported Tion device model %s", device.model)
+            continue
+        room = account.room_of(device)
+        registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, device.id)},
+            connections={(dr.CONNECTION_NETWORK_MAC, mac) for mac in device.macs},
+            manufacturer=MANUFACTURER,
+            model=MODEL_NAMES[device.product_id],
+            model_id=device.product_id,
+            name=device.name,
+            sw_version=str(device.firmware),
+            hw_version=str(device.hardware),
+            suggested_area=room.name if room is not None else None,
+        )

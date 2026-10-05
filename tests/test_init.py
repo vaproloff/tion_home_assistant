@@ -1,189 +1,216 @@
-"""Tests for the Tion integration setup entry update listeners."""
+"""Tests for setting up and unloading a Tion account."""
 
-import asyncio
-from collections.abc import Awaitable, Callable
 from typing import Any
 
+from ha_tests.common import MockConfigEntry
 import pytest
+from syrupy.assertion import SnapshotAssertion
 
-from custom_components import tion
-from custom_components.tion.const import AUTH_DATA
+from custom_components.tion import async_remove_config_entry_device
+from custom_components.tion.api import (
+    TionApiError,
+    TionAuthError,
+    TionConnectionError,
+    TionTokens,
+)
+from custom_components.tion.const import CONF_DEVICE_KEY, DOMAIN
+from custom_components.tion.coordinator import TionCoordinator
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import area_registry as ar, device_registry as dr
+
+from .common import EMAIL, ENTRY_DATA, setup_entry  # noqa: TID251
+from .fake_cloud import (  # noqa: TID251
+    BREEZER_4S,
+    BREEZER_O2,
+    CLEVER,
+    FakeAuth,
+    FakeTionCloud,
+    replace_device,
+)
 
 
-class FakeConfigEntries:
-    """Fake Home Assistant config entries manager."""
-
-    def __init__(self) -> None:
-        """Initialize fake config entries manager."""
-        self.updated_data: dict[str, Any] | None = None
-
-    def async_update_entry(
-        self, entry: FakeConfigEntry, *, data: dict[str, Any]
-    ) -> None:
-        """Record and apply updated entry data."""
-        self.updated_data = data
-        entry.data = data
-
-    async def async_forward_entry_setups(
-        self, entry: FakeConfigEntry, platforms: list[str]
-    ) -> None:
-        """Pretend platform setup succeeded."""
+def _device(
+    device_registry: dr.DeviceRegistry, entry: MockConfigEntry, device_id: str
+) -> dr.DeviceEntry | None:
+    return device_registry.async_get_device_by_identifier(
+        (DOMAIN, device_id), entry.entry_id
+    )
 
 
-class FakeHass:
-    """Fake Home Assistant object."""
-
-    def __init__(self) -> None:
-        """Initialize fake hass."""
-        self.data: dict[str, Any] = {}
-        self.config_entries = FakeConfigEntries()
+def _reauth_started(hass: HomeAssistant) -> bool:
+    return any(
+        flow["context"]["source"] == SOURCE_REAUTH
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    )
 
 
-class FakeConfigEntry:
-    """Fake config entry."""
+async def test_setup_and_unload(
+    hass: HomeAssistant, init_integration: MockConfigEntry, cloud: FakeTionCloud
+) -> None:
+    """The entry shares the cloud's snapshot and stops the cloud on unload."""
+    assert init_integration.state is ConfigEntryState.LOADED
+    coordinator = init_integration.runtime_data
+    assert isinstance(coordinator, TionCoordinator)
+    assert coordinator.data is cloud.account
 
-    def __init__(self, auth_data: str | dict[str, str | None] | None) -> None:
-        """Initialize fake config entry."""
-        self.entry_id = "entry-id"
-        self.data: dict[str, Any] = {
-            CONF_USERNAME: "user",
-            CONF_PASSWORD: "pass",
-            AUTH_DATA: auth_data,
-        }
-        self.options: dict[str, Any] = {}
+    assert await hass.config_entries.async_unload(init_integration.entry_id)
 
-    def async_on_unload(self, unload_callback: Callable[[], None]) -> None:
-        """Pretend unload callback was registered."""
-
-    def add_update_listener(
-        self, listener: Callable[..., Awaitable[None]]
-    ) -> Callable[[], None]:
-        """Pretend update listener was registered."""
-        return lambda: None
+    assert init_integration.state is ConfigEntryState.NOT_LOADED
+    assert cloud.stopped
+    assert cloud.listeners == []
 
 
-class FakeTionClient:
-    """Fake Tion client capturing setup listeners."""
+async def test_unload_unsubscribes_before_stopping(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+) -> None:
+    """The disconnect caused by stopping never reaches the coordinator."""
+    listeners_at_stop: list[int] = []
+    stop = cloud.async_stop
 
-    instances: list[FakeTionClient] = []
+    async def recording_stop() -> None:
+        listeners_at_stop.append(len(cloud.listeners))
+        await stop()
 
-    def __init__(
-        self,
-        session: object,
-        username: str,
-        password: str,
-        *,
-        min_update_interval_sec: int,
-        auth: str | dict[str, str | None] | None,
-    ) -> None:
-        """Initialize fake client."""
-        self.auth_listener: Callable[[str, str], Awaitable[None]] | None = None
-        self.active_profile_listener: Callable[[str], Awaitable[None]] | None = None
-        self.auth = auth
-        self.instances.append(self)
+    cloud.async_stop = recording_stop
+    await setup_entry(hass, config_entry, cloud, auth)
 
-    def add_update_listener(
-        self, listener: Callable[[str, str], Awaitable[None]]
-    ) -> None:
-        """Capture the auth update listener."""
-        self.auth_listener = listener
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
 
-    def add_active_profile_listener(
-        self, listener: Callable[[str], Awaitable[None]]
-    ) -> None:
-        """Capture the active profile update listener."""
-        self.active_profile_listener = listener
-
-
-class FakeCoordinator:
-    """Fake data update coordinator."""
-
-    def __init__(
-        self,
-        hass: FakeHass,
-        entry: FakeConfigEntry,
-        client: FakeTionClient,
-        scan_interval: int,
-    ) -> None:
-        """Initialize fake coordinator."""
-        self.pid_manager: FakePidManager | None = None
-
-    async def async_config_entry_first_refresh(self) -> None:
-        """Pretend initial refresh succeeded."""
-
-    def get_devices(self) -> list[Any]:
-        """Return no devices."""
-        return []
-
-
-class FakePidManager:
-    """Fake PID manager."""
-
-    def __init__(
-        self, hass: FakeHass, entry: FakeConfigEntry, coordinator: FakeCoordinator
-    ) -> None:
-        """Initialize fake PID manager."""
-
-    def async_start(self) -> Callable[[], None]:
-        """Return a fake unload callback."""
-        return lambda: None
-
-
-def _patch_setup_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Patch setup dependencies that are irrelevant to auth merge behavior."""
-    FakeTionClient.instances.clear()
-    monkeypatch.setattr(tion, "TionClient", FakeTionClient)
-    monkeypatch.setattr(tion, "TionDataUpdateCoordinator", FakeCoordinator)
-    monkeypatch.setattr(tion, "TionPidManager", FakePidManager)
-    monkeypatch.setattr(tion, "async_create_clientsession", lambda hass: object())
-    monkeypatch.setattr(tion.dr, "async_get", lambda hass: object())
+    assert listeners_at_stop == [0]
 
 
 @pytest.mark.parametrize(
-    ("stored_auth", "expected_auth"),
+    "data",
     [
         pytest.param(
-            "legacy-token",
-            {"api": "new-token"},
-            id="legacy_string_stored_is_replaced_without_crash",
+            {CONF_USERNAME: EMAIL, CONF_PASSWORD: "secret"}, id="before_v4_login"
         ),
+        pytest.param({**ENTRY_DATA, CONF_DEVICE_KEY: "not a key"}, id="broken_key"),
         pytest.param(
-            {"api": "old-token", "api2": "other-token"},
-            {"api": "new-token", "api2": "other-token"},
-            id="existing_dict_preserves_other_profile_token",
+            {key: value for key, value in ENTRY_DATA.items() if key != "access_token"},
+            id="missing_token",
         ),
     ],
 )
-def test_setup_entry_auth_listener_merges_profile_token(
-    monkeypatch: pytest.MonkeyPatch,
-    stored_auth: str | dict[str, str | None],
-    expected_auth: dict[str, str | None],
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_unusable_entry_asks_to_sign_in(
+    hass: HomeAssistant,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    data: dict[str, Any],
 ) -> None:
-    """Auth update listener coerces stored auth and preserves other profile tokens."""
-    _patch_setup_dependencies(monkeypatch)
-    hass = FakeHass()
-    entry = FakeConfigEntry(stored_auth)
+    """An entry without a v4 sign-in starts reauthentication."""
+    entry = MockConfigEntry(domain=DOMAIN, title=EMAIL, data=data)
+    entry.add_to_hass(hass)
 
-    assert asyncio.run(tion.async_setup_entry(hass, entry)) is True
-    client = FakeTionClient.instances[0]
-    assert client.auth_listener is not None
+    await setup_entry(hass, entry, cloud, auth)
 
-    asyncio.run(client.auth_listener("api", "new-token"))
-
-    assert hass.config_entries.updated_data is not None
-    assert hass.config_entries.updated_data[AUTH_DATA] == expected_auth
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert _reauth_started(hass)
 
 
-def test_setup_entry_does_not_persist_active_profile(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("error", "state", "reauth"),
+    [
+        pytest.param(
+            TionAuthError("expired"), ConfigEntryState.SETUP_ERROR, True, id="auth"
+        ),
+        pytest.param(
+            TionConnectionError("down"),
+            ConfigEntryState.SETUP_RETRY,
+            False,
+            id="connection",
+        ),
+        pytest.param(
+            TionApiError("bad"), ConfigEntryState.SETUP_RETRY, False, id="api"
+        ),
+    ],
+)
+async def test_start_errors(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    error: Exception,
+    state: ConfigEntryState,
+    reauth: bool,
 ) -> None:
-    """Setup must not wire active-profile persistence (no reload on failover)."""
-    _patch_setup_dependencies(monkeypatch)
-    hass = FakeHass()
-    entry = FakeConfigEntry({"api": "token"})
+    """A rejected sign-in asks to sign in again; other errors retry later."""
+    cloud.start_error = error
 
-    assert asyncio.run(tion.async_setup_entry(hass, entry)) is True
+    await setup_entry(hass, config_entry, cloud, auth)
 
-    client = FakeTionClient.instances[0]
-    assert client.active_profile_listener is None
+    assert config_entry.state is state
+    assert _reauth_started(hass) is reauth
+    assert cloud.listeners == []
+
+
+async def test_renewed_tokens_are_saved_without_reload(
+    init_integration: MockConfigEntry, auth: FakeAuth
+) -> None:
+    """New tokens land in the entry data; the entry keeps running."""
+    coordinator = init_integration.runtime_data
+    tokens = TionTokens(
+        access_token="new-access",
+        renew_session_token="new-renew",
+        access_expires_at=4_200_000_000.0,
+        refresh_expires_at=4_300_000_000.0,
+    )
+
+    auth.renew(tokens)
+
+    assert init_integration.data == {**ENTRY_DATA, **tokens.as_dict()}
+    assert init_integration.state is ConfigEntryState.LOADED
+    assert init_integration.runtime_data is coordinator
+
+
+async def test_background_auth_error_asks_to_sign_in(
+    hass: HomeAssistant, init_integration: MockConfigEntry, cloud: FakeTionCloud
+) -> None:
+    """The cloud giving up on a rejected sign-in starts reauthentication."""
+    cloud.auth_error = TionAuthError("renew session expired")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert _reauth_started(hass)
+
+
+@pytest.mark.usefixtures("init_integration")
+async def test_device_registry(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    device_registry: dr.DeviceRegistry,
+    area_registry: ar.AreaRegistry,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Supported devices are registered with their model and room."""
+    devices = dr.async_entries_for_config_entry(device_registry, config_entry.entry_id)
+
+    assert sorted(devices, key=lambda device: device.name or "") == snapshot
+    assert _device(device_registry, config_entry, CLEVER) is None
+    bedroom_breezer = _device(device_registry, config_entry, BREEZER_4S)
+    kitchen_breezer = _device(device_registry, config_entry, BREEZER_O2)
+    assert bedroom_breezer is not None and kitchen_breezer is not None
+    assert bedroom_breezer.area_id == area_registry.async_get_area_by_name("Bedroom").id
+    assert kitchen_breezer.area_id is None
+
+
+async def test_remove_only_devices_gone_from_the_account(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    cloud: FakeTionCloud,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """A device can be removed once the account no longer has it."""
+    device = _device(device_registry, init_integration, BREEZER_O2)
+    assert device is not None
+
+    assert not await async_remove_config_entry_device(hass, init_integration, device)
+
+    cloud.push(replace_device(cloud.account, BREEZER_O2, id="GONE000001"))
+    assert await async_remove_config_entry_device(hass, init_integration, device)

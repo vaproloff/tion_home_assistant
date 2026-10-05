@@ -24,4 +24,6 @@ _module = importlib.util.module_from_spec(_spec)
 sys.modules["ha_tests"] = _module
 _spec.loader.exec_module(_module)
 
-pytest_plugins = ["ha_tests.conftest"]
+# Core's conftest patches Home Assistant before anything imports it, so the
+# fixtures that import the integration load after it.
+pytest_plugins = ["ha_tests.conftest", "tests.common"]
