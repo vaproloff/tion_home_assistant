@@ -1,11 +1,23 @@
 """Base entity of the Tion integration."""
 
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
+from typing import Any
 
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import Breezer, Station, view
+from .api import (
+    AutoControl,
+    Breezer,
+    Room,
+    Station,
+    TionApiError,
+    TionAuthError,
+    TionCommandError,
+    TionConnectionError,
+    view,
+)
 from .const import DOMAIN
 from .coordinator import TionCoordinator
 
@@ -56,6 +68,68 @@ class TionEntity[ViewT: Breezer | Station](CoordinatorEntity[TionCoordinator]):
         )
         return device.is_online and (gateway is None or gateway.is_online)
 
+    @property
+    def room(self) -> Room | None:
+        """Return the device's room."""
+        return self.coordinator.data.room_of(self.device_view.device)
+
+    @property
+    def room_auto(self) -> AutoControl | None:
+        """Return the auto mode of the device's room, if it is set up."""
+        return room.configured_auto if (room := self.room) is not None else None
+
+    async def async_send_command(self, **changes: Any) -> None:
+        """Set properties of the device; returns once the device confirms."""
+        await self._async_cloud_call(
+            lambda: self.coordinator.cloud.async_command(
+                self.device_view.command(**changes)
+            )
+        )
+
+    async def async_set_room_auto(self, **changes: Any) -> None:
+        """Change the auto mode of the device's room."""
+
+        def call() -> Awaitable[None]:
+            if (room := self.room) is None:
+                raise ValueError(f"{self.device_view.device.name} has no room")
+            return self.coordinator.cloud.async_set_auto_control(room.id, **changes)
+
+        await self._async_cloud_call(call)
+
+    async def _async_cloud_call(self, call: Callable[[], Awaitable[None]]) -> None:
+        try:
+            await call()
+        except TionCommandError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="command_rejected",
+                translation_placeholders={
+                    "device": self.device_view.device.name,
+                    "message": err.message,
+                },
+            ) from err
+        except TionConnectionError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="cloud_unavailable"
+            ) from err
+        except TionAuthError as err:
+            self.coordinator.config_entry.async_start_reauth(self.hass)
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="auth_failed"
+            ) from err
+        except TionApiError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="cloud_error",
+                translation_placeholders={"message": str(err)},
+            ) from err
+        except ValueError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_value",
+                translation_placeholders={"message": str(err)},
+            ) from err
+
     def _latest_view(self) -> ViewT | None:
         device = self.coordinator.data.device(self._view.id)
         if device is None:
@@ -64,3 +138,12 @@ class TionEntity[ViewT: Breezer | Station](CoordinatorEntity[TionCoordinator]):
             return self._view
         latest = view(device)
         return latest if isinstance(latest, type(self._view)) else None
+
+
+class TionRoomAutoEntity[ViewT: Breezer | Station](TionEntity[ViewT]):
+    """An entity of the auto mode of the device's room."""
+
+    @property
+    def available(self) -> bool:
+        """Return True while the device is reachable and its room has auto mode."""
+        return super().available and self.room_auto is not None

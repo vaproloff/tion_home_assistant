@@ -1,0 +1,35 @@
+{
+  "entity": {
+    "button": {
+      "reset_filters": {
+        "default": "mdi:air-filter"
+      }
+    },
+    "switch": {
+      "auto_mode": {
+        "default": "mdi:fan-auto",
+        "state": {
+          "off": "mdi:fan"
+        }
+      },
+      "backlight": {
+        "default": "mdi:led-on",
+        "state": {
+          "off": "mdi:led-off"
+        }
+      },
+      "heater": {
+        "default": "mdi:radiator",
+        "state": {
+          "off": "mdi:radiator-disabled"
+        }
+      },
+      "sound": {
+        "default": "mdi:music-note",
+        "state": {
+          "off": "mdi:music-note-off"
+        }
+      }
+    }
+  }
+}

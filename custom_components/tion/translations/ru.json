@@ -283,6 +283,12 @@
     },
     "cloud_error": {
       "message": "Облако Tion вернуло ошибку: {message}"
+    },
+    "command_rejected": {
+      "message": "{device} отклонил команду: {message}"
+    },
+    "invalid_value": {
+      "message": "Значение нельзя установить: {message}"
     }
   }
 }

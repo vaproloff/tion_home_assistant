@@ -52,7 +52,12 @@ SUPPORTED_PRESETS: tuple[str, ...] = (
     PRESET_HOME,
 )
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 MODEL_NAMES = {
     "b4s_ble": "Breezer 4S",

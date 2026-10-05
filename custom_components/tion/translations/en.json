@@ -290,6 +290,12 @@
     },
     "cloud_error": {
       "message": "The Tion cloud returned an error: {message}"
+    },
+    "command_rejected": {
+      "message": "{device} rejected the command: {message}"
+    },
+    "invalid_value": {
+      "message": "The value cannot be set: {message}"
     }
   }
 }
