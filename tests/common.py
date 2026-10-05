@@ -1,6 +1,7 @@
 """Fixtures and constants for the Home Assistant layer tests."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+import re
 from unittest.mock import AsyncMock, patch
 
 from ha_tests.common import MockConfigEntry
@@ -34,6 +35,24 @@ ENTRY_DATA = {
     CONF_DEVICE_KEY_ID: DEVICE_KEY.key_id(),
     **TOKENS.as_dict(),
 }
+
+
+DEPRECATION_REPORT = re.compile(
+    r"was used from tion\.|Detected that custom integration 'tion'"
+)
+
+
+@pytest.fixture(autouse=True)
+def no_deprecation_reports(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
+    """Fail on HA deprecation reports about this integration; they only log."""
+    yield
+    reports = [
+        record.getMessage()
+        for when in ("setup", "call")
+        for record in caplog.get_records(when)
+        if DEPRECATION_REPORT.search(record.getMessage())
+    ]
+    assert not reports, reports
 
 
 @pytest.fixture

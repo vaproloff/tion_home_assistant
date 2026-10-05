@@ -212,7 +212,7 @@
     'supported_features': 0,
     'translation_key': 'co2',
     'unique_id': 'BS40000001_co2',
-    'unit_of_measurement': <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+    'unit_of_measurement': 'ppm',
   })
 # ---
 # name: test_sensors[sensor.bedroom_magicair_co2-state]
@@ -221,7 +221,7 @@
       <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'carbon_dioxide',
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'MagicAir CO2',
       <SensorEntityCapabilityAttribute.STATE_CLASS: 'state_class'>: <SensorStateClass.MEASUREMENT: 'measurement'>,
-      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: 'ppm',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.bedroom_magicair_co2',
@@ -328,7 +328,7 @@
     'supported_features': 0,
     'translation_key': 'pm25',
     'unique_id': 'BS40000001_pm25',
-    'unit_of_measurement': <UnitOfDensity.MICROGRAMS_PER_CUBIC_METER: 'μg/m³'>,
+    'unit_of_measurement': 'μg/m³',
   })
 # ---
 # name: test_sensors[sensor.bedroom_magicair_pm25-state]
@@ -337,7 +337,7 @@
       <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'pm25',
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'MagicAir PM25',
       <SensorEntityCapabilityAttribute.STATE_CLASS: 'state_class'>: <SensorStateClass.MEASUREMENT: 'measurement'>,
-      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: <UnitOfDensity.MICROGRAMS_PER_CUBIC_METER: 'μg/m³'>,
+      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: 'μg/m³',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.bedroom_magicair_pm25',
@@ -444,7 +444,7 @@
     'supported_features': 0,
     'translation_key': 'co2',
     'unique_id': 'MCO0000001_co2',
-    'unit_of_measurement': <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+    'unit_of_measurement': 'ppm',
   })
 # ---
 # name: test_sensors[sensor.bedroom_module_co2_co2-state]
@@ -453,7 +453,7 @@
       <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'carbon_dioxide',
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'Module CO2+ CO2',
       <SensorEntityCapabilityAttribute.STATE_CLASS: 'state_class'>: <SensorStateClass.MEASUREMENT: 'measurement'>,
-      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: 'ppm',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.bedroom_module_co2_co2',
@@ -966,7 +966,7 @@
     'supported_features': 0,
     'translation_key': 'co2',
     'unique_id': 'BS30000001_co2',
-    'unit_of_measurement': <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+    'unit_of_measurement': 'ppm',
   })
 # ---
 # name: test_sensors[sensor.living_room_magicair_310_co2-state]
@@ -975,7 +975,7 @@
       <EntityStateAttribute.DEVICE_CLASS: 'device_class'>: 'carbon_dioxide',
       <EntityStateAttribute.FRIENDLY_NAME: 'friendly_name'>: 'MagicAir 310 CO2',
       <SensorEntityCapabilityAttribute.STATE_CLASS: 'state_class'>: <SensorStateClass.MEASUREMENT: 'measurement'>,
-      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: 'ppm',
     }),
     'context': <ANY>,
     'entity_id': 'sensor.living_room_magicair_310_co2',

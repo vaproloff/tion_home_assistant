@@ -10,18 +10,13 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import (
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_MILLION,
-    PERCENTAGE,
-    UnitOfTemperature,
-    UnitOfTime,
-)
+from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.typing import StateType
 
 from .api import Breezer, Station
+from .const import UNIT_PPM, UNIT_UG_PER_M3
 from .coordinator import TionConfigEntry, TionCoordinator
 from .entity import TionEntity, device_views
 
@@ -103,7 +98,7 @@ STATION_SENSORS: tuple[TionSensorDescription[Station], ...] = (
         value_fn=lambda station: station.co2,
         device_class=SensorDeviceClass.CO2,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
+        native_unit_of_measurement=UNIT_PPM,
         suggested_display_precision=0,
     ),
     TionSensorDescription(
@@ -113,7 +108,7 @@ STATION_SENSORS: tuple[TionSensorDescription[Station], ...] = (
         value_fn=lambda station: station.pm25,
         device_class=SensorDeviceClass.PM25,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        native_unit_of_measurement=UNIT_UG_PER_M3,
         suggested_display_precision=0,
     ),
 )

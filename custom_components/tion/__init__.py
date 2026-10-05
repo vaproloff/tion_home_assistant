@@ -2,6 +2,7 @@
 
 import logging
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
@@ -83,6 +84,8 @@ async def async_remove_config_entry_device(
     hass: HomeAssistant, entry: TionConfigEntry, device_entry: dr.DeviceEntry
 ) -> bool:
     """Allow removing a device the account no longer has."""
+    if entry.state is not ConfigEntryState.LOADED:
+        return False
     account = entry.runtime_data.data
     return not any(
         domain == DOMAIN and account.device(device_id) is not None

@@ -19,6 +19,9 @@ DOMAIN = "tion"
 REFRESH_INTERVAL = timedelta(seconds=60)
 # Seconds entities stay available after the live channel drops.
 DISCONNECT_GRACE = 60
+# HA's unit enums for these arrive in 2026.7, above our minimum version.
+UNIT_PPM = "ppm"
+UNIT_UG_PER_M3 = "μg/m³"
 DEFAULT_TARGET_CO2 = 800
 DEFAULT_PID_BASE_OUTPUT = 20.0
 DEFAULT_PID_KP = 0.5

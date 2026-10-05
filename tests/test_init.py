@@ -147,7 +147,7 @@ async def test_start_errors(
 
     assert config_entry.state is state
     assert _reauth_started(hass) is reauth
-    assert cloud.listeners == []
+    assert auth.listeners == []
 
 
 async def test_renewed_tokens_are_saved_without_reload(
@@ -214,3 +214,40 @@ async def test_remove_only_devices_gone_from_the_account(
 
     cloud.push(replace_device(cloud.account, BREEZER_O2, id="GONE000001"))
     assert await async_remove_config_entry_device(hass, init_integration, device)
+
+
+@pytest.mark.parametrize(
+    "identifiers",
+    [
+        pytest.param({(DOMAIN, BREEZER_O2)}, id="tion-device"),
+        pytest.param({("other", "device")}, id="other-integration-device"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("error", "state"),
+    [
+        pytest.param(
+            TionConnectionError("down"), ConfigEntryState.SETUP_RETRY, id="retry"
+        ),
+        pytest.param(TionAuthError("bad"), ConfigEntryState.SETUP_ERROR, id="error"),
+    ],
+)
+async def test_device_is_kept_while_entry_is_not_loaded(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    device_registry: dr.DeviceRegistry,
+    identifiers: set[tuple[str, str]],
+    error: Exception,
+    state: ConfigEntryState,
+) -> None:
+    """Without a running entry the account is unknown, so nothing is removable."""
+    cloud.start_error = error
+    await setup_entry(hass, config_entry, cloud, auth)
+    assert config_entry.state is state
+    device = device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id, identifiers=identifiers
+    )
+
+    assert not await async_remove_config_entry_device(hass, config_entry, device)

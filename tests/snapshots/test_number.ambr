@@ -156,7 +156,7 @@
     'supported_features': 0,
     'translation_key': 'target_co2',
     'unique_id': 'BS40000001_target_co2',
-    'unit_of_measurement': <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+    'unit_of_measurement': 'ppm',
   })
 # ---
 # name: test_numbers[number.bedroom_magicair_target_co2-state]
@@ -168,7 +168,7 @@
       <NumberEntityCapabilityAttribute.MIN: 'min'>: 550,
       <NumberEntityCapabilityAttribute.MODE: 'mode'>: <NumberMode.SLIDER: 'slider'>,
       <NumberEntityCapabilityAttribute.STEP: 'step'>: 10,
-      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: 'ppm',
     }),
     'context': <ANY>,
     'entity_id': 'number.bedroom_magicair_target_co2',
@@ -217,7 +217,7 @@
     'supported_features': 0,
     'translation_key': 'target_co2',
     'unique_id': 'MCO0000001_target_co2',
-    'unit_of_measurement': <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+    'unit_of_measurement': 'ppm',
   })
 # ---
 # name: test_numbers[number.bedroom_module_co2_target_co2-state]
@@ -229,7 +229,7 @@
       <NumberEntityCapabilityAttribute.MIN: 'min'>: 550,
       <NumberEntityCapabilityAttribute.MODE: 'mode'>: <NumberMode.SLIDER: 'slider'>,
       <NumberEntityCapabilityAttribute.STEP: 'step'>: 10,
-      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: 'ppm',
     }),
     'context': <ANY>,
     'entity_id': 'number.bedroom_module_co2_target_co2',
@@ -396,7 +396,7 @@
     'supported_features': 0,
     'translation_key': 'target_co2',
     'unique_id': 'BS30000001_target_co2',
-    'unit_of_measurement': <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+    'unit_of_measurement': 'ppm',
   })
 # ---
 # name: test_numbers[number.living_room_magicair_310_target_co2-state]
@@ -408,7 +408,7 @@
       <NumberEntityCapabilityAttribute.MIN: 'min'>: 550,
       <NumberEntityCapabilityAttribute.MODE: 'mode'>: <NumberMode.SLIDER: 'slider'>,
       <NumberEntityCapabilityAttribute.STEP: 'step'>: 10,
-      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: <UnitOfRatio.PARTS_PER_MILLION: 'ppm'>,
+      <EntityStateAttribute.UNIT_OF_MEASUREMENT: 'unit_of_measurement'>: 'ppm',
     }),
     'context': <ANY>,
     'entity_id': 'number.living_room_magicair_310_target_co2',

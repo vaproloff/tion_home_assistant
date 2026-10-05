@@ -258,6 +258,11 @@ class FakeAuth:
         """Start without listeners."""
         self._listeners: list[Callable[[TionTokens], None]] = []
 
+    @property
+    def listeners(self) -> list[Callable[[TionTokens], None]]:
+        """Return the registered token listeners."""
+        return self._listeners
+
     def add_update_listener(
         self, listener: Callable[[TionTokens], None]
     ) -> Callable[[], None]:

@@ -9,11 +9,11 @@ from homeassistant.components.number import (
     NumberEntityDescription,
     NumberMode,
 )
-from homeassistant.const import CONCENTRATION_PARTS_PER_MILLION
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .api import AutoControl, Breezer, Station
+from .const import UNIT_PPM
 from .coordinator import TionConfigEntry, TionCoordinator
 from .entity import TionRoomAutoEntity, device_views
 
@@ -53,7 +53,7 @@ TARGET_CO2 = TionNumberDescription(
     field="co2_target",
     value_fn=lambda auto: auto.co2_target,
     device_class=NumberDeviceClass.CO2,
-    native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
+    native_unit_of_measurement=UNIT_PPM,
     native_min_value=550,
     native_max_value=1500,
     native_step=10,
