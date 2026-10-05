@@ -5,6 +5,11 @@
         "default": "mdi:air-filter"
       }
     },
+    "climate": {
+      "tion_breezer": {
+        "default": "mdi:air-filter"
+      }
+    },
     "number": {
       "max_speed_set": {
         "default": "mdi:fan-chevron-up"
