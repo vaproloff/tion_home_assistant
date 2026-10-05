@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
-from custom_components.tion.auth import (
+from custom_components.tion.api.auth import (
     LOGIN_ERROR_CODE_EXPIRED,
     LOGIN_ERROR_INVALID_AUTH,
     LOGIN_ERROR_INVALID_CAPTCHA,
@@ -21,13 +21,13 @@ from custom_components.tion.auth import (
     TionLoginError,
     TionTokens,
 )
-from custom_components.tion.device_key import TionDeviceKey, sha256_b64url
-from custom_components.tion.exceptions import (
+from custom_components.tion.api.device_key import TionDeviceKey, sha256_b64url
+from custom_components.tion.api.exceptions import (
     TionApiError,
     TionAuthError,
     TionConnectionError,
 )
-from custom_components.tion.protobuf import (
+from custom_components.tion.api.protobuf import (
     ProtoMessage,
     encode_bytes,
     encode_string,
@@ -540,14 +540,29 @@ async def test_listener_unsubscribe() -> None:
     assert seen == []
 
 
-def test_tokens_entry_data_roundtrip() -> None:
-    """Tokens survive a trip through config entry data."""
+def test_tokens_dict_roundtrip() -> None:
+    """Tokens survive a trip through their config entry dict."""
     tokens = _tokens()
 
-    assert tokens.as_entry_data() == {
+    assert tokens.as_dict() == {
         "access_token": "access-1",
         "renew_session_token": "renew-1",
         "access_expires_at": NOW + ACCESS_TTL,
         "refresh_expires_at": NOW + REFRESH_TTL,
     }
-    assert TionTokens.from_entry_data(tokens.as_entry_data()) == tokens
+    assert TionTokens.from_dict(tokens.as_dict()) == tokens
+
+
+def test_tokens_repr_hides_secrets() -> None:
+    """The repr() of tokens does not expose the secret strings."""
+    tokens = TionTokens(
+        access_token="secret-access",
+        renew_session_token="secret-renew",
+        access_expires_at=1.0,
+        refresh_expires_at=2.0,
+    )
+
+    token_repr = repr(tokens)
+    assert "secret-access" not in token_repr
+    assert "secret-renew" not in token_repr
+    assert "access_expires_at" in token_repr

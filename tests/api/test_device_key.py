@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 import pytest
 
-from custom_components.tion.device_key import (
+from custom_components.tion.api.device_key import (
     APP_ID,
     TionDeviceKey,
     b64url,

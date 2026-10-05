@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from custom_components.tion import config_flow
-from custom_components.tion.auth import (
+from custom_components.tion.api.auth import (
     LOGIN_ERROR_CODE_EXPIRED,
     LOGIN_ERROR_INVALID_AUTH,
     LOGIN_ERROR_INVALID_CAPTCHA,
@@ -19,6 +19,8 @@ from custom_components.tion.auth import (
     TionLoginError,
     TionTokens,
 )
+from custom_components.tion.api.device_key import TionDeviceKey
+from custom_components.tion.api.exceptions import TionApiError, TionConnectionError
 from custom_components.tion.config_flow import (
     CONF_LOCAL_PID_ACTION,
     CONF_OPTIONS_ACTION,
@@ -59,8 +61,6 @@ from custom_components.tion.const import (
     TionDeviceType,
     TionPresetType,
 )
-from custom_components.tion.device_key import TionDeviceKey
-from custom_components.tion.exceptions import TionApiError, TionConnectionError
 from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
 from homeassistant.const import (
     CONF_CODE,
@@ -884,7 +884,7 @@ async def test_code_step_creates_entry_without_password(
         CONF_EMAIL: EMAIL,
         CONF_DEVICE_KEY: device_key.to_pem(),
         CONF_DEVICE_KEY_ID: device_key.key_id(),
-        **TOKENS.as_entry_data(),
+        **TOKENS.as_dict(),
     }
     assert TionDeviceKey.from_pem(result["data"][CONF_DEVICE_KEY]).key_id() == (
         device_key.key_id()
@@ -1008,7 +1008,7 @@ async def test_reauth_replaces_entry_data(
         CONF_EMAIL: EMAIL,
         CONF_DEVICE_KEY: auths[0].device_key.to_pem(),
         CONF_DEVICE_KEY_ID: auths[0].device_key.key_id(),
-        **TOKENS.as_entry_data(),
+        **TOKENS.as_dict(),
     }
     assert hass.config_entries.reloaded == [REAUTH_ENTRY_ID]
 

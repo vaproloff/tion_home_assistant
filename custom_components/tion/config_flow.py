@@ -26,14 +26,15 @@ from homeassistant.const import (
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .auth import (
+from .api.auth import (
     LOGIN_ERROR_CODE_EXPIRED,
     LOGIN_ERROR_PASSWORD_NOT_SET,
     TionAuth,
     TionLoginError,
     TionTokens,
-    async_create_auth,
 )
+from .api.device_key import TionDeviceKey
+from .api.exceptions import TionConnectionError
 from .captcha_view import CAPTCHA_STEP_ID, async_register_captcha_view, captcha_page_url
 from .const import (
     CONF_BREEZER_GUID,
@@ -63,8 +64,7 @@ from .const import (
     TionPresetType,
 )
 from .coordinator import TionDataUpdateCoordinator
-from .device_key import TionDeviceKey
-from .exceptions import TionConnectionError
+from .session import async_create_auth
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -251,7 +251,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_EMAIL: self._email,
             CONF_DEVICE_KEY: device_key.to_pem(),
             CONF_DEVICE_KEY_ID: device_key.key_id(),
-            **tokens.as_entry_data(),
+            **tokens.as_dict(),
         }
         if self.source == SOURCE_REAUTH:
             self._abort_if_unique_id_mismatch(reason="wrong_account")

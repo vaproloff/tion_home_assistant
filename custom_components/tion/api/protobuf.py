@@ -1,6 +1,8 @@
-"""Minimal protobuf wire codec for the Tion v4 account messages."""
+"""Minimal protobuf wire codec for the Tion v4 messages."""
 
+from collections.abc import Iterable
 import struct
+from uuid import UUID
 
 from .exceptions import TionApiError
 
@@ -10,6 +12,9 @@ WIRE_BYTES = 2
 WIRE_FIXED32 = 5
 
 _MAX_VARINT_BYTES = 10
+_UINT64_MASK = (1 << 64) - 1
+_INT64_SIGN = 1 << 63
+_GUID = struct.Struct("<QQ")
 
 
 class ProtobufDecodeError(TionApiError):
@@ -49,6 +54,33 @@ def encode_string(field: int, value: str) -> bytes:
     return encode_bytes(field, value.encode())
 
 
+def encode_int64(field: int, value: int) -> bytes:
+    """Encode a signed int64 field; negatives take ten bytes (two's complement)."""
+    return _tag(field, WIRE_VARINT) + _varint(value & _UINT64_MASK)
+
+
+def encode_float(field: int, value: float) -> bytes:
+    """Encode a 32-bit float field."""
+    return _tag(field, WIRE_FIXED32) + struct.pack("<f", value)
+
+
+def encode_packed(field: int, values: Iterable[int]) -> bytes:
+    """Encode a packed repeated varint field."""
+    return encode_bytes(field, b"".join(_varint(value) for value in values))
+
+
+def encode_guid(field: int, value: UUID) -> bytes:
+    """Encode a .NET Guid message (bcl.Guid: fixed64 lo = 1, fixed64 hi = 2)."""
+    lo, hi = _GUID.unpack(value.bytes_le)
+    message = (
+        _tag(1, WIRE_FIXED64)
+        + struct.pack("<Q", lo)
+        + _tag(2, WIRE_FIXED64)
+        + struct.pack("<Q", hi)
+    )
+    return encode_bytes(field, message)
+
+
 def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
     result = 0
     for index in range(_MAX_VARINT_BYTES):
@@ -58,6 +90,8 @@ def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
         pos += 1
         result |= (byte & 0x7F) << (7 * index)
         if not byte & 0x80:
+            if result > _UINT64_MASK:
+                raise ProtobufDecodeError("varint exceeds 64 bits")
             return result, pos
     raise ProtobufDecodeError("varint too long")
 
@@ -139,3 +173,59 @@ class ProtoMessage:
         if field not in self._fields:
             return None
         return ProtoMessage.parse(self.get_bytes(field))
+
+    def get_bool(self, field: int, default: bool = False) -> bool:
+        """Return the first value of a bool field."""
+        return bool(self.get_int(field, int(default)))
+
+    def get_sint64(self, field: int, default: int = 0) -> int:
+        """Return the first value of a signed int64 field."""
+        value = self.get_int(field, default & _UINT64_MASK)
+        return value - (1 << 64) if value & _INT64_SIGN else value
+
+    def get_float(self, field: int, default: float = 0.0) -> float:
+        """Return the first value of a 32-bit float field."""
+        if field not in self._fields:
+            return default
+        raw = self.get_int(field)
+        if raw > 0xFFFFFFFF:
+            raise ProtobufDecodeError(f"field {field} is not a 32-bit float")
+        return struct.unpack("<f", struct.pack("<I", raw))[0]
+
+    def get_all(self, field: int) -> list[int | bytes]:
+        """Return every value of a repeated field, in wire order."""
+        return list(self._fields.get(field, []))
+
+    def get_messages(self, field: int) -> list[ProtoMessage]:
+        """Return every value of a repeated message field, decoded."""
+        messages = []
+        for value in self._fields.get(field, []):
+            if not isinstance(value, bytes):
+                raise ProtobufDecodeError(f"field {field} is not length-delimited")
+            messages.append(ProtoMessage.parse(value))
+        return messages
+
+    def get_packed(self, field: int) -> list[int]:
+        """Return a repeated varint field, accepting packed and unpacked values."""
+        values: list[int] = []
+        for value in self._fields.get(field, []):
+            if isinstance(value, int):
+                values.append(value)
+                continue
+            pos = 0
+            while pos < len(value):
+                item, pos = _read_varint(value, pos)
+                values.append(item)
+        return values
+
+    def get_map(self, field: int) -> dict[int, str]:
+        """Return a map<uint32, string> field (repeated {1: key, 2: value})."""
+        return {
+            entry.get_int(1): entry.get_str(2) for entry in self.get_messages(field)
+        }
+
+    def get_guid(self, field: int) -> UUID | None:
+        """Return a .NET Guid message field as a UUID, or None if absent."""
+        if (message := self.get_message(field)) is None:
+            return None
+        return UUID(bytes_le=_GUID.pack(message.get_int(1), message.get_int(2)))

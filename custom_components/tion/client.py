@@ -9,8 +9,8 @@ from typing import Any, Self
 
 from aiohttp import ClientError, ClientSession, ContentTypeError
 
+from .api.exceptions import TionApiError, TionAuthError, TionConnectionError
 from .const import Heater, ZoneMode
-from .exceptions import TionApiError, TionAuthError, TionConnectionError
 
 _LOGGER = logging.getLogger(__name__)
 
