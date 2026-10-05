@@ -394,9 +394,7 @@ async def test_refresh_during_reconnect_subscribes_once(harness: Harness) -> Non
 
 
 @pytest.mark.asyncio
-async def test_refresh_while_disconnected_readscloud_structure(
-    harness: Harness,
-) -> None:
+async def test_refresh_while_disconnected_reads_structure(harness: Harness) -> None:
     """Without the live channel, refresh only re-reads the structure."""
     await harness.cloud.async_start()
     await harness.cloud.async_stop()
@@ -563,9 +561,7 @@ async def test_rpc_auth_error_renews_once(harness: Harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_nats_auth_error_renews_and_rereadscloud_structure(
-    harness: Harness,
-) -> None:
+async def test_nats_auth_error_renews_and_rereads_structure(harness: Harness) -> None:
     """A refused CONNECT renews the token and fetches a matching wstoken."""
     harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
     harness.transport.answers["GetFullStructureLocations"] = [
