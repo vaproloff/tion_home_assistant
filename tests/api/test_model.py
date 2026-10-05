@@ -2,7 +2,15 @@
 
 from uuid import UUID
 
-from custom_components.tion.api.model import Device, Location, Room, TionAccount
+import pytest
+
+from custom_components.tion.api.model import (
+    AutoControl,
+    Device,
+    Location,
+    Room,
+    TionAccount,
+)
 
 ROOM = Room(UUID(int=2), "Bedroom", None)
 
@@ -41,6 +49,24 @@ def test_account_lookups() -> None:
     assert account.room_of(first) is ROOM
     assert account.room_of(second) is None
     assert account.location_of(second) is cottage
+
+
+SET_UP = AutoControl(True, 1, 4, 800)
+
+
+@pytest.mark.parametrize(
+    ("auto", "configured"),
+    [
+        pytest.param(SET_UP, SET_UP, id="set_up"),
+        pytest.param(AutoControl(False, 0, 0, 0, 0), None, id="empty_message"),
+        pytest.param(None, None, id="absent"),
+    ],
+)
+def test_configured_auto(
+    auto: AutoControl | None, configured: AutoControl | None
+) -> None:
+    """Only an auto mode with a speed range counts as set up."""
+    assert Room(UUID(int=2), "Bedroom", auto).configured_auto == configured
 
 
 def test_empty_account() -> None:

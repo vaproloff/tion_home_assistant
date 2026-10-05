@@ -17,7 +17,6 @@ STATION_PRODUCTS = frozenset({"bs3xx_rf", "bs4xx_rf", "thco2_rf"})
 _SPEED_MAX_FALLBACK = {"b4s_ble": 6, "br3s_rf": 6, "o2_rf": 4}
 
 _CLIMATIC_HEATER_INSTALLED = 0
-_CLIMATIC_HEATER_ON = 1
 _CLIMATIC_FILTER_REPLACE = 2
 
 
@@ -27,6 +26,11 @@ class Flap(IntEnum):
     OUTSIDE = 0
     INSIDE = 1
     MIXED = 2
+
+
+# A 4S takes MIXED but stays INSIDE; the O2 is assumed to match the 4S.
+_FLAP_MODES = {"br3s_rf": (Flap.OUTSIDE, Flap.INSIDE, Flap.MIXED)}
+_DEFAULT_FLAP_MODES = (Flap.OUTSIDE, Flap.INSIDE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +45,8 @@ class _DeviceView:
     """Typed access to a device's datapoints through its profile."""
 
     _FEATURES: dict[str, str] = {}
+    # Command-only names and the datapoint each one writes.
+    _COMMANDS: dict[str, str] = {}
     # Polled besides the features: state flags and inputs of derived values.
     _EXTRA_QUERY: frozenset[str] = frozenset({"state_flags"})
 
@@ -56,14 +62,24 @@ class _DeviceView:
         """Return the device id."""
         return self.device.id
 
-    def supports(self, feature: str) -> bool:
-        """Return True if the model has the datapoint behind a property."""
-        return self._profile.by_code(self._FEATURES[feature]) is not None
+    def supports(self, name: str) -> bool:
+        """Return True if the model has the datapoint behind a property or command."""
+        return self._spec(self._code(name)) is not None
+
+    def can_set(self, name: str) -> bool:
+        """Return True if command() can set this property or command for the model."""
+        spec = self._spec(self._code(name))
+        return spec is not None and spec.writable
 
     def query_dp_ids(self) -> list[int]:
         """Return the datapoints to ask the device for, sorted."""
         codes = self._EXTRA_QUERY | set(self._FEATURES.values())
         return sorted(spec.dp_id for spec in self._profile.dps if spec.code in codes)
+
+    def _code(self, name: str) -> str:
+        if (code := self._FEATURES.get(name, self._COMMANDS.get(name))) is None:
+            raise ValueError(f"{type(self).__name__} has no {name}")
+        return code
 
     def _spec(self, code: str) -> DPSpec | None:
         return self._profile.by_code(code)
@@ -132,7 +148,6 @@ class Breezer(_DeviceView):
         "temperature_outlet": "temp_indoor",
         "heater_installed": "climatic_flags",
         "heater_enabled": "heater_on_off",
-        "heater_active": "climatic_flags",
         "heater_power": "sensor_heater_power_percent",
         "heater_type": "sensor_heater_type",
         "flap": "flap_mode",
@@ -141,9 +156,8 @@ class Breezer(_DeviceView):
         "backlight": "brightness_onoff",
         "sound": "beeper_on_off",
     }
-    _EXTRA_QUERY = frozenset(
-        {"state_flags", "heater_currentstatus", "fan_speed_maxavail"}
-    )
+    _COMMANDS = {"filter_reset": "filter_hours"}
+    _EXTRA_QUERY = frozenset({"state_flags", "fan_speed_maxavail"})
 
     @property
     def is_on(self) -> bool | None:
@@ -198,13 +212,6 @@ class Breezer(_DeviceView):
         return raw == 0 if spec.type is DPType.VALUE else bool(raw)
 
     @property
-    def heater_active(self) -> bool | None:
-        """Return True if the heater is heating right now."""
-        if self._spec("heater_currentstatus") is not None:
-            return self._switch("heater_currentstatus")
-        return self._flag("climatic_flags", _CLIMATIC_HEATER_ON)
-
-    @property
     def heater_power(self) -> int | None:
         """Return the heater power, %."""
         return self._raw("sensor_heater_power_percent")
@@ -219,6 +226,13 @@ class Breezer(_DeviceView):
         """Return where the breezer takes air from."""
         raw = self._raw("flap_mode")
         return Flap(raw) if raw in Flap else None
+
+    @property
+    def flap_modes(self) -> tuple[Flap, ...]:
+        """Return the flap modes the breezer can be set to."""
+        if not self.can_set("flap"):
+            return ()
+        return _FLAP_MODES.get(self.device.product_id, _DEFAULT_FLAP_MODES)
 
     @property
     def filter_remaining(self) -> int | None:
@@ -266,7 +280,13 @@ class Breezer(_DeviceView):
                     raise ValueError("filter_reset only accepts True")
                 spec = self._writable("filter_hours")
                 return _encode_value(spec, FILTER_RESOURCE_SECONDS)
-            case "is_on" | "flap" | "backlight" | "sound":
+            case "flap":
+                if value not in self.flap_modes:
+                    raise ValueError(
+                        f"{self.device.product_id} cannot set flap={value}"
+                    )
+                return _encode_value(self._writable("flap_mode"), int(value))
+            case "is_on" | "backlight" | "sound":
                 code = self._FEATURES[name]
                 return _encode_value(self._writable(code), int(value))
         return super()._encode(name, value)

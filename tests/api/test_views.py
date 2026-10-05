@@ -152,7 +152,6 @@ def test_recorded_4s_state(profiles: dict[UUID, DeviceProfile]) -> None:
     assert breezer.temperature_outlet == 21.0
     assert breezer.heater_installed is True
     assert breezer.heater_enabled is True
-    assert breezer.heater_active is True
     assert breezer.heater_power == 45
     assert breezer.heater_type == 1
     assert breezer.flap is Flap.OUTSIDE
@@ -173,11 +172,10 @@ def test_unreported_values_are_none(profiles: dict[UUID, DeviceProfile]) -> None
         breezer.temperature_outdoor,
         breezer.heater_installed,
         breezer.heater_enabled,
-        breezer.heater_active,
         breezer.flap,
         breezer.filter_remaining,
         breezer.backlight,
-    ] == [None] * 10
+    ] == [None] * 9
 
 
 @pytest.mark.parametrize(
@@ -198,19 +196,20 @@ def test_4s_heater_level(
 
 
 @pytest.mark.parametrize(
-    ("climatic", "heater_on", "enabled"),
+    ("climatic", "enabled", "installed"),
     [
-        pytest.param(0b011, True, True, id="heating"),
-        pytest.param(0b001, False, False, id="installed_off"),
+        pytest.param(0b011, True, True, id="installed_on"),
+        pytest.param(0b001, False, True, id="installed_off"),
+        pytest.param(0b000, False, False, id="no_heater"),
     ],
 )
 def test_3s_heater(
     profiles: dict[UUID, DeviceProfile],
     climatic: int,
-    heater_on: bool,
     enabled: bool,
+    installed: bool,
 ) -> None:
-    """3S reads the heater switch as a bool and activity from the flags."""
+    """3S reads the heater switch as a bool and its presence from the flags."""
     breezer = _breezer(
         profiles,
         PROFILE_3S,
@@ -218,15 +217,7 @@ def test_3s_heater(
         DPValue(72, DPKind.BOOL, enabled),
     )
 
-    assert (
-        breezer.heater_installed,
-        breezer.heater_active,
-        breezer.heater_enabled,
-    ) == (
-        True,
-        heater_on,
-        enabled,
-    )
+    assert (breezer.heater_installed, breezer.heater_enabled) == (installed, enabled)
 
 
 def test_filter_needs_replacement_flag(profiles: dict[UUID, DeviceProfile]) -> None:
@@ -273,6 +264,7 @@ def test_unknown_flap_value(profiles: dict[UUID, DeviceProfile]) -> None:
         pytest.param(PROFILE_BS410, "pm25", True, id="bs410_pm25"),
         pytest.param(PROFILE_BS310, "pm25", False, id="bs310_pm25"),
         pytest.param(PROFILE_CO2, "backlight", True, id="co2_backlight"),
+        pytest.param(PROFILE_O2, "filter_reset", True, id="o2_filter_reset"),
     ],
 )
 def test_supports(
@@ -286,6 +278,60 @@ def test_supports(
 
     assert device_view is not None
     assert device_view.supports(feature) is supported
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "name", "settable"),
+    [
+        pytest.param(PROFILE_4S, "sound", True, id="4s_sound"),
+        pytest.param(PROFILE_3S, "backlight", False, id="3s_backlight"),
+        pytest.param(PROFILE_O2, "filter_reset", True, id="o2_filter_reset"),
+        pytest.param(PROFILE_3S, "heater_enabled", True, id="3s_heater"),
+        pytest.param(PROFILE_4S, "temperature_outdoor", False, id="read_only"),
+        pytest.param(PROFILE_BS310, "backlight", True, id="bs310_backlight"),
+    ],
+)
+def test_can_set(
+    profiles: dict[UUID, DeviceProfile], profile_id: UUID, name: str, settable: bool
+) -> None:
+    """Only writable datapoints of the model can be set."""
+    device_view = view(_device(profiles, profile_id))
+
+    assert device_view is not None
+    assert device_view.can_set(name) is settable
+
+
+@pytest.mark.parametrize("name", ["turbo", "speed_max", "heater_active"])
+def test_unknown_name(profiles: dict[UUID, DeviceProfile], name: str) -> None:
+    """A name that is neither a datapoint property nor a command is an error."""
+    breezer = _breezer(profiles, PROFILE_4S)
+
+    with pytest.raises(ValueError):
+        breezer.supports(name)
+    with pytest.raises(ValueError):
+        breezer.can_set(name)
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "modes"),
+    [
+        pytest.param(PROFILE_3S, (Flap.OUTSIDE, Flap.INSIDE, Flap.MIXED), id="3s"),
+        pytest.param(PROFILE_4S, (Flap.OUTSIDE, Flap.INSIDE), id="4s"),
+        pytest.param(PROFILE_O2, (Flap.OUTSIDE, Flap.INSIDE), id="o2"),
+    ],
+)
+def test_flap_modes(
+    profiles: dict[UUID, DeviceProfile], profile_id: UUID, modes: tuple[Flap, ...]
+) -> None:
+    """The settable flap modes follow the model."""
+    assert _breezer(profiles, profile_id).flap_modes == modes
+
+
+def test_3s_mixed_flap_command(profiles: dict[UUID, DeviceProfile]) -> None:
+    """A 3S can mix outside and inside air."""
+    command = _breezer(profiles, PROFILE_3S).command(flap=Flap.MIXED)
+
+    assert command.values == (DPValue(195, DPKind.INT, 2),)
 
 
 def test_recorded_magicair_state(profiles: dict[UUID, DeviceProfile]) -> None:
@@ -362,6 +408,7 @@ def test_3s_heater_command(profiles: dict[UUID, DeviceProfile]) -> None:
         pytest.param(PROFILE_4S, {"target_temperature": 31}, id="too_warm"),
         pytest.param(PROFILE_4S, {"target_temperature": -1}, id="too_cold"),
         pytest.param(PROFILE_4S, {"filter_reset": False}, id="filter_reset_false"),
+        pytest.param(PROFILE_4S, {"flap": Flap.MIXED}, id="4s_mixed_flap"),
         pytest.param(PROFILE_4S, {"turbo": True}, id="unknown_field"),
         pytest.param(PROFILE_4S, {}, id="nothing"),
     ],
@@ -392,7 +439,7 @@ def test_station_commands(profiles: dict[UUID, DeviceProfile]) -> None:
     [
         pytest.param(
             PROFILE_4S,
-            [10, 11, 70, 76, 78, 84, 100, 101, 130, 140, 150, 171, 180, 195, 200, 202],
+            [10, 11, 70, 76, 78, 84, 100, 101, 130, 140, 150, 171, 180, 195, 200],
             id="4s",
         ),
         pytest.param(
