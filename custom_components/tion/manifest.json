@@ -1,19 +1,11 @@
 {
   "domain": "tion",
   "name": "Tion",
-  "after_dependencies": [
-    "binary_sensor",
-    "button",
-    "climate",
-    "number",
-    "sensor",
-    "switch"
-  ],
   "codeowners": ["@vaproloff"],
   "config_flow": true,
   "dependencies": ["http"],
   "documentation": "https://github.com/vaproloff/tion_home_assistant",
-  "iot_class": "cloud_polling",
+  "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/vaproloff/tion_home_assistant/issues",
   "requirements": [],
   "version": "2026.6.4"

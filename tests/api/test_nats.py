@@ -16,6 +16,9 @@ from custom_components.tion.api.exceptions import (
 )
 from custom_components.tion.api.nats import NatsConnection, TaskFactory, nats_error
 
+# The scripted NATS server listens on a local socket.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
+
 INFO = b'INFO {"server_id":"test","version":"2.14.6","auth_required":true}\r\n'
 # A device message as the Tion broker delivers it (MQTT bridge header).
 HMSG_HEADERS = b"NATS/1.0\r\nNmqtt-Pub:0\r\n\r\n"

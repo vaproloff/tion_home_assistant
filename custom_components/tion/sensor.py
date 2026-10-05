@@ -1,343 +1,159 @@
-"""Platform for sensor integration."""
+"""Sensors of Tion breezers and stations."""
 
-import abc
-import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from math import ceil
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_MILLION,
-    PERCENTAGE,
-    EntityCategory,
-    UnitOfTemperature,
-    UnitOfTime,
+from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfTime
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.typing import StateType
+
+from .api import Breezer, Station
+from .const import UNIT_PPM, UNIT_UG_PER_M3
+from .coordinator import TionConfigEntry, TionCoordinator
+from .entity import TionEntity, device_views
+
+SECONDS_PER_DAY = 86_400
+
+
+@dataclass(frozen=True, kw_only=True)
+class TionSensorDescription[ViewT: Breezer | Station](SensorEntityDescription):
+    """A sensor reading one view property the model supports."""
+
+    feature: str
+    value_fn: Callable[[ViewT], StateType]
+
+
+def _filter_days(breezer: Breezer) -> int | None:
+    if (remaining := breezer.filter_remaining) is None:
+        return None
+    return max(0, ceil(remaining / SECONDS_PER_DAY))
+
+
+BREEZER_SENSORS: tuple[TionSensorDescription[Breezer], ...] = (
+    TionSensorDescription(
+        key="temperature_in",
+        translation_key="temperature_in",
+        feature="temperature_outdoor",
+        value_fn=lambda breezer: breezer.temperature_outdoor,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=0,
+    ),
+    TionSensorDescription(
+        key="temperature_out",
+        translation_key="temperature_out",
+        feature="temperature_outlet",
+        value_fn=lambda breezer: breezer.temperature_outlet,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=0,
+    ),
+    TionSensorDescription(
+        key="filter_replacement_days",
+        translation_key="filter_replacement_days",
+        feature="filter_remaining",
+        value_fn=_filter_days,
+        device_class=SensorDeviceClass.DURATION,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTime.DAYS,
+        suggested_display_precision=0,
+    ),
 )
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import TionZoneDevice
-from .const import DOMAIN, TionDeviceType
-from .coordinator import TionDataUpdateCoordinator
-
-_LOGGER = logging.getLogger(__name__)
+STATION_SENSORS: tuple[TionSensorDescription[Station], ...] = (
+    TionSensorDescription(
+        key="temperature",
+        translation_key="temperature",
+        feature="temperature",
+        value_fn=lambda station: station.temperature,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        suggested_display_precision=1,
+    ),
+    TionSensorDescription(
+        key="humidity",
+        translation_key="humidity",
+        feature="humidity",
+        value_fn=lambda station: station.humidity,
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=PERCENTAGE,
+        suggested_display_precision=0,
+    ),
+    TionSensorDescription(
+        key="co2",
+        translation_key="co2",
+        feature="co2",
+        value_fn=lambda station: station.co2,
+        device_class=SensorDeviceClass.CO2,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UNIT_PPM,
+        suggested_display_precision=0,
+    ),
+    TionSensorDescription(
+        key="pm25",
+        translation_key="pm25",
+        feature="pm25",
+        value_fn=lambda station: station.pm25,
+        device_class=SensorDeviceClass.PM25,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UNIT_UG_PER_M3,
+        suggested_display_precision=0,
+    ),
+)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
-) -> bool:
-    """Set up sensor Tion entities."""
-    coordinator: TionDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-
-    entities = []
-    devices = coordinator.get_devices()
-    for device in devices:
-        if not device.guid:
-            continue
-
-        if device.type in [
-            TionDeviceType.BREEZER_O2,
-            TionDeviceType.BREEZER_3S,
-            TionDeviceType.BREEZER_4S,
-        ]:
-            entities.append(TionTemperatureInSensor(coordinator, device))
-            entities.append(TionTemperatureOutSensor(coordinator, device))
-            entities.append(TionFilterReplacementSensor(coordinator, device))
-        elif device.type in [
-            TionDeviceType.MAGIC_AIR,
-            TionDeviceType.MODULE_CO2,
-        ]:
-            entities.append(TionTemperatureSensor(coordinator, device))
-            entities.append(TionHumiditySensor(coordinator, device))
-            entities.append(TionCO2Sensor(coordinator, device))
-
-            if device.data.pm25 != "NaN":
-                entities.append(TionPM25Sensor(coordinator, device))
-
-    entities.append(TionApiProfileSensor(coordinator, entry.entry_id))
-
+    hass: HomeAssistant,
+    entry: TionConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Add sensors for the features each device's model has."""
+    coordinator = entry.runtime_data
+    entities: list[SensorEntity] = []
+    for device_view in device_views(coordinator):
+        if isinstance(device_view, Breezer):
+            entities.extend(
+                TionSensor(coordinator, device_view, description)
+                for description in BREEZER_SENSORS
+                if device_view.supports(description.feature)
+            )
+        else:
+            entities.extend(
+                TionSensor(coordinator, device_view, description)
+                for description in STATION_SENSORS
+                if device_view.supports(description.feature)
+            )
     async_add_entities(entities)
-    return True
 
 
-class TionApiProfileSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity):
-    """Diagnostic sensor exposing the active Tion cloud API profile.
+class TionSensor[ViewT: Breezer | Station](TionEntity[ViewT], SensorEntity):
+    """A sensor of a breezer or a station."""
 
-    Account-level (no device) and disabled by default. It stays available while
-    the coordinator is updating even when the breezers are offline, so the
-    serving endpoint can be inspected during an outage.
-    """
-
-    _attr_has_entity_name = True
-    _attr_translation_key = "api_profile"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-
-    def __init__(self, coordinator: TionDataUpdateCoordinator, entry_id: str) -> None:
-        """Initialize the API profile sensor."""
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry_id}_api_profile"
-
-    @property
-    def native_value(self) -> str:
-        """Return the name of the active API profile."""
-        return self.coordinator.client.active_profile
-
-
-class TionSensor(CoordinatorEntity[TionDataUpdateCoordinator], SensorEntity, abc.ABC):
-    """Abstract Tion sensor."""
-
-    _attr_has_entity_name = True
+    entity_description: TionSensorDescription[ViewT]
 
     def __init__(
         self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
+        coordinator: TionCoordinator,
+        device_view: ViewT,
+        description: TionSensorDescription[ViewT],
     ) -> None:
-        """Initialize sensor device."""
-        super().__init__(coordinator)
-        self._device = device
-
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._device.guid)},
-        )
+        """Create the sensor for one device."""
+        super().__init__(coordinator, device_view, description.key)
+        self.entity_description = description
 
     @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return (
-            super().available
-            and self._device is not None
-            and self._device.is_online
-            and self._device.valid
-        )
-
-    @property
-    @abc.abstractmethod
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-
-    @property
-    @abc.abstractmethod
-    def native_value(self):
-        """Return the state of the sensor."""
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        if device_data := self.coordinator.get_device(self._device.guid):
-            self._device = device_data
-        super()._handle_coordinator_update()
-
-
-class TionTemperatureSensor(TionSensor):
-    """Tion room temperature sensor."""
-
-    _attr_translation_key = "temperature"
-
-    def __init__(
-        self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize sensor device."""
-        super().__init__(coordinator, device)
-
-        self._attr_device_class = SensorDeviceClass.TEMPERATURE
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-        self._attr_suggested_display_precision = 1
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_temperature"
-
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return self._device.data.temperature if self.available else None
-
-
-class TionHumiditySensor(TionSensor):
-    """Tion room humidity sensor."""
-
-    _attr_translation_key = "humidity"
-
-    def __init__(
-        self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize sensor device."""
-        super().__init__(coordinator, device)
-
-        self._attr_device_class = SensorDeviceClass.HUMIDITY
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = PERCENTAGE
-        self._attr_suggested_display_precision = 0
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_humidity"
-
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return self._device.data.humidity if self.available else None
-
-
-class TionCO2Sensor(TionSensor):
-    """Tion room CO2 sensor."""
-
-    _attr_translation_key = "co2"
-
-    def __init__(
-        self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize sensor device."""
-        super().__init__(coordinator, device)
-
-        self._attr_device_class = SensorDeviceClass.CO2
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = CONCENTRATION_PARTS_PER_MILLION
-        self._attr_suggested_display_precision = 0
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_co2"
-
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return self._device.data.co2 if self.available else None
-
-
-class TionPM25Sensor(TionSensor):
-    """Tion room PM25 sensor."""
-
-    _attr_translation_key = "pm25"
-
-    def __init__(
-        self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize sensor device."""
-        super().__init__(coordinator, device)
-
-        self._attr_device_class = SensorDeviceClass.PM25
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = CONCENTRATION_MICROGRAMS_PER_CUBIC_METER
-        self._attr_suggested_display_precision = 0
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_pm25"
-
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return self._device.data.pm25 if self.available else None
-
-
-class TionTemperatureInSensor(TionSensor):
-    """Tion inside air flow temperature sensor."""
-
-    _attr_translation_key = "temperature_in"
-
-    def __init__(
-        self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize sensor device."""
-        super().__init__(coordinator, device)
-
-        self._attr_device_class = SensorDeviceClass.TEMPERATURE
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-        self._attr_suggested_display_precision = 0
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_temperature_in"
-
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return self._device.data.t_in if self.available else None
-
-
-class TionTemperatureOutSensor(TionSensor):
-    """Tion outside air flow temperature sensor."""
-
-    _attr_translation_key = "temperature_out"
-
-    def __init__(
-        self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize sensor device."""
-        super().__init__(coordinator, device)
-
-        self._attr_device_class = SensorDeviceClass.TEMPERATURE
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-        self._attr_suggested_display_precision = 0
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_temperature_out"
-
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return self._device.data.t_out if self.available else None
-
-
-class TionFilterReplacementSensor(TionSensor):
-    """Tion Breezer filter replacement sensor."""
-
-    _attr_translation_key = "filter_replacement_days"
-
-    def __init__(
-        self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize sensor device."""
-        super().__init__(coordinator, device)
-
-        self._attr_device_class = SensorDeviceClass.DURATION
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = UnitOfTime.DAYS
-        self._attr_suggested_display_precision = 0
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_filter_replacement_days"
-
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return (
-            max(0, ceil(self._device.data.filter_time_seconds / 86400))
-            if self.available
-            else None
-        )
+    def native_value(self) -> StateType:
+        """Return the sensor's value."""
+        return self.entity_description.value_fn(self.device_view)

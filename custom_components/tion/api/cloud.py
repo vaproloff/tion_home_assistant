@@ -233,8 +233,7 @@ class TionCloud:
             )
             if location is None or (room := self._account.room(room_id)) is None:
                 raise ValueError(f"Unknown room {room_id}")
-            # speed_max 0 is an unset auto mode (e.g. an empty message), not settings.
-            if (current := room.auto) is not None and current.speed_max > 0:
+            if (current := room.configured_auto) is not None:
                 if current.algorithm not in AutoControlAlgorithm:
                     current = replace(current, algorithm=AutoControlAlgorithm.AVERAGE)
                 auto = replace(current, **changes)

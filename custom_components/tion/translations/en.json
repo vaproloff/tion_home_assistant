@@ -61,11 +61,9 @@
         "title": "Tion options",
         "description": "Choose what to configure. Option changes are saved only when you return to this step and select Done.",
         "data": {
-          "scan_interval": "API poll interval",
           "options_action": "Action"
         },
         "data_description": {
-          "scan_interval": "Minimum time in seconds between Tion cloud API polls. Lower values refresh faster but make more cloud requests.",
           "options_action": "Open local PID settings, configure speed presets, or select Done to save all pending option changes."
         }
       },
@@ -266,9 +264,6 @@
       },
       "filter_replacement_days": {
         "name": "Days until filter replacement"
-      },
-      "api_profile": {
-        "name": "API profile"
       }
     },
     "switch": {
@@ -284,6 +279,23 @@
       "heater": {
         "name": "Air Heater"
       }
+    }
+  },
+  "exceptions": {
+    "auth_failed": {
+      "message": "Tion rejected the saved sign-in; sign in to the account again."
+    },
+    "cloud_unavailable": {
+      "message": "The Tion cloud is unreachable."
+    },
+    "cloud_error": {
+      "message": "The Tion cloud returned an error: {message}"
+    },
+    "command_rejected": {
+      "message": "{device} rejected the command: {message}"
+    },
+    "invalid_value": {
+      "message": "The value cannot be set: {message}"
     }
   }
 }

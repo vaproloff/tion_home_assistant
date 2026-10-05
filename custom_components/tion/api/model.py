@@ -35,6 +35,11 @@ class Room:
     name: str
     auto: AutoControl | None
 
+    @property
+    def configured_auto(self) -> AutoControl | None:
+        """Return the auto mode if it is set up (speed_max 0 is an empty message)."""
+        return self.auto if self.auto is not None and self.auto.speed_max > 0 else None
+
 
 @dataclass(frozen=True, slots=True)
 class Device:

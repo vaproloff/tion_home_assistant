@@ -1,233 +1,250 @@
-"""Tests for Tion switch entities."""
+"""Tests for the Tion switches and the errors of Tion commands."""
 
-import asyncio
-from contextlib import asynccontextmanager
-from types import SimpleNamespace
-from typing import Any
-
+from ha_tests.common import MockConfigEntry, snapshot_platform
 import pytest
+from syrupy.assertion import SnapshotAssertion
 
-from custom_components.tion.const import Heater, TionDeviceType, ZoneMode
-from custom_components.tion.switch import (
-    TionAutoModeSwitch,
-    TionBacklightSwitch,
-    TionBreezerHeaterSwitch,
-    TionBreezerSoundSwitch,
+from custom_components.tion.api import (
+    DeviceCommand,
+    TionApiError,
+    TionAuthError,
+    TionCommandError,
+    TionConnectionError,
+)
+from custom_components.tion.api.datapoints import DPKind, DPValue
+from custom_components.tion.const import DOMAIN
+from homeassistant.components.switch import (
+    DOMAIN as SWITCH_DOMAIN,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+)
+from homeassistant.config_entries import SOURCE_REAUTH
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, Platform
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
+
+from .api.payloads import PROFILE_3S  # noqa: TID251
+from .common import entity_id  # noqa: TID251
+from .fake_cloud import (  # noqa: TID251
+    BEDROOM_ID,
+    BREEZER_3S,
+    BREEZER_4S,
+    BREEZER_O2,
+    MAGICAIR,
+    MAGICAIR_310,
+    MODULE_CO2,
+    FakeTionCloud,
+    default_account,
+    dps,
+    replace_device,
+    set_values,
 )
 
-DEVICE_GUID = "device-guid"
-ZONE_GUID = "zone-guid"
+
+@pytest.fixture
+def platforms() -> list[Platform]:
+    """Set up only the switches."""
+    return [Platform.SWITCH]
 
 
-class FakeReconciler:
-    """Fake reconciler recording desired-state writes."""
-
-    def __init__(self) -> None:
-        """Initialize empty desired overlays."""
-        self.breezer: dict[str, dict[str, Any]] = {}
-        self.zone: dict[str, dict[str, Any]] = {}
-
-    def set_breezer(self, guid: str, fields: dict[str, Any]) -> None:
-        """Record a breezer desired write."""
-        self.breezer.setdefault(guid, {}).update(fields)
-
-    def set_zone(self, guid: str, fields: dict[str, Any]) -> None:
-        """Record a zone desired write."""
-        self.zone.setdefault(guid, {}).update(fields)
-
-    def reconcile(self, data: Any) -> None:
-        """No-op reconcile."""
-
-
-class FakeCoordinator:
-    """Fake Tion coordinator for switch tests."""
-
-    def __init__(
-        self,
-        device: SimpleNamespace,
-        zone: SimpleNamespace | None = None,
-    ) -> None:
-        """Initialize fake coordinator."""
-        self.reconciler = FakeReconciler()
-        self.last_update_success = True
-        self.data = SimpleNamespace()
-        self._device = device
-        self._zone = zone
-        self.settings_calls: list[tuple[str, dict[str, int]]] = []
-        self._settings_locks: dict[str, asyncio.Lock] = {}
-
-    async def async_request_refresh(self) -> None:
-        """Record a refresh request (no-op)."""
-
-    def get_device(self, guid: str) -> SimpleNamespace:
-        """Return the fake device."""
-        return self._device
-
-    def get_device_zone(self, guid: str) -> SimpleNamespace | None:
-        """Return the fake zone."""
-        return self._zone
-
-    async def async_send_settings(self, *, guid: str, data: dict[str, int]) -> None:
-        """Record a settings command."""
-        self.settings_calls.append((guid, data))
-
-    @asynccontextmanager
-    async def async_settings_command(self, guid: str):
-        """Serialize settings writes for one device (real lock)."""
-        async with self._settings_locks.setdefault(guid, asyncio.Lock()):
-            yield
-
-
-def _device(
-    *,
-    device_type: TionDeviceType = TionDeviceType.BREEZER_4S,
-    heater_mode: str = Heater.OFF,
-    heater_enabled: bool | None = None,
-    backlight: int = 0,
-    sound_is_on: int = 0,
-) -> SimpleNamespace:
-    """Return a fake Tion device."""
-    return SimpleNamespace(
-        guid=DEVICE_GUID,
-        name="Device",
-        type=device_type,
-        is_online=True,
-        valid=True,
-        data=SimpleNamespace(
-            heater_mode=heater_mode,
-            heater_enabled=heater_enabled,
-            backlight=backlight,
-            sound_is_on=sound_is_on,
-        ),
+async def _switch(hass: HomeAssistant, unique_id: str, service: str) -> None:
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        service,
+        {ATTR_ENTITY_ID: entity_id(hass, Platform.SWITCH, unique_id)},
+        blocking=True,
     )
 
 
-def _zone(mode: ZoneMode = ZoneMode.MANUAL) -> SimpleNamespace:
-    """Return a fake zone."""
-    return SimpleNamespace(
-        guid=ZONE_GUID,
-        mode=SimpleNamespace(current=mode, auto_set=SimpleNamespace(co2=800)),
-        devices=[],
-    )
-
-
-def _build(switch_cls: type, coordinator: FakeCoordinator) -> Any:
-    """Return a switch of the given class bound to the coordinator."""
-    switch = switch_cls.__new__(switch_cls)
-    switch.coordinator = coordinator
-    switch._device = coordinator._device  # noqa: SLF001
-    switch._attr_name = switch_cls.__name__  # noqa: SLF001
-    switch._is_on = None  # noqa: SLF001
-    switch.async_write_ha_state = lambda: None
-    return switch
-
-
-def test_auto_mode_on_writes_zone_auto() -> None:
-    """Test enabling auto mode writes the zone AUTO desired."""
-    coordinator = FakeCoordinator(
-        _device(device_type=TionDeviceType.MAGIC_AIR), _zone()
-    )
-    switch = _build(TionAutoModeSwitch, coordinator)
-
-    asyncio.run(switch.async_turn_on())
-
-    assert coordinator.reconciler.zone[ZONE_GUID] == {"mode": ZoneMode.AUTO}
-
-
-def test_auto_mode_off_writes_zone_manual() -> None:
-    """Test disabling auto mode writes the zone MANUAL desired."""
-    coordinator = FakeCoordinator(
-        _device(device_type=TionDeviceType.MAGIC_AIR), _zone(ZoneMode.AUTO)
-    )
-    switch = _build(TionAutoModeSwitch, coordinator)
-
-    asyncio.run(switch.async_turn_off())
-
-    assert coordinator.reconciler.zone[ZONE_GUID] == {"mode": ZoneMode.MANUAL}
-
-
-def test_heater_4s_on_writes_heater_mode() -> None:
-    """Test enabling the 4S heater writes heater_mode ON desired."""
-    coordinator = FakeCoordinator(_device(device_type=TionDeviceType.BREEZER_4S))
-    switch = _build(TionBreezerHeaterSwitch, coordinator)
-
-    asyncio.run(switch.async_turn_on())
-
-    assert coordinator.reconciler.breezer[DEVICE_GUID] == {"heater_mode": Heater.ON}
-
-
-def test_heater_4s_off_writes_heater_mode_off() -> None:
-    """Test disabling the 4S heater writes heater_mode OFF desired."""
-    coordinator = FakeCoordinator(
-        _device(device_type=TionDeviceType.BREEZER_4S, heater_mode=Heater.ON)
-    )
-    switch = _build(TionBreezerHeaterSwitch, coordinator)
-
-    asyncio.run(switch.async_turn_off())
-
-    assert coordinator.reconciler.breezer[DEVICE_GUID] == {"heater_mode": Heater.OFF}
-
-
-def test_heater_non_4s_on_writes_heater_enabled() -> None:
-    """Test enabling a non-4S heater writes heater_enabled desired."""
-    coordinator = FakeCoordinator(
-        _device(device_type=TionDeviceType.BREEZER_3S, heater_enabled=False)
-    )
-    switch = _build(TionBreezerHeaterSwitch, coordinator)
-
-    asyncio.run(switch.async_turn_on())
-
-    assert coordinator.reconciler.breezer[DEVICE_GUID] == {"heater_enabled": True}
+@pytest.mark.usefixtures("init_integration")
+async def test_switches(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    snapshot: SnapshotAssertion,
+    config_entry: MockConfigEntry,
+) -> None:
+    """Each model gets the switches it can set."""
+    await snapshot_platform(hass, entity_registry, snapshot, config_entry.entry_id)
 
 
 @pytest.mark.parametrize(
-    ("switch_cls", "field"),
+    ("unique_id", "exists"),
     [
-        (TionBacklightSwitch, "backlight"),
-        (TionBreezerSoundSwitch, "sound"),
+        pytest.param(f"{BREEZER_4S}_backlight", True, id="4s_backlight"),
+        pytest.param(f"{BREEZER_3S}_backlight", False, id="3s_backlight"),
+        pytest.param(f"{BREEZER_3S}_sound", False, id="3s_sound"),
+        pytest.param(f"{BREEZER_O2}_heater", False, id="o2_without_heater"),
+        pytest.param(f"{BREEZER_3S}_heater", True, id="3s_heater"),
+        pytest.param(f"{MAGICAIR}_auto_mode", True, id="magicair_auto_mode"),
+        pytest.param(f"{MODULE_CO2}_auto_mode", False, id="module_co2_auto_mode"),
     ],
-    ids=["backlight", "sound"],
 )
-def test_settings_switch_sends_settings(switch_cls: type, field: str) -> None:
-    """Test backlight/sound switches write through the settings endpoint."""
-    coordinator = FakeCoordinator(_device())
-    switch = _build(switch_cls, coordinator)
+@pytest.mark.usefixtures("init_integration")
+async def test_switch_per_model(
+    entity_registry: er.EntityRegistry, unique_id: str, exists: bool
+) -> None:
+    """A switch exists only where the model can set it."""
+    assert (
+        entity_registry.async_get_entity_id(Platform.SWITCH, DOMAIN, unique_id)
+        is not None
+    ) is exists
 
-    asyncio.run(switch.async_turn_on())
 
-    assert coordinator.settings_calls == [(DEVICE_GUID, {field: 1})]
-    assert coordinator.reconciler.breezer == {}
-    assert coordinator.reconciler.zone == {}
+@pytest.mark.parametrize(
+    "account",
+    [pytest.param(replace_device(default_account(), BREEZER_3S, dps={}), id="silent")],
+)
+@pytest.mark.usefixtures("init_integration")
+async def test_heater_of_a_silent_breezer(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """Before the breezer reports, its heater switch waits unavailable."""
+    heater = entity_id(hass, Platform.SWITCH, f"{BREEZER_3S}_heater")
+    assert hass.states.get(heater).state == STATE_UNAVAILABLE
+
+    cloud.push(
+        set_values(
+            cloud.account,
+            BREEZER_3S,
+            dps(PROFILE_3S, climatic_flags=0b001, heater_on_off=True),
+        )
+    )
+    await hass.async_block_till_done()
+
+    assert hass.states.get(heater).state == "on"
 
 
-def test_settings_commands_serialize_per_device() -> None:
-    """Test two settings writes on one device run one at a time under the lock."""
-    coordinator = FakeCoordinator(_device())
-    backlight = _build(TionBacklightSwitch, coordinator)
-    sound = _build(TionBreezerSoundSwitch, coordinator)
-    order: list[str] = []
-    first_in = asyncio.Event()
-    release_first = asyncio.Event()
+@pytest.mark.parametrize(
+    ("unique_id", "service", "command", "state"),
+    [
+        pytest.param(
+            f"{BREEZER_4S}_backlight",
+            SERVICE_TURN_OFF,
+            DeviceCommand(BREEZER_4S, (DPValue(76, DPKind.INT, 0),)),
+            "off",
+            id="4s_backlight",
+        ),
+        pytest.param(
+            f"{BREEZER_4S}_sound",
+            SERVICE_TURN_ON,
+            DeviceCommand(BREEZER_4S, (DPValue(78, DPKind.INT, 1),)),
+            "on",
+            id="4s_sound",
+        ),
+        pytest.param(
+            f"{BREEZER_4S}_heater",
+            SERVICE_TURN_OFF,
+            DeviceCommand(BREEZER_4S, (DPValue(84, DPKind.INT, 1),)),
+            "off",
+            id="4s_heater",
+        ),
+        pytest.param(
+            f"{BREEZER_3S}_heater",
+            SERVICE_TURN_ON,
+            DeviceCommand(BREEZER_3S, (DPValue(72, DPKind.BOOL, True),)),
+            "on",
+            id="3s_heater",
+        ),
+        pytest.param(
+            f"{MAGICAIR}_backlight",
+            SERVICE_TURN_OFF,
+            DeviceCommand(MAGICAIR, (DPValue(76, DPKind.INT, 0),)),
+            "off",
+            id="magicair_backlight",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("init_integration")
+async def test_device_switch_commands(
+    hass: HomeAssistant,
+    cloud: FakeTionCloud,
+    unique_id: str,
+    service: str,
+    command: DeviceCommand,
+    state: str,
+) -> None:
+    """A switch sends its datapoint and shows the confirmed state."""
+    await _switch(hass, unique_id, service)
 
-    async def _send_settings(*, guid: str, data: dict[str, int]) -> None:
-        order.append(next(iter(data)))
-        if len(order) == 1:
-            first_in.set()
-            await release_first.wait()
+    assert cloud.calls == [("command", command)]
+    assert hass.states.get(entity_id(hass, Platform.SWITCH, unique_id)).state == state
 
-    coordinator.async_send_settings = _send_settings  # type: ignore[method-assign]
 
-    async def _run() -> None:
-        first = asyncio.create_task(backlight.async_turn_on())
-        await first_in.wait()
-        second = asyncio.create_task(sound.async_turn_on())
-        await asyncio.sleep(0)
-        # The second write must still be blocked on the settings lock.
-        assert order == ["backlight"]
-        release_first.set()
-        await first
-        await second
+@pytest.mark.usefixtures("init_integration")
+async def test_auto_mode_commands(hass: HomeAssistant, cloud: FakeTionCloud) -> None:
+    """The MagicAir switch turns its room's auto mode on and off."""
+    await _switch(hass, f"{MAGICAIR}_auto_mode", SERVICE_TURN_ON)
+    await _switch(hass, f"{MAGICAIR}_auto_mode", SERVICE_TURN_OFF)
 
-    asyncio.run(_run())
+    assert cloud.calls == [
+        ("auto_control", (BEDROOM_ID, {"enabled": True})),
+        ("auto_control", (BEDROOM_ID, {"enabled": False})),
+    ]
 
-    assert order == ["backlight", "sound"]
+
+@pytest.mark.usefixtures("init_integration")
+async def test_auto_mode_without_room_auto(hass: HomeAssistant) -> None:
+    """A MagicAir in a room without auto mode has an unavailable switch."""
+    state = hass.states.get(
+        entity_id(hass, Platform.SWITCH, f"{MAGICAIR_310}_auto_mode")
+    )
+
+    assert state.state == STATE_UNAVAILABLE
+
+
+@pytest.mark.parametrize(
+    ("error", "raised", "translation_key"),
+    [
+        pytest.param(
+            TionCommandError(3, "busy"),
+            HomeAssistantError,
+            "command_rejected",
+            id="rejected",
+        ),
+        pytest.param(
+            TionConnectionError("down"),
+            HomeAssistantError,
+            "cloud_unavailable",
+            id="unavailable",
+        ),
+        pytest.param(TionApiError("bad"), HomeAssistantError, "cloud_error", id="api"),
+        pytest.param(
+            ValueError("out of range"),
+            ServiceValidationError,
+            "invalid_value",
+            id="invalid",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("init_integration")
+async def test_command_errors(
+    hass: HomeAssistant,
+    cloud: FakeTionCloud,
+    error: Exception,
+    raised: type[HomeAssistantError],
+    translation_key: str,
+) -> None:
+    """Cloud failures surface as translated Home Assistant errors."""
+    cloud.command_error = error
+
+    with pytest.raises(raised) as exc_info:
+        await _switch(hass, f"{BREEZER_4S}_sound", SERVICE_TURN_ON)
+
+    assert exc_info.value.translation_key == translation_key
+
+
+@pytest.mark.usefixtures("init_integration")
+async def test_command_auth_error_asks_to_sign_in(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """A rejected sign-in during a command starts reauthentication."""
+    cloud.command_error = TionAuthError("expired")
+
+    with pytest.raises(HomeAssistantError) as exc_info:
+        await _switch(hass, f"{BREEZER_4S}_sound", SERVICE_TURN_ON)
+    await hass.async_block_till_done()
+
+    assert exc_info.value.translation_key == "auth_failed"
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]

@@ -1,6 +1,7 @@
 """Adds config flow (UI flow) for Tion component."""
 
 from collections.abc import Mapping
+from functools import cached_property
 import hashlib
 import logging
 from typing import Any
@@ -10,7 +11,7 @@ import voluptuous as vol
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
-    ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -19,11 +20,9 @@ from homeassistant.const import (
     CONF_CODE,
     CONF_EMAIL,
     CONF_PASSWORD,
-    CONF_SCAN_INTERVAL,
     CONF_USERNAME,
     Platform,
 )
-from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .api.auth import (
@@ -35,6 +34,7 @@ from .api.auth import (
 )
 from .api.device_key import TionDeviceKey
 from .api.exceptions import TionConnectionError
+from .api.views import Breezer, view
 from .captcha_view import CAPTCHA_STEP_ID, async_register_captcha_view, captcha_page_url
 from .const import (
     CONF_BREEZER_GUID,
@@ -57,13 +57,11 @@ from .const import (
     DEFAULT_PID_KD,
     DEFAULT_PID_KI,
     DEFAULT_PID_KP,
-    DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     SUPPORTED_PRESETS,
-    TionDeviceType,
     TionPresetType,
 )
-from .coordinator import TionDataUpdateCoordinator
+from .coordinator import TionConfigEntry
 from .session import async_create_auth
 
 _LOGGER = logging.getLogger(__name__)
@@ -114,12 +112,6 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     def _unique_id(email: str) -> str:
         """Return config entry unique id."""
         return hashlib.sha256(email.encode()).hexdigest()
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        """Create the options flow."""
-        return TionOptionsFlow(config_entry)
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -263,15 +255,20 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class TionOptionsFlow(OptionsFlow):
-    """Tion options flow handler."""
+    """Tion options flow handler; not offered until local PID returns."""
 
-    def __init__(self, config_entry: ConfigEntry) -> None:
+    config_entry: TionConfigEntry
+
+    def __init__(self) -> None:
         """Initialize Tion options flow."""
-        self._entry_id = config_entry.entry_id
-        self._options = dict(config_entry.options)
         self._breezer_guid: str | None = None
         self._preset_name: str | None = None
         self._preset_type: str | None = None
+
+    @cached_property
+    def _options(self) -> dict[str, Any]:
+        """Return the draft of the options, saved when the flow finishes."""
+        return dict(self.config_entry.options)
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -279,7 +276,6 @@ class TionOptionsFlow(OptionsFlow):
         """Manage the options."""
 
         if user_input is not None:
-            self._options[CONF_SCAN_INTERVAL] = user_input[CONF_SCAN_INTERVAL]
             if user_input[CONF_OPTIONS_ACTION] == OPTIONS_ACTION_CONFIGURE_LOCAL_PID:
                 return await self.async_step_local_pid()
             if user_input[CONF_OPTIONS_ACTION] == OPTIONS_ACTION_CONFIGURE_PRESETS:
@@ -291,12 +287,6 @@ class TionOptionsFlow(OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
-                        CONF_SCAN_INTERVAL,
-                        default=self._options.get(
-                            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
-                        ),
-                    ): vol.All(vol.Coerce(int), vol.Range(min=10)),
                     vol.Required(
                         CONF_OPTIONS_ACTION, default=OPTIONS_ACTION_DONE
                     ): selector.SelectSelector(
@@ -619,20 +609,28 @@ class TionOptionsFlow(OptionsFlow):
             return {}
         return self._options.get(CONF_PRESETS, {}).get(breezer_guid, {})
 
+    def _breezers(self) -> list[Breezer]:
+        """Return the breezers of the loaded config entry."""
+        if self.config_entry.state is not ConfigEntryState.LOADED:
+            return []
+        account = self.config_entry.runtime_data.data
+        return [
+            device_view
+            for device in account.devices()
+            if isinstance(device_view := view(device), Breezer)
+        ]
+
     def _breezer_max_speed(self, breezer_guid: str | None) -> int:
-        """Return the configured max speed for a breezer (defaults to 6)."""
-        coordinator: TionDataUpdateCoordinator | None = self.hass.data.get(
-            DOMAIN, {}
-        ).get(self._entry_id)
-        if coordinator is not None and coordinator.data is not None:
-            for device in coordinator.get_devices():
-                if device.guid == breezer_guid:
-                    return getattr(device, "max_speed", 6)
+        """Return the max speed of a breezer (defaults to 6)."""
+        for breezer in self._breezers():
+            if breezer.id == breezer_guid and breezer.speed_max is not None:
+                return breezer.speed_max
         return 6
 
     def _preset_schema(self) -> vol.Schema:
         """Return the config schema for the current preset type."""
-        preset = self._breezer_presets(self._breezer_guid).get(self._preset_name, {})
+        presets = self._breezer_presets(self._breezer_guid)
+        preset = presets.get(self._preset_name, {}) if self._preset_name else {}
         max_speed = self._breezer_max_speed(self._breezer_guid)
 
         if self._preset_type == TionPresetType.MANUAL:
@@ -679,24 +677,13 @@ class TionOptionsFlow(OptionsFlow):
             }
         )
 
-    def _breezer_options(self) -> list[dict[str, str]]:
+    def _breezer_options(self) -> list[selector.SelectOptionDict]:
         """Return selectable breezers for the config entry."""
-        coordinator: TionDataUpdateCoordinator | None = self.hass.data.get(
-            DOMAIN, {}
-        ).get(self._entry_id)
-        if coordinator is None or coordinator.data is None:
-            return []
-
         return [
-            {"label": device.name or device.guid, "value": device.guid}
-            for device in coordinator.get_devices()
-            if device.guid
-            and device.type
-            in (
-                TionDeviceType.BREEZER_O2,
-                TionDeviceType.BREEZER_3S,
-                TionDeviceType.BREEZER_4S,
+            selector.SelectOptionDict(
+                value=breezer.id, label=breezer.device.name or breezer.id
             )
+            for breezer in self._breezers()
         ]
 
     def _pid_options(self, breezer_guid: str) -> dict[str, Any]:
