@@ -23,6 +23,9 @@ from homeassistant.data_entry_flow import UnknownFlow
 from homeassistant.helpers.config_entry_oauth2_flow import HEADER_FRONTEND_BASE
 from homeassistant.helpers.http import current_request
 
+# The views are served by a local aiohttp test server.
+pytestmark = pytest.mark.usefixtures("socket_enabled")
+
 FLOW_ID = "0123456789abcdef0123456789abcdef"
 
 

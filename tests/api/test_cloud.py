@@ -936,6 +936,7 @@ async def hanging_up_nats_url() -> AsyncIterator[str]:
 
 
 @pytest.mark.parametrize("create_task", ["eager"], indirect=True)
+@pytest.mark.usefixtures("socket_enabled")
 @pytest.mark.asyncio
 async def test_start_fails_when_real_channel_is_lost_during_login(
     create_task: TaskFactory | None, hanging_up_nats_url: str
@@ -1124,6 +1125,8 @@ async def test_command_interrupted_by_drop(harness: Harness) -> None:
 
     with pytest.raises(TionConnectionError):
         await harness.cloud.async_command(harness.breezer().command(speed=3))
+    # The drop started reconnecting; stop it before the test ends.
+    await harness.cloud.async_stop()
 
 
 @pytest.mark.asyncio
