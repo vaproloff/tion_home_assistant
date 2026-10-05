@@ -5,6 +5,17 @@
         "default": "mdi:air-filter"
       }
     },
+    "number": {
+      "max_speed_set": {
+        "default": "mdi:fan-chevron-up"
+      },
+      "min_speed_set": {
+        "default": "mdi:fan-chevron-down"
+      },
+      "target_co2": {
+        "default": "mdi:molecule-co2"
+      }
+    },
     "switch": {
       "auto_mode": {
         "default": "mdi:fan-auto",
