@@ -18,10 +18,15 @@ from custom_components.tion.api import (
     TionConnectionError,
     TionTokens,
 )
+from custom_components.tion.api.views import (  # noqa: TID251
+    BREEZER_PRODUCTS,
+    STATION_PRODUCTS,
+)
 from custom_components.tion.const import (
     CONF_DEVICE_KEY,
     CONF_PID_ENABLED,
     DOMAIN,
+    MODEL_NAMES,
     PID_NUMBER_KEYS,
 )
 from custom_components.tion.coordinator import TionCoordinator
@@ -307,6 +312,11 @@ async def test_pid_numbers_of_breezers_without_pid_are_removed(
             entity_registry, config_entry.entry_id
         )
     } == remaining
+
+
+def test_every_supported_model_has_a_name() -> None:
+    """Every product the integration supports has a model name."""
+    assert set(MODEL_NAMES) == BREEZER_PRODUCTS | STATION_PRODUCTS
 
 
 async def test_conflicting_registry_device_does_not_fail_the_account(
