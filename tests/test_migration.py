@@ -4,7 +4,7 @@ import logging
 from typing import Any
 from unittest.mock import patch
 
-from ha_tests.common import MockConfigEntry
+from ha_tests.common import MockConfigEntry, mock_restore_cache_with_extra_data
 import pytest
 
 from custom_components.tion.api import AutoControl, TionAccount
@@ -22,12 +22,13 @@ from custom_components.tion.const import (
     CONF_PRESETS,
     DOMAIN,
 )
+from homeassistant.components.climate import ATTR_FAN_MODE, ATTR_PRESET_MODE
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_SCAN_INTERVAL, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .common import PID_SENSOR, entity_id, setup_entry  # noqa: TID251
+from .common import PID_SENSOR, entity_id, pid_options, setup_entry  # noqa: TID251
 from .fake_cloud import (  # noqa: TID251
     BEDROOM_ID,
     BREEZER_3S,
@@ -567,3 +568,234 @@ async def test_moving_is_logged_once(
     await _load(hass, config_entry, account)
 
     assert "Moved" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "account",
+    [
+        pytest.param(
+            replace_device(default_account(), BREEZER_4S, macs=(RF_MAC,)),
+            id="short_rf_notation",
+        )
+    ],
+)
+async def test_taken_current_identifier_skips_the_device(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """An old device is left alone when another device has the current ID."""
+    device = _old_device(device_registry, config_entry, OLD_4S, "AA:BB:CC:DD")
+    device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={(DOMAIN, BREEZER_4S)},
+        connections={(dr.CONNECTION_NETWORK_MAC, RF_MAC)},
+    )
+    climate = _old_entity(
+        entity_registry, config_entry, Platform.CLIMATE, OLD_4S, "old_4s", device
+    )
+
+    await _load(hass, config_entry, account)
+
+    assert config_entry.state is ConfigEntryState.LOADED
+    assert _identifiers(device_registry, device) == {(DOMAIN, OLD_4S)}
+    assert _unique_ids(entity_registry, config_entry) == {climate: OLD_4S}
+
+
+@pytest.mark.parametrize(
+    "account",
+    [
+        pytest.param(
+            set_room_auto(
+                replace_device(default_account(), BREEZER_O2, room_id=BEDROOM_ID),
+                BEDROOM_ID,
+                AutoControl(enabled=False, speed_min=3, speed_max=6, co2_target=800),
+            ),
+            id="o2_in_a_wide_room",
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "options",
+    [
+        {
+            CONF_PID_BREEZERS: {OLD_O2: OLD_PID},
+            CONF_PRESETS: {
+                OLD_O2: {
+                    "sleep": {
+                        CONF_PRESET_TYPE: "auto",
+                        CONF_PRESET_MIN_SPEED: 3,
+                        CONF_PRESET_MAX_SPEED: 6,
+                    }
+                }
+            },
+        }
+    ],
+)
+async def test_limits_are_capped_at_the_breezer_maximum(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """A breezer with a top speed below 6 gets limits and presets within it."""
+    _old_device(device_registry, config_entry, OLD_O2, _mac(account, BREEZER_O2))
+
+    await _load(hass, config_entry, account)
+
+    assert config_entry.options == {
+        CONF_PID_BREEZERS: {
+            BREEZER_O2: {**OLD_PID, CONF_PID_MIN_SPEED: 3, CONF_PID_MAX_SPEED: 4}
+        },
+        CONF_PRESETS: {
+            BREEZER_O2: {
+                "sleep": {
+                    CONF_PRESET_TYPE: "local_pid",
+                    CONF_PRESET_MIN_SPEED: 3,
+                    CONF_PRESET_MAX_SPEED: 4,
+                }
+            }
+        },
+    }
+
+
+CURRENT_PID = {**OLD_PID, CONF_PID_KP: 0.2}
+CURRENT_PRESETS = {"eco": {CONF_PRESET_TYPE: "manual", CONF_PRESET_SPEED: 1}}
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {
+            CONF_PID_BREEZERS: {OLD_4S: OLD_PID, BREEZER_4S: CURRENT_PID},
+            CONF_PRESETS: {
+                OLD_4S: {"sleep": {CONF_PRESET_TYPE: "manual", CONF_PRESET_SPEED: 2}},
+                BREEZER_4S: CURRENT_PRESETS,
+            },
+        }
+    ],
+)
+async def test_current_key_wins_over_the_old_one(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """Options already under the current ID stay as they are; the old ones go."""
+    _old_device(device_registry, config_entry, OLD_4S, _mac(account, BREEZER_4S))
+
+    await _load(hass, config_entry, account)
+
+    assert config_entry.options == {
+        CONF_PID_BREEZERS: {BREEZER_4S: CURRENT_PID},
+        CONF_PRESETS: {BREEZER_4S: CURRENT_PRESETS},
+    }
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {
+            **pid_options(OLD_4S),
+            CONF_PRESETS: {
+                OLD_4S: {"sleep": {CONF_PRESET_TYPE: "manual", CONF_PRESET_SPEED: 1}}
+            },
+        }
+    ],
+)
+async def test_old_climate_restore_payload_resumes_pid(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """A payload of the old release resumes PID on the moved climate, no preset."""
+    device = _old_device(
+        device_registry, config_entry, OLD_4S, _mac(account, BREEZER_4S)
+    )
+    climate = _old_entity(
+        entity_registry, config_entry, Platform.CLIMATE, OLD_4S, "old_4s", device
+    )
+    hass.states.async_set(PID_SENSOR, "1200")
+    mock_restore_cache_with_extra_data(
+        hass,
+        [
+            (
+                State(climate, "heat"),
+                {
+                    "pid_active": True,
+                    "preset_mode": "sleep",
+                    "preset_saved": {"fan_speed": 3},
+                },
+            )
+        ],
+    )
+
+    with patch("custom_components.tion.PLATFORMS", [Platform.CLIMATE]):
+        await setup_entry(hass, config_entry, FakeTionCloud(account), FakeAuth())
+
+    state = hass.states.get(climate)
+    assert state is not None
+    assert (
+        state.attributes[ATTR_FAN_MODE],
+        state.attributes["pid_active"],
+        state.attributes[ATTR_PRESET_MODE],
+    ) == ("local_pid", True, "none")
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {
+            CONF_PID_BREEZERS: {OLD_4S: OLD_PID},
+            CONF_PRESETS: {OLD_4S: CURRENT_PRESETS},
+        }
+    ],
+)
+async def test_stub_id_moves_on_to_the_real_one(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Old ID to stub ID, then stub ID to the real one once the account is updated."""
+    stub = "STUB000001"
+    device = _old_device(
+        device_registry, config_entry, OLD_4S, _mac(account, BREEZER_4S)
+    )
+    climate = _old_entity(
+        entity_registry, config_entry, Platform.CLIMATE, OLD_4S, "old_4s", device
+    )
+    inflow = _old_entity(
+        entity_registry,
+        config_entry,
+        Platform.SENSOR,
+        f"{OLD_4S}_temperature_in",
+        "old_4s_inflow",
+        device,
+    )
+
+    await _load(hass, config_entry, replace_device(account, BREEZER_4S, id=stub))
+
+    assert _identifiers(device_registry, device) == {(DOMAIN, stub)}
+    assert _unique_ids(entity_registry, config_entry) == {
+        climate: stub,
+        inflow: f"{stub}_temperature_in",
+    }
+    assert set(config_entry.options[CONF_PID_BREEZERS]) == {stub}
+    assert set(config_entry.options[CONF_PRESETS]) == {stub}
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+
+    await _load(hass, config_entry, account)
+
+    assert _identifiers(device_registry, device) == {(DOMAIN, BREEZER_4S)}
+    assert _unique_ids(entity_registry, config_entry) == {
+        climate: BREEZER_4S,
+        inflow: f"{BREEZER_4S}_temperature_in",
+    }
+    assert set(config_entry.options[CONF_PID_BREEZERS]) == {BREEZER_4S}
+    assert set(config_entry.options[CONF_PRESETS]) == {BREEZER_4S}
