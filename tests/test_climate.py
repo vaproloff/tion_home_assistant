@@ -455,7 +455,7 @@ PRESETS = {
         BREEZER_4S: {
             "sleep": {"type": "manual", "speed": 1},
             "eco": {"type": "local_pid", "min_speed": 1, "max_speed": 2},
-            "away": {"type": "auto", "min_speed": 1, "max_speed": 3},
+            "away": {"type": "unsupported", "min_speed": 1, "max_speed": 3},
         }
     }
 }
