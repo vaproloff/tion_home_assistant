@@ -169,6 +169,8 @@ class AutoControlChange:
     enabled: bool
     auto: AutoControl | None
     removed: bool = False
+    # Unix seconds on the server's clock; None when the event carries no time.
+    occurred_at: float | None = None
 
     def apply(self, current: AutoControl | None) -> AutoControl | None:
         """Return the room's auto mode after the event, given the one before."""
@@ -187,10 +189,13 @@ def decode_auto_control_changed(payload: bytes) -> AutoControlChange:
     if room_id is None:
         raise TionApiError(f"{EVENT_AUTO_CONTROL_CHANGED} without a room")
     enabled = event.get_bool(3)
+    occurred_at = _occurred_at(event)
     if event.get_bool(6):
-        return AutoControlChange(room_id, enabled, None, removed=True)
+        return AutoControlChange(
+            room_id, enabled, None, removed=True, occurred_at=occurred_at
+        )
     if (params := event.get_message(5)) is None:
-        return AutoControlChange(room_id, enabled, None)
+        return AutoControlChange(room_id, enabled, None, occurred_at=occurred_at)
     return AutoControlChange(
         room_id,
         enabled,
@@ -201,4 +206,17 @@ def decode_auto_control_changed(payload: bytes) -> AutoControlChange:
             co2_target=params.get_int(3),
             algorithm=params.get_int(4),
         ),
+        occurred_at=occurred_at,
     )
+
+
+def _occurred_at(event: ProtoMessage) -> float | None:
+    """Return context.meta.occurred_at of a location event, in Unix seconds."""
+    if (
+        (context := event.get_message(1)) is None
+        or (meta := context.get_message(1)) is None
+        or (stamp := meta.get_message(1)) is None
+        or (seconds := stamp.get_int(1)) <= 0
+    ):
+        return None
+    return seconds + stamp.get_int(2) / 1_000_000_000

@@ -11,11 +11,20 @@
       }
     },
     "number": {
-      "max_speed_set": {
+      "auto_max_speed": {
         "default": "mdi:fan-chevron-up"
       },
-      "min_speed_set": {
+      "auto_min_speed": {
         "default": "mdi:fan-chevron-down"
+      },
+      "pid_max_speed": {
+        "default": "mdi:fan-chevron-up"
+      },
+      "pid_min_speed": {
+        "default": "mdi:fan-chevron-down"
+      },
+      "pid_target_co2": {
+        "default": "mdi:molecule-co2"
       },
       "target_co2": {
         "default": "mdi:molecule-co2"

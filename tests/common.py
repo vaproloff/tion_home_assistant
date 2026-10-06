@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator, Iterator
 import re
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from ha_tests.common import MockConfigEntry
@@ -9,8 +10,16 @@ import pytest
 
 from custom_components.tion.api import TionAccount, TionDeviceKey, TionTokens
 from custom_components.tion.const import (
+    CONF_CO2_SENSOR_ENTITY_ID,
     CONF_DEVICE_KEY,
     CONF_DEVICE_KEY_ID,
+    CONF_PID_BASE_OUTPUT,
+    CONF_PID_BREEZERS,
+    CONF_PID_ENABLED,
+    CONF_PID_INTERVAL,
+    CONF_PID_KD,
+    CONF_PID_KI,
+    CONF_PID_KP,
     DOMAIN,
     PLATFORMS,
 )
@@ -18,7 +27,12 @@ from homeassistant.const import CONF_EMAIL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from .fake_cloud import FakeAuth, FakeTionCloud, default_account  # noqa: TID251
+from .fake_cloud import (  # noqa: TID251
+    BREEZER_4S,
+    FakeAuth,
+    FakeTionCloud,
+    default_account,
+)
 
 EMAIL = "user@example.com"
 UNIQUE_ID = "tion-account"
@@ -35,6 +49,31 @@ ENTRY_DATA = {
     CONF_DEVICE_KEY_ID: DEVICE_KEY.key_id(),
     **TOKENS.as_dict(),
 }
+
+
+PID_SENSOR = "sensor.room_co2"
+
+
+def pid_options(breezer_id: str = BREEZER_4S, **overrides: Any) -> dict[str, Any]:
+    """Return options that set up local PID on one breezer.
+
+    No integral and no derivative, so a CO2 level maps to an exact speed: with
+    the default target 800, 860 ppm gives speed 3 and 1200 ppm speed 6 on a 4S.
+    """
+    return {
+        CONF_PID_BREEZERS: {
+            breezer_id: {
+                CONF_PID_ENABLED: True,
+                CONF_CO2_SENSOR_ENTITY_ID: PID_SENSOR,
+                CONF_PID_INTERVAL: 30,
+                CONF_PID_BASE_OUTPUT: 20.0,
+                CONF_PID_KP: 0.5,
+                CONF_PID_KI: 0.0,
+                CONF_PID_KD: 0.0,
+                **overrides,
+            }
+        }
+    }
 
 
 DEPRECATION_REPORT = re.compile(
@@ -74,12 +113,22 @@ def auth() -> FakeAuth:
 
 
 @pytest.fixture
+def options() -> dict[str, Any]:
+    """The entry's options; tests parametrize it to change them."""
+    return {}
+
+
+@pytest.fixture
 def config_entry(
-    hass: HomeAssistant, enable_custom_integrations: None
+    hass: HomeAssistant, enable_custom_integrations: None, options: dict[str, Any]
 ) -> MockConfigEntry:
     """A config entry made by the v4 login."""
     entry = MockConfigEntry(
-        domain=DOMAIN, title=EMAIL, unique_id=UNIQUE_ID, data=ENTRY_DATA
+        domain=DOMAIN,
+        title=EMAIL,
+        unique_id=UNIQUE_ID,
+        data=ENTRY_DATA,
+        options=options,
     )
     entry.add_to_hass(hass)
     return entry

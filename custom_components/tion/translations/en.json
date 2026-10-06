@@ -60,23 +60,29 @@
       "init": {
         "title": "Tion options",
         "description": "Choose what to configure. Option changes are saved only when you return to this step and select Done.",
-        "data": {
-          "options_action": "Action"
-        },
-        "data_description": {
-          "options_action": "Open local PID settings, configure speed presets, or select Done to save all pending option changes."
+        "menu_options": {
+          "configure_local_pid": "Configure local PID",
+          "configure_presets": "Configure presets",
+          "done": "Done"
         }
       },
       "local_pid": {
         "title": "Local CO2 PID",
-        "description": "Local PID lets Home Assistant control one breezer from an external CO2 sensor. Select a breezer and an action; changes are applied after the final Done on the main options step.",
+        "description": "Choose the breezer to set up local PID for.",
         "data": {
-          "breezer_guid": "Breezer for external CO2 control",
-          "local_pid_action": "Local PID action"
+          "breezer_guid": "Breezer"
         },
         "data_description": {
-          "breezer_guid": "Breezer that should use an external Home Assistant CO2 sensor instead of Tion cloud auto control.",
-          "local_pid_action": "Configure the selected breezer, remove its PID settings, or return without changing local PID settings."
+          "breezer_guid": "The breezer that gets the \"PID\" fan mode driven by an external CO2 sensor from Home Assistant."
+        }
+      },
+      "local_pid_menu": {
+        "title": "Local PID",
+        "description": "Breezer: {breezer}. CO2 sensor: {sensor}. Changes apply after Done on the main options step.",
+        "menu_options": {
+          "breezer": "Set up PID",
+          "pid_remove": "Remove PID",
+          "init": "Back"
         }
       },
       "breezer": {
@@ -85,14 +91,16 @@
         "data": {
           "pid_enabled": "Enable local CO2 PID control",
           "co2_sensor_entity_id": "External CO2 sensor",
+          "pid_interval": "PID interval",
           "pid_base_output": "PID base output",
           "pid_kp": "PID proportional gain",
           "pid_ki": "PID integral gain",
           "pid_kd": "PID derivative gain"
         },
         "data_description": {
-          "pid_enabled": "When enabled, selecting Fan Auto on this breezer starts local PID control and keeps the Tion zone in manual mode.",
+          "pid_enabled": "Adds the PID fan mode and PID presets to this breezer.",
           "co2_sensor_entity_id": "Required when enabled. Select a Home Assistant sensor with CO2 device class and a numeric ppm value.",
+          "pid_interval": "How often local PID recalculates the fan speed. Default: 60 seconds.",
           "pid_base_output": "Baseline output in percent before PID correction. Default: 20. Keep the default unless the breezer under-ventilates near the target.",
           "pid_kp": "Default: 0.5. Higher values react more strongly to the current CO2 error.",
           "pid_ki": "Default: 0.001. Integral gain accumulates long-running error; increase carefully to avoid overshoot.",
@@ -101,14 +109,22 @@
       },
       "presets": {
         "title": "Speed presets",
-        "description": "Configure speed presets separately for each breezer. Preset changes are applied after the final Done on the main options step.",
+        "description": "Choose the breezer whose presets to change.",
         "data": {
-          "breezer_guid": "Breezer",
-          "presets_action": "Preset action"
+          "breezer_guid": "Breezer"
         },
         "data_description": {
-          "breezer_guid": "Breezer whose climate preset list should be changed.",
-          "presets_action": "Add a new preset, edit speed values for an existing preset, remove a preset, or return to the main options step."
+          "breezer_guid": "The breezer whose climate presets to change."
+        }
+      },
+      "presets_menu": {
+        "title": "Speed presets",
+        "description": "Breezer: {breezer}. Presets: {count}. Changes apply after Done on the main options step.",
+        "menu_options": {
+          "preset_add": "Add a preset",
+          "preset_edit": "Edit a preset",
+          "preset_remove": "Remove a preset",
+          "init": "Back"
         }
       },
       "preset_add": {
@@ -120,7 +136,7 @@
         },
         "data_description": {
           "preset_name": "Preset name to expose on this breezer climate entity.",
-          "type": "Auto stores minimum and maximum Auto-mode speeds; Manual stores one fixed fan speed."
+          "type": "Manual stores one fixed fan speed; Local PID stores the speed limits local PID keeps to while the preset is active (offered only when local PID is set up for the breezer)."
         }
       },
       "preset_config": {
@@ -132,8 +148,8 @@
           "speed": "Speed"
         },
         "data_description": {
-          "min_speed": "Lower speed limit used when the Auto preset is active.",
-          "max_speed": "Upper speed limit used when the Auto preset is active. It cannot be lower than the minimum speed.",
+          "min_speed": "Lower speed limit of local PID while the preset is active.",
+          "max_speed": "Upper speed limit of local PID while the preset is active. It cannot be lower than the minimum speed.",
           "speed": "Fixed fan speed used when the Manual preset is active."
         }
       },
@@ -160,33 +176,13 @@
     },
     "error": {
       "required": "Required",
-      "min_above_max": "Minimum speed must not be greater than maximum speed",
-      "all_presets_configured": "All supported preset names are already configured for this breezer"
+      "min_above_max": "Minimum speed must not be greater than maximum speed"
+    },
+    "abort": {
+      "no_breezers": "The account has no breezers, or the integration is not loaded yet"
     }
   },
   "selector": {
-    "init_menu_selector": {
-      "options": {
-        "configure_local_pid": "Configure local PID",
-        "configure_presets": "Configure presets",
-        "done": "Done"
-      }
-    },
-    "local_pid_menu_selector": {
-      "options": {
-        "configure_breezer_pid": "Configure breezer local PID",
-        "remove_breezer_pid": "Remove breezer local PID",
-        "done": "Done"
-      }
-    },
-    "presets_menu_selector": {
-      "options": {
-        "add": "Add preset",
-        "edit": "Edit preset",
-        "remove": "Remove preset",
-        "done": "Done"
-      }
-    },
     "preset_name_selector": {
       "options": {
         "eco": "Eco",
@@ -200,8 +196,8 @@
     },
     "preset_type_selector": {
       "options": {
-        "auto": "Auto (speed limits)",
-        "manual": "Manual (fixed speed)"
+        "manual": "Manual (fixed speed)",
+        "local_pid": "Local PID (speed limits)"
       }
     }
   },
@@ -225,6 +221,11 @@
               "inside": "Inside",
               "mixed": "Mixed"
             }
+          },
+          "fan_mode": {
+            "state": {
+              "local_pid": "PID"
+            }
           }
         }
       }
@@ -233,14 +234,20 @@
       "target_co2": {
         "name": "Target CO2"
       },
-      "external_target_co2": {
-        "name": "External CO2 Target"
+      "auto_min_speed": {
+        "name": "Auto min speed"
       },
-      "min_speed_set": {
-        "name": "Min Speed Set"
+      "auto_max_speed": {
+        "name": "Auto max speed"
       },
-      "max_speed_set": {
-        "name": "Max Speed Set"
+      "pid_min_speed": {
+        "name": "PID min speed"
+      },
+      "pid_max_speed": {
+        "name": "PID max speed"
+      },
+      "pid_target_co2": {
+        "name": "PID target CO2"
       }
     },
     "sensor": {
@@ -296,6 +303,9 @@
     },
     "invalid_value": {
       "message": "The value cannot be set: {message}"
+    },
+    "speed_limits_invalid": {
+      "message": "The minimum speed cannot exceed the maximum speed"
     }
   }
 }

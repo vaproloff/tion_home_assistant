@@ -1,7 +1,7 @@
 """Tests for TionCloud on fake gRPC, session and NATS."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import partial
 from typing import Any
 from uuid import UUID
@@ -293,6 +293,139 @@ async def test_auto_control_changed_event(
     room_info = harness.cloud.account.room(ROOM_ID)
     assert room_info is not None
     assert room_info.auto == expected
+
+
+@pytest.mark.parametrize(
+    ("writes", "occurred_at", "expected"),
+    [
+        pytest.param(
+            [{"enabled": True}],
+            SERVER_TIME - 1,
+            AutoControl(True, 1, 5, 800, 1),
+            id="older_than_our_write",
+        ),
+        pytest.param(
+            [{"enabled": True}],
+            SERVER_TIME + 1,
+            AutoControl(False, 2, 4, 700, 1),
+            id="newer_than_our_write",
+        ),
+        pytest.param(
+            [{"enabled": True}],
+            None,
+            AutoControl(False, 2, 4, 700, 1),
+            id="without_time",
+        ),
+        pytest.param(
+            [],
+            SERVER_TIME - 1,
+            AutoControl(False, 2, 4, 700, 1),
+            id="without_our_write",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_auto_control_event_older_than_our_write_is_skipped(
+    harness: Harness,
+    writes: list[dict[str, Any]],
+    occurred_at: float | None,
+    expected: AutoControl,
+) -> None:
+    """A late event of an earlier write does not roll back our later write."""
+    await harness.cloud.async_start()
+    for changes in writes:
+        await harness.cloud.async_set_auto_control(ROOM_ID, **changes)
+
+    harness.broker.last.deliver(
+        f"app.location.{SID}.AutoControlChanged",
+        auto_control_changed(
+            ROOM_ID,
+            enabled=False,
+            speed_min=2,
+            speed_max=4,
+            co2_target=700,
+            occurred_at=occurred_at,
+        ),
+    )
+
+    room_info = harness.cloud.account.room(ROOM_ID)
+    assert room_info is not None
+    assert room_info.auto == expected
+
+
+class _HeldReads:
+    """Structure reads that wait for release(); held counts the waiting ones."""
+
+    def __init__(self) -> None:
+        self.held = 0
+        self.released = asyncio.Event()
+
+
+def _hold_structure_reads(harness: Harness) -> _HeldReads:
+    """Make structure reads wait until released."""
+    reads = _HeldReads()
+    original = harness.transport.async_call
+
+    async def async_call(
+        service: str,
+        method: str,
+        payload: bytes,
+        token: str | None = None,
+        *,
+        location_id: UUID | None = None,
+    ) -> bytes:
+        if method == "GetFullStructureLocations":
+            reads.held += 1
+            await reads.released.wait()
+        return await original(service, method, payload, token, location_id=location_id)
+
+    harness.transport.async_call = async_call  # type: ignore[method-assign]
+    return reads
+
+
+async def _write_enabled(harness: Harness) -> None:
+    await harness.cloud.async_set_auto_control(ROOM_ID, enabled=True)
+
+
+async def _event_enabled(harness: Harness) -> None:
+    harness.broker.last.deliver(
+        f"app.location.{SID}.AutoControlChanged",
+        auto_control_changed(
+            ROOM_ID, enabled=True, speed_min=1, speed_max=5, co2_target=800
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param(_write_enabled, id="our_write"),
+        pytest.param(_event_enabled, id="event"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_structure_read_keeps_auto_changed_meanwhile(
+    harness: Harness, change: Callable[[Harness], Awaitable[None]]
+) -> None:
+    """A structure read started before a room's auto change does not undo it."""
+    await harness.cloud.async_start()
+    harness.transport.answers["GetFullStructureLocations"] = [
+        cloud_structure(extra_location=True)
+    ]
+    reads = _hold_structure_reads(harness)
+    refresh = asyncio.create_task(harness.cloud.async_refresh())
+    await _eventually(lambda: reads.held == 1)
+
+    await change(harness)
+    reads.released.set()
+    await refresh
+
+    room_info = harness.cloud.account.room(ROOM_ID)
+    second_room = harness.cloud.account.room(SECOND_ROOM_ID)
+    assert room_info is not None
+    assert room_info.auto == AutoControl(True, 1, 5, 800, 1)
+    assert second_room is not None
+    assert second_room.auto == AutoControl(False, 1, 5, 800, 1)
 
 
 @pytest.mark.asyncio

@@ -26,8 +26,8 @@ from .api.fakes import (  # noqa: TID251
     FakeBroker,
     FakeTransport,
 )
-from .api.payloads import state_report  # noqa: TID251
-from .common import entity_id  # noqa: TID251
+from .api.payloads import ROOM_ID, auto_control_changed, state_report  # noqa: TID251
+from .common import PID_SENSOR, entity_id, pid_options  # noqa: TID251
 from .fake_cloud import FakeAuth  # noqa: TID251
 
 
@@ -95,3 +95,40 @@ async def test_state_command_push_and_unload(
 
     assert await hass.config_entries.async_unload(loaded_entry.entry_id)
     assert broker.last.closed
+
+
+async def _set_fan_mode(hass: HomeAssistant, fan_mode: str) -> None:
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_FAN_MODE,
+        {
+            ATTR_ENTITY_ID: entity_id(hass, Platform.CLIMATE, BREEZER),
+            ATTR_FAN_MODE: fan_mode,
+        },
+        blocking=True,
+    )
+
+
+@pytest.mark.parametrize("options", [pytest.param(pid_options(BREEZER), id="pid")])
+async def test_local_pid_drives_the_breezer_until_room_auto(
+    hass: HomeAssistant, loaded_entry: MockConfigEntry, broker: FakeBroker
+) -> None:
+    """Local PID sets the speed over NATS and yields to the room's auto mode."""
+    hass.states.async_set(PID_SENSOR, "1200")
+
+    await _set_fan_mode(hass, "local_pid")
+    await hass.async_block_till_done()
+
+    attributes = _state(hass, Platform.CLIMATE, BREEZER).attributes
+    assert (attributes[ATTR_FAN_MODE], attributes["speed"]) == ("local_pid", 6)
+
+    broker.last.deliver(
+        f"app.location.{SID}.AutoControlChanged",
+        auto_control_changed(
+            ROOM_ID, enabled=True, speed_min=1, speed_max=5, co2_target=800
+        ),
+    )
+    await hass.async_block_till_done()
+
+    attributes = _state(hass, Platform.CLIMATE, BREEZER).attributes
+    assert (attributes[ATTR_FAN_MODE], attributes["pid_active"]) == ("auto", False)

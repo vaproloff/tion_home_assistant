@@ -3,11 +3,13 @@
 import logging
 
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .api import (
+    Breezer,
     TionAccount,
     TionAuthError,
     TionConnectionError,
@@ -16,8 +18,16 @@ from .api import (
     TionTokens,
     view,
 )
-from .const import CONF_DEVICE_KEY, DOMAIN, MANUFACTURER, MODEL_NAMES, PLATFORMS
+from .const import (
+    CONF_DEVICE_KEY,
+    DOMAIN,
+    MANUFACTURER,
+    MODEL_NAMES,
+    PID_NUMBER_KEYS,
+    PLATFORMS,
+)
 from .coordinator import TionConfigEntry, TionCoordinator
+from .pid_manager import TionPidManager
 from .session import async_create_cloud
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,8 +79,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
     # below, stops listening before the cloud stops.
     entry.async_on_unload(cloud.async_stop)
 
-    entry.runtime_data = TionCoordinator(hass, entry, cloud)
+    coordinator = entry.runtime_data = TionCoordinator(hass, entry, cloud)
+    coordinator.pid = TionPidManager(hass, entry, coordinator)
+    entry.async_on_unload(coordinator.pid.async_stop)
     _register_devices(hass, entry, cloud.account)
+    _remove_stale_pid_numbers(hass, entry, coordinator.pid)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -91,6 +104,22 @@ async def async_remove_config_entry_device(
         domain == DOMAIN and account.device(device_id) is not None
         for domain, device_id in device_entry.identifiers
     )
+
+
+def _remove_stale_pid_numbers(
+    hass: HomeAssistant, entry: TionConfigEntry, pid: TionPidManager
+) -> None:
+    """Remove the PID numbers of breezers that no longer have local PID set up."""
+    stale = {
+        f"{device.id}_{key}"
+        for device in entry.runtime_data.data.devices()
+        if isinstance(view(device), Breezer) and not pid.is_configured(device.id)
+        for key in PID_NUMBER_KEYS
+    }
+    registry = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if entity.domain == Platform.NUMBER and entity.unique_id in stale:
+            registry.async_remove(entity.entity_id)
 
 
 def _register_devices(

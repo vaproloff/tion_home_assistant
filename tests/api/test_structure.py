@@ -254,6 +254,25 @@ def test_decode_auto_control_changed(
     assert change.apply(current) == expected
 
 
+@pytest.mark.parametrize(
+    ("occurred_at", "expected"),
+    [
+        pytest.param(1_790_865_786.25, 1_790_865_786.25, id="with_time"),
+        pytest.param(None, None, id="without_context"),
+        pytest.param(0.0, None, id="zero_time"),
+    ],
+)
+def test_auto_control_changed_occurred_at(
+    occurred_at: float | None, expected: float | None
+) -> None:
+    """The event carries the server time it occurred at, when the cloud sets it."""
+    change = decode_auto_control_changed(
+        auto_control_changed(ROOM_ID, enabled=True, occurred_at=occurred_at)
+    )
+
+    assert change.occurred_at == expected
+
+
 def test_auto_control_changed_without_room() -> None:
     """An event without a room cannot be applied."""
     with pytest.raises(TionApiError):
