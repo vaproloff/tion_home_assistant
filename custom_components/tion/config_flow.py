@@ -77,24 +77,13 @@ from .session import async_create_auth
 _LOGGER = logging.getLogger(__name__)
 
 CONF_OPTIONS_ACTION = "options_action"
-CONF_LOCAL_PID_ACTION = "local_pid_action"
 
 OPTIONS_ACTION_DONE = "done"
 OPTIONS_ACTION_CONFIGURE_LOCAL_PID = "configure_local_pid"
 
-LOCAL_PID_ACTION_DONE = "done"
-LOCAL_PID_ACTION_CONFIGURE_BREEZER_PID = "configure_breezer_pid"
-LOCAL_PID_ACTION_REMOVE_BREEZER_PID = "remove_breezer_pid"
-
 OPTIONS_ACTION_CONFIGURE_PRESETS = "configure_presets"
 
-CONF_PRESETS_ACTION = "presets_action"
 CONF_PRESET_NAME = "preset_name"
-
-PRESETS_ACTION_ADD = "add"
-PRESETS_ACTION_DONE = "done"
-PRESETS_ACTION_EDIT = "edit"
-PRESETS_ACTION_REMOVE = "remove"
 
 # PID settings the number entities edit while the options flow may be open.
 PID_ENTITY_SETTINGS = (CONF_PID_MIN_SPEED, CONF_PID_MAX_SPEED, CONF_PID_TARGET_CO2)
@@ -295,13 +284,26 @@ class TionOptionsFlow(OptionsFlowWithReload):
     ) -> ConfigFlowResult:
         """Manage the options."""
 
-        if user_input is not None:
-            if user_input[CONF_OPTIONS_ACTION] == OPTIONS_ACTION_CONFIGURE_LOCAL_PID:
-                return await self.async_step_local_pid()
-            if user_input[CONF_OPTIONS_ACTION] == OPTIONS_ACTION_CONFIGURE_PRESETS:
-                return await self.async_step_presets()
+        errors: dict[str, str] = {}
 
-            return self.async_create_entry(title="", data=self._options_to_save())
+        if user_input is not None:
+            action = user_input[CONF_OPTIONS_ACTION]
+            if action == OPTIONS_ACTION_DONE:
+                return self.async_create_entry(title="", data=self._options_to_save())
+
+            breezers = self._breezers()
+            if not breezers:
+                errors["base"] = "no_breezers"
+            elif action == OPTIONS_ACTION_CONFIGURE_LOCAL_PID:
+                if len(breezers) == 1:
+                    self._breezer_guid = breezers[0].id
+                    return await self.async_step_local_pid_menu()
+                return await self.async_step_local_pid()
+            elif len(breezers) == 1:
+                self._breezer_guid = breezers[0].id
+                return await self.async_step_presets_menu()
+            else:
+                return await self.async_step_presets()
 
         return self.async_show_form(
             step_id="init",
@@ -322,66 +324,57 @@ class TionOptionsFlow(OptionsFlowWithReload):
                     ),
                 }
             ),
+            errors=errors,
         )
 
     async def async_step_local_pid(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage local PID action selection."""
-        errors: dict[str, str] = {}
-
+        """Select the breezer to set up local PID for."""
         if user_input is not None:
-            local_pid_action = user_input[CONF_LOCAL_PID_ACTION]
-            self._breezer_guid = user_input.get(CONF_BREEZER_GUID)
-
-            if local_pid_action == LOCAL_PID_ACTION_DONE:
-                self._breezer_guid = None
-                return await self.async_step_init()
-
-            if self._breezer_guid is None:
-                errors[CONF_BREEZER_GUID] = "required"
-            elif local_pid_action == LOCAL_PID_ACTION_CONFIGURE_BREEZER_PID:
-                return await self.async_step_breezer()
-            elif local_pid_action == LOCAL_PID_ACTION_REMOVE_BREEZER_PID:
-                pid_breezers = dict(self._options.get(CONF_PID_BREEZERS, {}))
-                pid_breezers.pop(self._breezer_guid, None)
-                self._pid_removed.add(self._breezer_guid)
-
-                if pid_breezers:
-                    self._options[CONF_PID_BREEZERS] = pid_breezers
-                else:
-                    self._options.pop(CONF_PID_BREEZERS, None)
+            self._breezer_guid = user_input[CONF_BREEZER_GUID]
+            return await self.async_step_local_pid_menu()
 
         return self.async_show_form(
-            step_id="local_pid",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_BREEZER_GUID, default=None): vol.Any(
-                        None,
-                        selector.SelectSelector(
-                            selector.SelectSelectorConfig(
-                                options=self._breezer_options(),
-                                mode=selector.SelectSelectorMode.DROPDOWN,
-                            )
-                        ),
-                    ),
-                    vol.Required(
-                        CONF_LOCAL_PID_ACTION, default=LOCAL_PID_ACTION_DONE
-                    ): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=[
-                                LOCAL_PID_ACTION_CONFIGURE_BREEZER_PID,
-                                LOCAL_PID_ACTION_REMOVE_BREEZER_PID,
-                                LOCAL_PID_ACTION_DONE,
-                            ],
-                            mode=selector.SelectSelectorMode.LIST,
-                            translation_key="local_pid_menu_selector",
-                        )
-                    ),
-                }
-            ),
-            errors=errors,
+            step_id="local_pid", data_schema=self._breezer_schema()
         )
+
+    async def async_step_local_pid_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Offer the local PID actions the breezer can take."""
+        assert self._breezer_guid is not None
+        menu_options = ["breezer"]
+        sensor = "—"
+        if self._pid_configured(self._breezer_guid):
+            menu_options.append("pid_remove")
+            sensor = self._pid_options(self._breezer_guid)[CONF_CO2_SENSOR_ENTITY_ID]
+        menu_options.append("init")
+
+        return self.async_show_menu(
+            step_id="local_pid_menu",
+            menu_options=menu_options,
+            description_placeholders={
+                "breezer": self._breezer_name(self._breezer_guid),
+                "sensor": sensor,
+            },
+        )
+
+    async def async_step_pid_remove(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Remove local PID from the breezer."""
+        assert self._breezer_guid is not None
+        pid_breezers = dict(self._options.get(CONF_PID_BREEZERS, {}))
+        pid_breezers.pop(self._breezer_guid, None)
+        self._pid_removed.add(self._breezer_guid)
+
+        if pid_breezers:
+            self._options[CONF_PID_BREEZERS] = pid_breezers
+        else:
+            self._options.pop(CONF_PID_BREEZERS, None)
+
+        return await self.async_step_local_pid_menu()
 
     async def async_step_breezer(
         self, user_input: dict[str, Any] | None = None
@@ -407,7 +400,7 @@ class TionOptionsFlow(OptionsFlowWithReload):
                 }
                 self._options[CONF_PID_BREEZERS] = pid_breezers
 
-                return await self.async_step_local_pid()
+                return await self.async_step_local_pid_menu()
 
         return self.async_show_form(
             step_id="breezer",
@@ -418,56 +411,35 @@ class TionOptionsFlow(OptionsFlowWithReload):
     async def async_step_presets(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage preset action selection for a breezer."""
-        errors: dict[str, str] = {}
-
+        """Select the breezer whose presets to change."""
         if user_input is not None:
-            presets_action = user_input[CONF_PRESETS_ACTION]
-            self._breezer_guid = user_input.get(CONF_BREEZER_GUID)
-
-            if presets_action == PRESETS_ACTION_DONE:
-                self._breezer_guid = None
-                return await self.async_step_init()
-
-            if self._breezer_guid is None:
-                errors[CONF_BREEZER_GUID] = "required"
-            elif presets_action == PRESETS_ACTION_ADD:
-                return await self.async_step_preset_add()
-            elif presets_action == PRESETS_ACTION_EDIT:
-                return await self.async_step_preset_edit()
-            elif presets_action == PRESETS_ACTION_REMOVE:
-                return await self.async_step_preset_remove()
+            self._breezer_guid = user_input[CONF_BREEZER_GUID]
+            return await self.async_step_presets_menu()
 
         return self.async_show_form(
-            step_id="presets",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_BREEZER_GUID, default=None): vol.Any(
-                        None,
-                        selector.SelectSelector(
-                            selector.SelectSelectorConfig(
-                                options=self._breezer_options(),
-                                mode=selector.SelectSelectorMode.DROPDOWN,
-                            )
-                        ),
-                    ),
-                    vol.Required(
-                        CONF_PRESETS_ACTION, default=PRESETS_ACTION_DONE
-                    ): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=[
-                                PRESETS_ACTION_ADD,
-                                PRESETS_ACTION_EDIT,
-                                PRESETS_ACTION_REMOVE,
-                                PRESETS_ACTION_DONE,
-                            ],
-                            mode=selector.SelectSelectorMode.LIST,
-                            translation_key="presets_menu_selector",
-                        )
-                    ),
-                }
-            ),
-            errors=errors,
+            step_id="presets", data_schema=self._breezer_schema()
+        )
+
+    async def async_step_presets_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Offer the preset actions the breezer can take."""
+        assert self._breezer_guid is not None
+        configured = self._breezer_presets(self._breezer_guid)
+        menu_options = []
+        if self._available_preset_names():
+            menu_options.append("preset_add")
+        if configured:
+            menu_options += ["preset_edit", "preset_remove"]
+        menu_options.append("init")
+
+        return self.async_show_menu(
+            step_id="presets_menu",
+            menu_options=menu_options,
+            description_placeholders={
+                "breezer": self._breezer_name(self._breezer_guid),
+                "count": str(len(configured)),
+            },
         )
 
     async def async_step_preset_add(
@@ -479,10 +451,9 @@ class TionOptionsFlow(OptionsFlowWithReload):
             self._preset_type = user_input[CONF_PRESET_TYPE]
             return await self.async_step_preset_config()
 
-        configured = self._breezer_presets(self._breezer_guid)
-        available = [name for name in SUPPORTED_PRESETS if name not in configured]
+        available = self._available_preset_names()
         if not available:
-            return await self.async_step_presets()
+            return await self.async_step_presets_menu()
 
         return self.async_show_form(
             step_id="preset_add",
@@ -522,7 +493,7 @@ class TionOptionsFlow(OptionsFlowWithReload):
                         CONF_PRESET_SPEED: int(user_input[CONF_PRESET_SPEED]),
                     }
                 )
-                return await self.async_step_presets()
+                return await self.async_step_presets_menu()
 
             min_speed = int(user_input[CONF_PRESET_MIN_SPEED])
             max_speed = int(user_input[CONF_PRESET_MAX_SPEED])
@@ -536,7 +507,7 @@ class TionOptionsFlow(OptionsFlowWithReload):
                         CONF_PRESET_MAX_SPEED: max_speed,
                     }
                 )
-                return await self.async_step_presets()
+                return await self.async_step_presets_menu()
 
         return self.async_show_form(
             step_id="preset_config",
@@ -561,7 +532,7 @@ class TionOptionsFlow(OptionsFlowWithReload):
         """Select an existing preset to edit."""
         configured = self._breezer_presets(self._breezer_guid)
         if not configured:
-            return await self.async_step_presets()
+            return await self.async_step_presets_menu()
 
         if user_input is not None:
             self._preset_name = user_input[CONF_PRESET_NAME]
@@ -589,7 +560,7 @@ class TionOptionsFlow(OptionsFlowWithReload):
         """Remove a preset from the breezer."""
         configured = self._breezer_presets(self._breezer_guid)
         if not configured:
-            return await self.async_step_presets()
+            return await self.async_step_presets_menu()
 
         if user_input is not None:
             presets = dict(self._options.get(CONF_PRESETS, {}))
@@ -606,7 +577,7 @@ class TionOptionsFlow(OptionsFlowWithReload):
             else:
                 self._options.pop(CONF_PRESETS, None)
 
-            return await self.async_step_presets()
+            return await self.async_step_presets_menu()
 
         return self.async_show_form(
             step_id="preset_remove",
@@ -622,6 +593,11 @@ class TionOptionsFlow(OptionsFlowWithReload):
                 }
             ),
         )
+
+    def _available_preset_names(self) -> list[str]:
+        """Return the supported preset names the breezer has not taken."""
+        configured = self._breezer_presets(self._breezer_guid)
+        return [name for name in SUPPORTED_PRESETS if name not in configured]
 
     def _breezer_presets(self, breezer_guid: str | None) -> dict[str, Any]:
         """Return a breezer's stored presets of the types this version offers."""
@@ -731,6 +707,26 @@ class TionOptionsFlow(OptionsFlowWithReload):
                 ),
             }
         )
+
+    def _breezer_schema(self) -> vol.Schema:
+        """Return the schema that selects one of the account's breezers."""
+        return vol.Schema(
+            {
+                vol.Required(CONF_BREEZER_GUID): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=self._breezer_options(),
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            }
+        )
+
+    def _breezer_name(self, breezer_guid: str) -> str:
+        """Return the name a breezer is shown with."""
+        for breezer in self._breezers():
+            if breezer.id == breezer_guid:
+                return breezer.device.name or breezer.id
+        return breezer_guid
 
     def _breezer_options(self) -> list[selector.SelectOptionDict]:
         """Return selectable breezers for the config entry."""

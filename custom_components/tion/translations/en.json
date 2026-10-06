@@ -69,14 +69,21 @@
       },
       "local_pid": {
         "title": "Local CO2 PID",
-        "description": "Local PID lets Home Assistant control one breezer from an external CO2 sensor. Select a breezer and an action; changes are applied after the final Done on the main options step.",
+        "description": "Choose the breezer to set up local PID for.",
         "data": {
-          "breezer_guid": "Breezer for external CO2 control",
-          "local_pid_action": "Local PID action"
+          "breezer_guid": "Breezer"
         },
         "data_description": {
-          "breezer_guid": "Breezer that gets the Local PID fan mode, driven by an external Home Assistant CO2 sensor.",
-          "local_pid_action": "Configure the selected breezer, remove its PID settings, or return without changing local PID settings."
+          "breezer_guid": "The breezer that gets the «PID» fan mode driven by an external CO2 sensor from Home Assistant."
+        }
+      },
+      "local_pid_menu": {
+        "title": "Local PID — {breezer}",
+        "description": "CO2 sensor: {sensor}. Changes apply after Save on the main options step.",
+        "menu_options": {
+          "breezer": "Set up PID",
+          "pid_remove": "Remove PID",
+          "init": "Back"
         }
       },
       "breezer": {
@@ -103,14 +110,22 @@
       },
       "presets": {
         "title": "Speed presets",
-        "description": "Configure speed presets separately for each breezer. Preset changes are applied after the final Done on the main options step.",
+        "description": "Choose the breezer whose presets to change.",
         "data": {
-          "breezer_guid": "Breezer",
-          "presets_action": "Preset action"
+          "breezer_guid": "Breezer"
         },
         "data_description": {
-          "breezer_guid": "Breezer whose climate preset list should be changed.",
-          "presets_action": "Add a new preset, edit speed values for an existing preset, remove a preset, or return to the main options step."
+          "breezer_guid": "The breezer whose climate presets to change."
+        }
+      },
+      "presets_menu": {
+        "title": "Presets — {breezer}",
+        "description": "Presets: {count}. Changes apply after Save on the main options step.",
+        "menu_options": {
+          "preset_add": "Add a preset",
+          "preset_edit": "Edit a preset",
+          "preset_remove": "Remove a preset",
+          "init": "Back"
         }
       },
       "preset_add": {
@@ -163,7 +178,7 @@
     "error": {
       "required": "Required",
       "min_above_max": "Minimum speed must not be greater than maximum speed",
-      "all_presets_configured": "All supported preset names are already configured for this breezer"
+      "no_breezers": "The account has no breezers, or the integration is not loaded yet"
     }
   },
   "selector": {
@@ -171,21 +186,6 @@
       "options": {
         "configure_local_pid": "Configure local PID",
         "configure_presets": "Configure presets",
-        "done": "Done"
-      }
-    },
-    "local_pid_menu_selector": {
-      "options": {
-        "configure_breezer_pid": "Configure breezer local PID",
-        "remove_breezer_pid": "Remove breezer local PID",
-        "done": "Done"
-      }
-    },
-    "presets_menu_selector": {
-      "options": {
-        "add": "Add preset",
-        "edit": "Edit preset",
-        "remove": "Remove preset",
         "done": "Done"
       }
     },
