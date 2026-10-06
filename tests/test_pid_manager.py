@@ -196,6 +196,14 @@ def _without_speed() -> TionAccount:
             id="sensor_not_a_number",
         ),
         pytest.param(
+            default_account(),
+            pid_options(),
+            "nan",
+            None,
+            PidStatus.PAUSED_SENSOR_UNAVAILABLE,
+            id="sensor_not_finite",
+        ),
+        pytest.param(
             replace_device(default_account(), BREEZER_4S, is_online=False),
             pid_options(),
             "1200",
@@ -246,6 +254,37 @@ async def test_status(
 
     assert manager.status(BREEZER_4S) is status
     assert manager.is_active(BREEZER_4S)
+
+
+@pytest.mark.parametrize(
+    "device_id", [BREEZER_4S, MAGICAIR], ids=["breezer", "gateway"]
+)
+async def test_offline_pause_sends_nothing_then_resumes(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    manager: TionPidManager,
+    cloud: FakeTionCloud,
+    device_id: str,
+) -> None:
+    """PID sends nothing while the breezer or its gateway is offline, then resumes."""
+    hass.states.async_set(SENSOR, "860")
+    manager.start(BREEZER_4S)
+    await hass.async_block_till_done()
+    cloud.push(replace_device(cloud.account, device_id, is_online=False))
+    await hass.async_block_till_done()
+    hass.states.async_set(SENSOR, "1200")
+
+    await _tick(hass, freezer, 30)
+
+    assert _commands(cloud) == []
+    assert manager.status(BREEZER_4S) is PidStatus.PAUSED_DEVICE_UNAVAILABLE
+
+    cloud.push(replace_device(cloud.account, device_id, is_online=True))
+    await hass.async_block_till_done()
+    await _tick(hass, freezer, 30)
+
+    assert _breezer(cloud).speed == 6
+    assert manager.status(BREEZER_4S) is PidStatus.RUNNING
 
 
 async def test_no_command_when_speed_holds(

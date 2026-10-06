@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from functools import partial
 import logging
+import math
 import time
 from typing import Any
 
@@ -122,7 +123,7 @@ class TionPidManager:
                 self._hass,
                 partial(self._scheduled_step, breezer_id),
                 pid.interval,
-                name=f"Tion local PID {breezer_id}",
+                name="Tion local PID step",
             )
             pid.status = PidStatus.RUNNING
             self._notify(pid)
@@ -233,7 +234,7 @@ class TionPidManager:
     @callback
     def _schedule_step(self, breezer_id: str) -> None:
         self._entry.async_create_background_task(
-            self._hass, self._async_step(breezer_id), f"tion_pid_{breezer_id}"
+            self._hass, self._async_step(breezer_id), "tion_pid_step"
         )
 
     async def _async_step(self, breezer_id: str) -> None:
@@ -290,9 +291,10 @@ class TionPidManager:
         if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             return None
         try:
-            return float(state.state)
+            value = float(state.state)
         except ValueError:
             return None
+        return value if math.isfinite(value) else None
 
     def _breezer(self, breezer_id: str) -> Breezer | None:
         device = self._coordinator.data.device(breezer_id)
