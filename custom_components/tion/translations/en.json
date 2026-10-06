@@ -74,12 +74,12 @@
           "breezer_guid": "Breezer"
         },
         "data_description": {
-          "breezer_guid": "The breezer that gets the «PID» fan mode driven by an external CO2 sensor from Home Assistant."
+          "breezer_guid": "The breezer that gets the \"PID\" fan mode driven by an external CO2 sensor from Home Assistant."
         }
       },
       "local_pid_menu": {
-        "title": "Local PID — {breezer}",
-        "description": "CO2 sensor: {sensor}. Changes apply after Done on the main options step.",
+        "title": "Local PID",
+        "description": "Breezer: {breezer}. CO2 sensor: {sensor}. Changes apply after Done on the main options step.",
         "menu_options": {
           "breezer": "Set up PID",
           "pid_remove": "Remove PID",
@@ -99,7 +99,7 @@
           "pid_kd": "PID derivative gain"
         },
         "data_description": {
-          "pid_enabled": "Adds the Local PID fan mode and PID presets to this breezer.",
+          "pid_enabled": "Adds the PID fan mode and PID presets to this breezer.",
           "co2_sensor_entity_id": "Required when enabled. Select a Home Assistant sensor with CO2 device class and a numeric ppm value.",
           "pid_interval": "How often local PID recalculates the fan speed. Default: 60 seconds.",
           "pid_base_output": "Baseline output in percent before PID correction. Default: 20. Keep the default unless the breezer under-ventilates near the target.",
@@ -119,8 +119,8 @@
         }
       },
       "presets_menu": {
-        "title": "Presets — {breezer}",
-        "description": "Presets: {count}. Changes apply after Done on the main options step.",
+        "title": "Speed presets",
+        "description": "Breezer: {breezer}. Presets: {count}. Changes apply after Done on the main options step.",
         "menu_options": {
           "preset_add": "Add a preset",
           "preset_edit": "Edit a preset",

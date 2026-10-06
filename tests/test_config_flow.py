@@ -1454,3 +1454,18 @@ def test_translations_cover_login_flow(language: str) -> None:
         "password_not_set",
         "wrong_account",
     } <= set(config["abort"])
+
+
+@pytest.mark.parametrize("language", ["en", "ru"])
+def test_translations_cover_options_menus(language: str) -> None:
+    """Menu titles carry no placeholders, and every menu option is translated."""
+    steps = json.loads((TRANSLATIONS / f"{language}.json").read_text("utf-8"))[
+        "options"
+    ]["step"]
+
+    menus = {step_id: step for step_id, step in steps.items() if "menu_options" in step}
+    assert all("{" not in step["title"] for step in menus.values())
+    assert {step_id: set(step["menu_options"]) for step_id, step in menus.items()} == {
+        "local_pid_menu": {"breezer", "pid_remove", "init"},
+        "presets_menu": {"preset_add", "preset_edit", "preset_remove", "init"},
+    }
