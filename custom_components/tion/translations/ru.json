@@ -229,7 +229,7 @@
           },
           "fan_mode": {
             "state": {
-              "local_pid": "Локальный PID"
+              "local_pid": "PID"
             }
           }
         }
