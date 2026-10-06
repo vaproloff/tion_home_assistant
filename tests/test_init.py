@@ -18,10 +18,7 @@ from custom_components.tion.api import (
     TionConnectionError,
     TionTokens,
 )
-from custom_components.tion.api.views import (
-    BREEZER_PRODUCTS,
-    STATION_PRODUCTS,
-)
+from custom_components.tion.api.views import BREEZER_PRODUCTS, STATION_PRODUCTS
 from custom_components.tion.const import (
     CONF_DEVICE_KEY,
     CONF_PID_ENABLED,
