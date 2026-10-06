@@ -180,7 +180,7 @@ class TionCloud:
         device = self._account.device(command.device_id)
         location = self._account.location_of(device) if device is not None else None
         if location is None:
-            raise ValueError(f"Unknown device {command.device_id}")
+            raise ValueError("Device is not in the account")
         if (connection := self._connection) is None:
             raise TionConnectionError("Tion live channel is not connected")
         command_id = new_command_id()
@@ -235,7 +235,7 @@ class TionCloud:
                 None,
             )
             if location is None or (room := self._account.room(room_id)) is None:
-                raise ValueError(f"Unknown room {room_id}")
+                raise ValueError("Room is not in the account")
             if (current := room.configured_auto) is not None:
                 if current.algorithm not in AutoControlAlgorithm:
                     current = replace(current, algorithm=AutoControlAlgorithm.AVERAGE)
@@ -243,7 +243,7 @@ class TionCloud:
             elif len(changes) == 4:
                 auto = AutoControl(**changes)
             else:
-                raise ValueError(f"Room {room_id} has no auto mode; pass every field")
+                raise ValueError("Room has no auto mode; pass every field")
             if auto.speed_min > auto.speed_max:
                 raise ValueError("speed_min must not exceed speed_max")
             check_set_auto_control(
