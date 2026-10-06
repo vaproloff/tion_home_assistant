@@ -73,6 +73,7 @@ from .fake_cloud import (  # noqa: TID251
     BREEZER_3S,
     BREEZER_4S,
     BREEZER_O2,
+    MAGICAIR,
     FakeAuth as CloudAuth,
     FakeTionCloud,
     default_account,
@@ -162,11 +163,11 @@ def _select_options(result: dict[str, Any], field: str) -> list[str]:
 
 
 def _single_breezer_account() -> TionAccount:
-    """Return the default account with only the 4S breezer."""
+    """Return the default account with the 4S breezer and its MagicAir station."""
     account = default_account()
     (location,) = account.locations
-    only_4s = tuple(d for d in location.devices if d.id == BREEZER_4S)
-    return replace(account, locations=(replace(location, devices=only_4s),))
+    kept = tuple(d for d in location.devices if d.id in (BREEZER_4S, MAGICAIR))
+    return replace(account, locations=(replace(location, devices=kept),))
 
 
 def _all_presets() -> dict[str, Any]:
@@ -542,19 +543,11 @@ async def test_options_preset_edit_selects_and_opens_prefilled_config(
     assert flow._preset_type == TionPresetType.LOCAL_PID.value  # noqa: SLF001
 
 
-async def test_options_preset_add_all_configured_returns_to_presets(
+async def test_options_preset_add_all_taken_returns_to_presets_menu(
     hass: HomeAssistant, init_integration: MockConfigEntry
 ) -> None:
-    """Test Add when every preset is already configured returns to presets."""
-    all_presets = {
-        name: {
-            CONF_PRESET_TYPE: TionPresetType.LOCAL_PID.value,
-            CONF_PRESET_MIN_SPEED: 1,
-            CONF_PRESET_MAX_SPEED: 2,
-        }
-        for name in SUPPORTED_PRESETS
-    }
-    flow = _flow(hass, init_integration, {CONF_PRESETS: {BREEZER_GUID: all_presets}})
+    """Add when every preset name is taken returns to the presets menu."""
+    flow = _flow(hass, init_integration, _all_presets())
     flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
 
     result = await flow.async_step_preset_add()
@@ -840,7 +833,13 @@ async def test_options_presets_menu_offers_what_applies(
     }
 
 
-@pytest.mark.parametrize("step", ["preset_edit", "preset_remove"])
+@pytest.mark.parametrize(
+    "step",
+    [
+        pytest.param("preset_edit", id="edit"),
+        pytest.param("preset_remove", id="remove"),
+    ],
+)
 async def test_options_preset_steps_without_presets_return_to_menu(
     hass: HomeAssistant, init_integration: MockConfigEntry, step: str
 ) -> None:
@@ -875,7 +874,7 @@ async def test_options_flow_offered(config_entry: MockConfigEntry) -> None:
 
 
 @pytest.mark.parametrize(
-    ("steps", "reloads"),
+    ("steps", "reloads", "pid_breezers"),
     [
         pytest.param(
             [
@@ -886,9 +885,15 @@ async def test_options_flow_offered(config_entry: MockConfigEntry) -> None:
                 {CONF_OPTIONS_ACTION: OPTIONS_ACTION_DONE},
             ],
             1,
+            {SECOND_BREEZER_GUID},
             id="changed",
         ),
-        pytest.param([{CONF_OPTIONS_ACTION: OPTIONS_ACTION_DONE}], 0, id="unchanged"),
+        pytest.param(
+            [{CONF_OPTIONS_ACTION: OPTIONS_ACTION_DONE}],
+            0,
+            {BREEZER_GUID, SECOND_BREEZER_GUID},
+            id="unchanged",
+        ),
     ],
 )
 async def test_options_save_reloads_changed_entry(
@@ -898,6 +903,7 @@ async def test_options_save_reloads_changed_entry(
     auth: CloudAuth,
     steps: list[dict[str, Any]],
     reloads: int,
+    pid_breezers: set[str],
 ) -> None:
     """Saving changed options reloads the entry; saving unchanged ones does not."""
     hass.config_entries.async_update_entry(config_entry, options=_pid_options())
@@ -914,6 +920,7 @@ async def test_options_save_reloads_changed_entry(
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert create_cloud.call_count == reloads
+    assert set(config_entry.options[CONF_PID_BREEZERS]) == pid_breezers
 
 
 async def test_options_list_the_account_breezers(
