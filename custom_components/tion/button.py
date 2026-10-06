@@ -1,94 +1,37 @@
-"""Platform for button integration."""
-
-import logging
+"""Filter reset button of Tion breezers."""
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .client import TionError, TionZoneDevice
-from .const import DOMAIN, TionDeviceType
-from .coordinator import TionDataUpdateCoordinator
-
-_LOGGER = logging.getLogger(__name__)
+from .api import Breezer
+from .coordinator import TionConfigEntry, TionCoordinator
+from .entity import TionEntity, device_views
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
-) -> bool:
-    """Set up button Tion entities."""
-    coordinator: TionDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-
-    entities = [
-        TionResetFiltersButton(coordinator, device)
-        for device in coordinator.get_devices()
-        if device.guid
-        and device.type
-        in (
-            TionDeviceType.BREEZER_3S,
-            TionDeviceType.BREEZER_4S,
-        )
-    ]
-
-    async_add_entities(entities)
-    return True
+    hass: HomeAssistant,
+    entry: TionConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Add a filter reset button to each breezer that can reset its filter."""
+    coordinator = entry.runtime_data
+    async_add_entities(
+        TionResetFilterButton(coordinator, device_view)
+        for device_view in device_views(coordinator)
+        if isinstance(device_view, Breezer) and device_view.can_set("filter_reset")
+    )
 
 
-class TionResetFiltersButton(
-    CoordinatorEntity[TionDataUpdateCoordinator], ButtonEntity
-):
-    """Tion Breezer reset filters button."""
+class TionResetFilterButton(TionEntity[Breezer], ButtonEntity):
+    """Starts a new filter life after the filter is replaced."""
 
-    _attr_has_entity_name = True
-    _attr_icon = "mdi:air-filter"
     _attr_translation_key = "reset_filters"
 
-    def __init__(
-        self,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize button device."""
-        super().__init__(coordinator)
-        self._device = device
-
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._device.guid)},
-        )
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return (
-            super().available
-            and self._device is not None
-            and self._device.is_online
-            and self._device.valid
-        )
-
-    @property
-    def unique_id(self) -> str:
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_reset_filters"
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        if device_data := self.coordinator.get_device(self._device.guid):
-            self._device = device_data
-        super()._handle_coordinator_update()
+    def __init__(self, coordinator: TionCoordinator, breezer: Breezer) -> None:
+        """Create the button for one breezer."""
+        super().__init__(coordinator, breezer, "reset_filters")
 
     async def async_press(self) -> None:
-        """Reset breezer filter replacement."""
-        _LOGGER.debug("%s: resetting filter replacement timer", self._device.name)
-        try:
-            await self.coordinator.async_send_settings(
-                guid=self._device.guid, data={"reset_filter_timer": True}
-            )
-        except TionError as err:
-            raise HomeAssistantError(
-                f"Unable to reset filters for {self._device.name}: {err}"
-            ) from err
+        """Reset the filter counter."""
+        await self.async_send_command(filter_reset=True)

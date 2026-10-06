@@ -1,0 +1,60 @@
+{
+  "entity": {
+    "button": {
+      "reset_filters": {
+        "default": "mdi:air-filter"
+      }
+    },
+    "climate": {
+      "tion_breezer": {
+        "default": "mdi:air-filter"
+      }
+    },
+    "number": {
+      "auto_max_speed": {
+        "default": "mdi:fan-chevron-up"
+      },
+      "auto_min_speed": {
+        "default": "mdi:fan-chevron-down"
+      },
+      "pid_max_speed": {
+        "default": "mdi:fan-chevron-up"
+      },
+      "pid_min_speed": {
+        "default": "mdi:fan-chevron-down"
+      },
+      "pid_target_co2": {
+        "default": "mdi:molecule-co2"
+      },
+      "target_co2": {
+        "default": "mdi:molecule-co2"
+      }
+    },
+    "switch": {
+      "auto_mode": {
+        "default": "mdi:fan-auto",
+        "state": {
+          "off": "mdi:fan"
+        }
+      },
+      "backlight": {
+        "default": "mdi:led-on",
+        "state": {
+          "off": "mdi:led-off"
+        }
+      },
+      "heater": {
+        "default": "mdi:radiator",
+        "state": {
+          "off": "mdi:radiator-disabled"
+        }
+      },
+      "sound": {
+        "default": "mdi:music-note",
+        "state": {
+          "off": "mdi:music-note-off"
+        }
+      }
+    }
+  }
+}

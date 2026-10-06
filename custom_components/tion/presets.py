@@ -1,14 +1,11 @@
-"""Per-breezer speed preset controller for Tion breezers.
+"""Speed presets of Tion breezers.
 
-A preset is a named set of desired breezer fields. Applying a preset writes
-those fields into the reconciler; returning to ``PRESET_NONE`` restores the
-baseline -- the breezer regime that was in effect before the preset. The
-baseline is itself an anonymous ``Preset`` (a manual speed or auto limits, with
-its power state), so restoring it re-uses the same desired-write path and the
-regime is carried by the object's type rather than a separate flag.
+A preset is a named fan regime of one breezer: a fixed speed, or local PID within
+its own speed limits. Applying a preset remembers the regime it replaced (the
+baseline): a speed with the power state, or local PID. Leaving the preset returns
+to the baseline. Pure logic: the climate entity sends the commands.
 """
 
-from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -24,167 +21,145 @@ from .const import (
 )
 
 
-@dataclass(frozen=True)
-class Preset(ABC):
-    """A speed intent that knows its desired fields, mode, and serialization."""
-
-    @abstractmethod
-    def desired_fields(self) -> dict[str, Any]:
-        """Return the breezer desired fields this preset overlays."""
-
-    @abstractmethod
-    def is_auto(self) -> bool:
-        """Return whether this preset runs the breezer in auto mode."""
-
-    @abstractmethod
-    def to_storage(self) -> dict[str, Any]:
-        """Serialize the preset for persistence."""
-
-    @classmethod
-    def from_config(cls, cfg: Mapping[str, int | str]) -> Preset:
-        """Build a preset from an options-flow preset dict."""
-        if cfg[CONF_PRESET_TYPE] == TionPresetType.MANUAL:
-            return ManualPreset(int(cfg[CONF_PRESET_SPEED]))
-        return AutoPreset(
-            int(cfg[CONF_PRESET_MIN_SPEED]), int(cfg[CONF_PRESET_MAX_SPEED])
-        )
-
-    @classmethod
-    def from_storage(cls, data: Mapping[str, Any] | None) -> Preset | None:
-        """Rebuild a preset from a restored storage payload.
-
-        Returns None for an unrecognized payload -- e.g. a baseline persisted by
-        an older version in a different shape -- so a stale restore is dropped
-        instead of crashing the entity; the baseline is rebuilt on the next
-        preset change.
-        """
-        if not data:
-            return None
-        preset_type = data.get("type")
-        if preset_type == TionPresetType.MANUAL.value:
-            return ManualPreset(int(data["speed"]), bool(data["is_on"]))
-        if preset_type == TionPresetType.AUTO.value:
-            return AutoPreset(int(data["min_speed"]), int(data["max_speed"]))
-        return None
-
-
-@dataclass(frozen=True)
-class ManualPreset(Preset):
-    """A preset that pins the breezer to a fixed manual speed."""
+@dataclass(frozen=True, slots=True)
+class ManualPreset:
+    """Run the breezer at a fixed speed; applying it turns the breezer on."""
 
     speed: int
-    is_on: bool = True
-
-    def desired_fields(self) -> dict[str, Any]:
-        """Pin the breezer at the fixed speed and power state."""
-        return {"is_on": self.is_on, "speed": self.speed}
-
-    def is_auto(self) -> bool:
-        """A manual preset does not run in auto."""
-        return False
-
-    def to_storage(self) -> dict[str, Any]:
-        """Serialize the manual preset."""
-        return {
-            "type": TionPresetType.MANUAL.value,
-            "speed": self.speed,
-            "is_on": self.is_on,
-        }
 
 
-@dataclass(frozen=True)
-class AutoPreset(Preset):
-    """A preset that runs the breezer in auto with speed limits."""
+@dataclass(frozen=True, slots=True)
+class PidPreset:
+    """Run local PID within these speed limits instead of its usual ones."""
 
     min_speed: int
     max_speed: int
 
-    def desired_fields(self) -> dict[str, Any]:
-        """Overlay the auto-mode speed limits."""
-        return {"speed_min_set": self.min_speed, "speed_max_set": self.max_speed}
 
-    def is_auto(self) -> bool:
-        """An auto preset runs in auto."""
-        return True
+type Preset = ManualPreset | PidPreset
 
-    def to_storage(self) -> dict[str, Any]:
-        """Serialize the auto preset."""
-        return {
-            "type": TionPresetType.AUTO.value,
-            "min_speed": self.min_speed,
-            "max_speed": self.max_speed,
-        }
+
+def preset_from_config(cfg: Mapping[str, Any]) -> Preset | None:
+    """Build a preset from its options; None for a type this version lacks."""
+    match cfg.get(CONF_PRESET_TYPE):
+        case TionPresetType.MANUAL:
+            return ManualPreset(int(cfg[CONF_PRESET_SPEED]))
+        case TionPresetType.LOCAL_PID:
+            return PidPreset(
+                int(cfg[CONF_PRESET_MIN_SPEED]), int(cfg[CONF_PRESET_MAX_SPEED])
+            )
+    return None
+
+
+def visible_presets(
+    configs: Mapping[str, Mapping[str, Any]], *, pid_configured: bool
+) -> dict[str, Preset]:
+    """Return the presets a breezer offers: PID ones only while PID is set up."""
+    presets: dict[str, Preset] = {}
+    for name, cfg in configs.items():
+        preset = preset_from_config(cfg)
+        if isinstance(preset, ManualPreset) or (
+            isinstance(preset, PidPreset) and pid_configured
+        ):
+            presets[name] = preset
+    return presets
+
+
+@dataclass(frozen=True, slots=True)
+class SpeedBaseline:
+    """The breezer ran at this speed (None if unknown), on or off."""
+
+    speed: int | None
+    is_on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PidBaseline:
+    """The breezer ran under local PID."""
+
+
+type Baseline = SpeedBaseline | PidBaseline
+
+
+def baseline_to_storage(baseline: Baseline) -> dict[str, Any]:
+    """Serialize a baseline for the climate entity's restore data."""
+    if isinstance(baseline, PidBaseline):
+        return {"type": TionPresetType.LOCAL_PID.value}
+    return {
+        "type": TionPresetType.MANUAL.value,
+        "speed": baseline.speed,
+        "is_on": baseline.is_on,
+    }
+
+
+def baseline_from_storage(data: Mapping[str, Any] | None) -> Baseline | None:
+    """Rebuild a stored baseline; None for anything else, e.g. an older format."""
+    if not data:
+        return None
+    match data.get("type"):
+        case TionPresetType.LOCAL_PID:
+            return PidBaseline()
+        case TionPresetType.MANUAL:
+            speed = data.get("speed")
+            is_on = data.get("is_on")
+            if isinstance(is_on, bool) and (
+                speed is None
+                or (isinstance(speed, int) and not isinstance(speed, bool))
+            ):
+                return SpeedBaseline(speed, is_on)
+    return None
 
 
 class TionPresetController:
-    """Manage speed presets for a single breezer.
+    """Track the active preset of one breezer and the baseline it replaced."""
 
-    Pure logic with no Home Assistant dependencies so it can be unit-tested in
-    isolation. The owning climate entity performs all I/O and reconciler writes.
-    """
-
-    def __init__(self, presets: dict[str, dict[str, int | str]]) -> None:
-        """Initialize the controller from stored preset options."""
-        self._presets: dict[str, Preset] = {
-            name: Preset.from_config(cfg) for name, cfg in presets.items()
-        }
+    def __init__(self, presets: Mapping[str, Preset]) -> None:
+        """Start without an active preset."""
+        self._presets = dict(presets)
         self._active = PRESET_NONE
-        self._saved: Preset | None = None
+        self._saved: Baseline | None = None
 
     @property
     def has_presets(self) -> bool:
-        """Return whether any preset is configured."""
+        """Return whether the breezer offers any preset."""
         return bool(self._presets)
 
     @property
     def preset_modes(self) -> list[str]:
-        """Return available preset modes."""
+        """Return PRESET_NONE and the preset names."""
         return [PRESET_NONE, *self._presets]
 
     @property
     def preset_mode(self) -> str:
-        """Return the active preset mode."""
+        """Return the active preset name, or PRESET_NONE."""
         return self._active
 
     @property
-    def saved(self) -> Preset | None:
-        """Return the baseline saved before the active preset, if any."""
+    def saved(self) -> Baseline | None:
+        """Return the baseline the active preset replaced."""
         return self._saved
 
-    @property
-    def managed_fields(self) -> set[str]:
-        """Return the union of breezer fields any configured preset overlays."""
-        fields: set[str] = set()
-        for preset in self._presets.values():
-            fields.update(preset.desired_fields())
-        return fields
-
     def preset(self, name: str) -> Preset | None:
-        """Return a configured preset by name, or None for PRESET_NONE/unknown."""
+        """Return a preset by name; None for PRESET_NONE or an unknown name."""
         return self._presets.get(name)
 
     def active_preset(self) -> Preset | None:
-        """Return the active Preset object, or None when PRESET_NONE."""
+        """Return the active preset, or None."""
         return self._presets.get(self._active)
 
-    def activate(self, name: str, baseline: Preset) -> None:
-        """Switch to a preset, capturing the baseline on the first activation.
-
-        The baseline is the anonymous preset the caller built from the current
-        regime; it is captured only on the first activation, so it is preserved
-        across preset-to-preset switches.
-        """
+    def activate(self, name: str, baseline: Baseline) -> None:
+        """Make a preset active; the baseline is kept from the first activation."""
         if self._active == PRESET_NONE:
             self._saved = baseline
         self._active = name
 
     def deactivate(self) -> None:
-        """Drop back to PRESET_NONE and clear the saved baseline."""
+        """Drop back to PRESET_NONE and forget the baseline."""
         self._active = PRESET_NONE
         self._saved = None
 
-    def restore(self, active: str, saved: Preset | None) -> None:
-        """Rehydrate state after a Home Assistant restart."""
+    def restore(self, active: str, saved: Baseline | None) -> None:
+        """Rehydrate after a restart; an unknown preset name is ignored."""
         if active not in self.preset_modes:
             return
         self._active = active

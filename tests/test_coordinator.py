@@ -1,433 +1,148 @@
-"""Tests for the Tion data update coordinator."""
+"""Tests for the account snapshot coordinator."""
 
-# FakeClient, FakePidManager, FakeReconciler, _location, and _make_coordinator
-# form a shared test harness covering the coordinator's stale-command guard, the
-# TionData lookup helpers, and desired-state reconciliation inside
-# _async_update_data.  Do not remove unused helpers — they are intentional.
+from collections.abc import Iterator
+from dataclasses import replace
+from datetime import timedelta
 
-import asyncio
-from types import SimpleNamespace
+from freezegun.api import FrozenDateTimeFactory
+from ha_tests.common import MockConfigEntry, async_fire_time_changed
+import pytest
 
-from custom_components.tion.client import TionLocation
-from custom_components.tion.coordinator import TionData, TionDataUpdateCoordinator
+from custom_components.tion.api import TionApiError, TionAuthError, TionConnectionError
+from custom_components.tion.const import DOMAIN
+from custom_components.tion.coordinator import TionCoordinator
+from homeassistant.config_entries import SOURCE_REAUTH
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import UpdateFailed
 
-BREEZER_GUID = "breezer-guid"
-
-
-class FakeClient:
-    """Fake Tion API client."""
-
-    def __init__(self, locations: list[TionLocation]) -> None:
-        """Initialize fake client."""
-        self._locations = locations
-
-    async def get_locations(self) -> list[TionLocation]:
-        """Return canned locations."""
-        return self._locations
+from .fake_cloud import BREEZER_4S, FakeTionCloud, replace_device  # noqa: TID251
 
 
-class FakePidManager:
-    """Fake local PID manager for coordinator tests."""
-
-    def __init__(self, *, active: bool) -> None:
-        """Initialize fake PID manager."""
-        self._active = active
-        self.written: TionData | None = None
-
-    def has_active_pid(self) -> bool:
-        """Return whether any PID controller is active."""
-        return self._active
-
-    def write_all(self, data: TionData) -> None:
-        """Record the data PID was asked to write desired state on."""
-        self.written = data
+@pytest.fixture
+def coordinator(init_integration: MockConfigEntry) -> TionCoordinator:
+    """The coordinator of the loaded entry."""
+    return init_integration.runtime_data
 
 
-class FakeReconciler:
-    """Fake reconciler recording the data it reconciled."""
-
-    def __init__(self) -> None:
-        """Initialize fake reconciler."""
-        self.reconciled: TionData | None = None
-
-    def reconcile(self, data: TionData) -> None:
-        """Record the reconciled snapshot."""
-        self.reconciled = data
-
-
-def _location(*, speed: int) -> TionLocation:
-    """Build a location holding a single breezer with the given speed."""
-    return TionLocation(
-        {
-            "guid": "loc",
-            "zones": [
-                {
-                    "guid": "zone",
-                    "devices": [
-                        {
-                            "guid": BREEZER_GUID,
-                            "name": "Breezer",
-                            "data": {"speed": speed, "data_valid": True},
-                        }
-                    ],
-                }
-            ],
-        }
+@pytest.fixture
+def updates(coordinator: TionCoordinator) -> Iterator[list[bool]]:
+    """Record channel_up at each listener call; a listener arms the refresh."""
+    calls: list[bool] = []
+    unsubscribe = coordinator.async_add_listener(
+        lambda: calls.append(coordinator.channel_up)
     )
+    yield calls
+    unsubscribe()
+
+
+async def _tick(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, seconds: float
+) -> None:
+    freezer.tick(timedelta(seconds=seconds))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+
+async def test_push_updates_listeners(
+    coordinator: TionCoordinator, cloud: FakeTionCloud, updates: list[bool]
+) -> None:
+    """A pushed snapshot reaches the listeners at once."""
+    account = replace_device(cloud.account, BREEZER_4S, name="Renamed")
+
+    cloud.push(account)
+
+    assert coordinator.data is account
+    assert updates == [True]
+
+
+@pytest.mark.usefixtures("updates")
+async def test_periodic_refresh_despite_pushes(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, cloud: FakeTionCloud
+) -> None:
+    """Pushes every few seconds do not postpone the 60 s refresh."""
+    for _ in range(6):
+        await _tick(hass, freezer, 10)
+        cloud.push(cloud.account)
+    await _tick(hass, freezer, 1)
+
+    assert cloud.refreshes == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "translation_key"),
+    [
+        pytest.param(TionConnectionError("down"), "cloud_unavailable", id="down"),
+        pytest.param(TionApiError("bad"), "cloud_error", id="api"),
+    ],
+)
+async def test_refresh_errors(
+    coordinator: TionCoordinator,
+    cloud: FakeTionCloud,
+    error: Exception,
+    translation_key: str,
+) -> None:
+    """A failed refresh is an UpdateFailed with a translated message."""
+    cloud.refresh_error = error
+
+    await coordinator.async_refresh()
+
+    assert not coordinator.last_update_success
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+    assert coordinator.last_exception.translation_key == translation_key
+
+
+async def test_refresh_auth_error_asks_to_sign_in(
+    hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
+) -> None:
+    """A rejected sign-in during the refresh starts reauthentication."""
+    cloud.refresh_error = TionAuthError("expired")
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
+
+
+async def test_channel_down_after_grace(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    coordinator: TionCoordinator,
+    cloud: FakeTionCloud,
+    updates: list[bool],
+) -> None:
+    """The channel counts as down only after 60 s without the live channel."""
+    cloud.push(replace(cloud.account, connected=False))
+    await _tick(hass, freezer, 59)
+    assert all(updates)
+
+    await _tick(hass, freezer, 2)
+    assert not coordinator.channel_up
+    assert updates[-1] is False
+
+    cloud.push(replace(cloud.account, connected=True))
+    assert coordinator.channel_up
+
+
+async def test_reconnect_within_grace(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    coordinator: TionCoordinator,
+    cloud: FakeTionCloud,
+) -> None:
+    """A short drop never takes the channel down."""
+    cloud.push(replace(cloud.account, connected=False))
+    await _tick(hass, freezer, 30)
+    cloud.push(replace(cloud.account, connected=True))
+    await _tick(hass, freezer, 60)
 
+    assert coordinator.channel_up
 
-def _make_coordinator(
-    *,
-    client: FakeClient,
-    data: TionData | None = None,
-    pid_manager: FakePidManager | None = None,
-    reconciler: FakeReconciler | None = None,
-    current_started: float | None = None,
-    last_completed: float | None = None,
-    now: float = 100.0,
-) -> TionDataUpdateCoordinator:
-    """Build a coordinator instance without running DataUpdateCoordinator.__init__."""
-    coordinator = object.__new__(TionDataUpdateCoordinator)
-    coordinator.hass = SimpleNamespace(loop=SimpleNamespace(time=lambda: now))
-    coordinator.client = client
-    coordinator.data = data
-    coordinator.pid_manager = pid_manager or FakePidManager(active=False)
-    coordinator.reconciler = reconciler or FakeReconciler()
-    coordinator._current_command_started_at = current_started  # noqa: SLF001
-    coordinator._last_command_completed_at = last_completed  # noqa: SLF001
-    return coordinator
 
+async def test_unload_cancels_grace(
+    hass: HomeAssistant, init_integration: MockConfigEntry, cloud: FakeTionCloud
+) -> None:
+    """Unloading during a drop leaves no timer behind."""
+    cloud.push(replace(cloud.account, connected=False))
 
-def test_send_command_track_stale_false_keeps_timestamps() -> None:
-    """Test PID commands (track_stale=False) do not touch stale timestamps."""
-    coordinator = _make_coordinator(client=FakeClient([]), now=50.0)
-
-    async def _ok() -> bool:
-        return True
-
-    result = asyncio.run(
-        coordinator._async_send_command(  # noqa: SLF001
-            _ok(), request_refresh=False, track_stale=False
-        )
-    )
-
-    assert result is True
-    assert coordinator._current_command_started_at is None  # noqa: SLF001
-    assert coordinator._last_command_completed_at is None  # noqa: SLF001
-
-
-def test_send_command_track_stale_false_leaves_inflight_marker() -> None:
-    """Test a track_stale=False command does not clear an in-flight manual marker."""
-    coordinator = _make_coordinator(
-        client=FakeClient([]), now=100.0, current_started=99.0
-    )
-
-    async def _ok() -> bool:
-        return True
-
-    result = asyncio.run(
-        coordinator._async_send_command(  # noqa: SLF001
-            _ok(), request_refresh=False, track_stale=False
-        )
-    )
-
-    assert result is True
-    assert coordinator._current_command_started_at == 99.0  # noqa: SLF001
-    assert coordinator._last_command_completed_at is None  # noqa: SLF001
-
-
-def test_send_command_track_stale_true_marks_completion() -> None:
-    """Test manual commands (track_stale=True) mark completion time."""
-    coordinator = _make_coordinator(client=FakeClient([]), now=50.0)
-
-    async def _ok() -> bool:
-        return True
-
-    result = asyncio.run(
-        coordinator._async_send_command(  # noqa: SLF001
-            _ok(), request_refresh=False, track_stale=True
-        )
-    )
-
-    assert result is True
-    assert coordinator._last_command_completed_at == 50.0  # noqa: SLF001
-    assert coordinator._current_command_started_at is None  # noqa: SLF001
-
-
-def test_tion_data_devices_returns_all_devices() -> None:
-    """Test TionData.devices() flattens devices across locations and zones."""
-    data = TionData([_location(speed=5)])
-
-    assert [device.guid for device in data.devices()] == [BREEZER_GUID]
-
-
-def test_tion_data_device_finds_device_by_guid() -> None:
-    """Test TionData.device() returns the matching device, else None."""
-    data = TionData([_location(speed=5)])
-
-    assert data.device(BREEZER_GUID).data.speed == 5
-    assert data.device("missing") is None
-
-
-def test_tion_data_zone_finds_zone_by_device_guid() -> None:
-    """Test TionData.zone() returns the zone containing the device, else None."""
-    data = TionData([_location(speed=5)])
-
-    assert data.zone(BREEZER_GUID).guid == "zone"
-    assert data.zone("missing") is None
-
-
-def test_get_device_delegates_to_data() -> None:
-    """Test get_device resolves the device from self.data."""
-    coordinator = _make_coordinator(
-        client=FakeClient([]), data=TionData([_location(speed=1)])
-    )
-
-    assert coordinator.get_device(BREEZER_GUID).data.speed == 1
-
-
-def test_get_device_zone_delegates_to_data() -> None:
-    """Test get_device_zone resolves the zone from self.data."""
-    coordinator = _make_coordinator(
-        client=FakeClient([]), data=TionData([_location(speed=1)])
-    )
-
-    assert coordinator.get_device_zone(BREEZER_GUID).guid == "zone"
-
-
-def test_update_writes_desired_and_reconciles_when_active() -> None:
-    """Test active PID writes desired state and the reconciler runs on fresh data."""
-    pid_manager = FakePidManager(active=True)
-    reconciler = FakeReconciler()
-    coordinator = _make_coordinator(
-        client=FakeClient([_location(speed=3)]),
-        pid_manager=pid_manager,
-        reconciler=reconciler,
-    )
-
-    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
-
-    assert pid_manager.written is result
-    assert reconciler.reconciled is result
-
-
-def test_apply_desired_writes_pid_then_reconciles_when_active() -> None:
-    """Test apply_desired recomputes active PID before reconciling the snapshot."""
-    pid_manager = FakePidManager(active=True)
-    reconciler = FakeReconciler()
-    coordinator = _make_coordinator(
-        client=FakeClient([]), pid_manager=pid_manager, reconciler=reconciler
-    )
-    data = TionData([_location(speed=1)])
-
-    coordinator.apply_desired(data)
-
-    assert pid_manager.written is data
-    assert reconciler.reconciled is data
-
-
-def test_apply_desired_skips_pid_when_inactive() -> None:
-    """Test apply_desired reconciles without recomputing PID when inactive."""
-    pid_manager = FakePidManager(active=False)
-    reconciler = FakeReconciler()
-    coordinator = _make_coordinator(
-        client=FakeClient([]), pid_manager=pid_manager, reconciler=reconciler
-    )
-    data = TionData([_location(speed=1)])
-
-    coordinator.apply_desired(data)
-
-    assert pid_manager.written is None
-    assert reconciler.reconciled is data
-
-
-def test_update_reconciles_but_skips_pid_when_inactive() -> None:
-    """Test the reconciler always runs, but PID does not write when inactive."""
-    pid_manager = FakePidManager(active=False)
-    reconciler = FakeReconciler()
-    coordinator = _make_coordinator(
-        client=FakeClient([_location(speed=3)]),
-        pid_manager=pid_manager,
-        reconciler=reconciler,
-    )
-
-    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
-
-    assert pid_manager.written is None
-    assert reconciler.reconciled is result
-
-
-def test_update_returns_cached_data_and_skips_reconcile_when_stale() -> None:
-    """Test stale data (recent manual command) is returned, PID and reconcile skipped."""
-    cached = TionData([_location(speed=1)])
-    pid_manager = FakePidManager(active=True)
-    reconciler = FakeReconciler()
-    coordinator = _make_coordinator(
-        client=FakeClient([_location(speed=9)]),
-        data=cached,
-        pid_manager=pid_manager,
-        reconciler=reconciler,
-        now=100.0,
-        last_completed=200.0,
-    )
-
-    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
-
-    assert result is cached
-    assert pid_manager.written is None
-    assert reconciler.reconciled is None
-
-
-def test_update_accepts_cloud_data_after_command_completed_before_fetch() -> None:
-    """Test a completed command does not stale future fetches."""
-    cached = TionData([_location(speed=6)])
-    coordinator = _make_coordinator(
-        client=FakeClient([_location(speed=1)]),
-        data=cached,
-        now=101.0,
-        last_completed=100.0,
-    )
-
-    result = asyncio.run(coordinator._async_update_data())  # noqa: SLF001
-
-    assert result is not cached
-    assert result.device(BREEZER_GUID).data.speed == 1
-
-
-MAGICAIR_GUID = "magicair-guid"
-
-
-def _reachability_data(
-    *,
-    breezer_online: bool = True,
-    breezer_hwid: str | None = "hw1",
-    station_online: bool | None = None,
-    station_hwid: str = "hw1",
-) -> TionData:
-    """Build data with a breezer and an optional MagicAir in a different zone.
-
-    The station shares (or not) the breezer's zone_hwid, exercising the
-    hardware-binding reachability check across separate logical zones.
-    """
-    zones: list[dict] = [
-        {
-            "guid": "breezer-zone",
-            "devices": [
-                {
-                    "guid": BREEZER_GUID,
-                    "name": "Breezer",
-                    "type": "breezer4",
-                    "zone_hwid": breezer_hwid,
-                    "is_online": breezer_online,
-                    "data": {"data_valid": True},
-                }
-            ],
-        }
-    ]
-    if station_online is not None:
-        zones.append(
-            {
-                "guid": "station-zone",
-                "devices": [
-                    {
-                        "guid": MAGICAIR_GUID,
-                        "name": "MagicAir",
-                        "type": "co2mb",
-                        "zone_hwid": station_hwid,
-                        "is_online": station_online,
-                        "data": {"data_valid": True},
-                    }
-                ],
-            }
-        )
-    return TionData([TionLocation({"guid": "loc", "zones": zones})])
-
-
-def test_breezer_reachable_when_bound_station_online() -> None:
-    """Test a breezer is reachable when its bound MagicAir gateway is online."""
-    data = _reachability_data(station_online=True)
-
-    assert data.is_breezer_reachable(BREEZER_GUID) is True
-
-
-def test_breezer_unreachable_when_bound_station_offline() -> None:
-    """Test a stale-online breezer is unreachable when its gateway is offline."""
-    data = _reachability_data(breezer_online=True, station_online=False)
-
-    assert data.is_breezer_reachable(BREEZER_GUID) is False
-
-
-def test_breezer_reachability_binds_across_logical_zones_by_hwid() -> None:
-    """Test the station binds by zone_hwid even from a different logical zone."""
-    online = _reachability_data(
-        breezer_hwid="hw9", station_online=True, station_hwid="hw9"
-    )
-    offline = _reachability_data(
-        breezer_hwid="hw9", station_online=False, station_hwid="hw9"
-    )
-
-    assert online.is_breezer_reachable(BREEZER_GUID) is True
-    assert offline.is_breezer_reachable(BREEZER_GUID) is False
-
-
-def test_breezer_unreachable_when_itself_offline_despite_online_station() -> None:
-    """Test an offline breezer is unreachable even with an online gateway."""
-    data = _reachability_data(breezer_online=False, station_online=True)
-
-    assert data.is_breezer_reachable(BREEZER_GUID) is False
-
-
-def test_breezer_reachability_falls_back_to_own_flag_without_station() -> None:
-    """Test reachability falls back to the breezer's own flag with no station."""
-    online = _reachability_data(breezer_online=True)
-    offline = _reachability_data(breezer_online=False)
-
-    assert online.is_breezer_reachable(BREEZER_GUID) is True
-    assert offline.is_breezer_reachable(BREEZER_GUID) is False
-
-
-def test_breezer_reachability_falls_back_when_no_station_shares_hwid() -> None:
-    """Test a station bound to another hw zone does not gate this breezer."""
-    data = _reachability_data(
-        breezer_online=True,
-        breezer_hwid="hw1",
-        station_online=False,
-        station_hwid="other",
-    )
-
-    assert data.is_breezer_reachable(BREEZER_GUID) is True
-
-
-def test_missing_breezer_is_not_reachable() -> None:
-    """Test an unknown breezer guid is not reachable."""
-    data = _reachability_data(station_online=True)
-
-    assert data.is_breezer_reachable("missing") is False
-
-
-def test_zone_reachable_with_online_station() -> None:
-    """Test a zone holding an online MagicAir is reachable."""
-    data = _reachability_data(station_online=True)
-
-    assert data.is_zone_reachable("station-zone") is True
-
-
-def test_zone_unreachable_with_offline_station() -> None:
-    """Test a zone whose only MagicAir is offline is not reachable."""
-    data = _reachability_data(station_online=False)
-
-    assert data.is_zone_reachable("station-zone") is False
-
-
-def test_zone_reachable_without_station() -> None:
-    """Test a zone with no MagicAir is treated as reachable (cannot tell)."""
-    data = _reachability_data(station_online=True)
-
-    assert data.is_zone_reachable("breezer-zone") is True
-
-
-def test_unknown_zone_is_not_reachable() -> None:
-    """Test an unknown zone guid is not reachable."""
-    data = _reachability_data(station_online=True)
-
-    assert data.is_zone_reachable("missing") is False
+    assert await hass.config_entries.async_unload(init_integration.entry_id)

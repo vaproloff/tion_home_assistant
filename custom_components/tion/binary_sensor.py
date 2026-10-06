@@ -1,160 +1,71 @@
-"""Platform for binary sensor integration."""
-
-import abc
-import logging
+"""Filter replacement sensor of Tion breezers."""
 
 from homeassistant.components import persistent_notification
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .client import TionZoneDevice
-from .const import DOMAIN, TionDeviceType
-from .coordinator import TionDataUpdateCoordinator
-
-_LOGGER = logging.getLogger(__name__)
+from .api import Breezer
+from .coordinator import TionConfigEntry, TionCoordinator
+from .entity import TionEntity, device_views
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
-) -> bool:
-    """Set up sensor Tion entities."""
-    coordinator: TionDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-
-    entities = [
-        TionFilterNeedReplacementBinarySensor(hass, coordinator, device)
-        for device in coordinator.get_devices()
-        if device.guid
-        and device.type
-        in [
-            TionDeviceType.BREEZER_O2,
-            TionDeviceType.BREEZER_3S,
-            TionDeviceType.BREEZER_4S,
-        ]
-    ]
-
-    async_add_entities(entities)
-    return True
+    hass: HomeAssistant,
+    entry: TionConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Add a filter sensor to each breezer that reports its filter."""
+    coordinator = entry.runtime_data
+    async_add_entities(
+        TionFilterBinarySensor(coordinator, device_view)
+        for device_view in device_views(coordinator)
+        if isinstance(device_view, Breezer)
+        and device_view.supports("filter_needs_replacement")
+    )
 
 
-class TionBinarySensor(
-    CoordinatorEntity[TionDataUpdateCoordinator], BinarySensorEntity, abc.ABC
-):
-    """Abstract Tion binary sensor."""
+class TionFilterBinarySensor(TionEntity[Breezer], BinarySensorEntity):
+    """On when the breezer asks for a new filter; also notifies the user."""
 
-    _attr_has_entity_name = True
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_translation_key = "filter_need_replacement"
 
-    def __init__(
-        self,
-        hass: HomeAssistant | None,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize binary sensor device."""
-        super().__init__(coordinator)
-        self.hass = hass
-        self._device = device
-
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self._device.guid)},
-        )
+    def __init__(self, coordinator: TionCoordinator, breezer: Breezer) -> None:
+        """Create the sensor for one breezer."""
+        super().__init__(coordinator, breezer, "filter_need_replacement")
+        self._notification_id = f"tion_filter_need_replacement_{breezer.id}"
+        self._notified = False
 
     @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return (
-            super().available
-            and self._device is not None
-            and self._device.is_online
-            and self._device.valid
-        )
+    def is_on(self) -> bool | None:
+        """Return True if the filter must be replaced."""
+        return self.device_view.filter_needs_replacement
 
-    @property
-    @abc.abstractmethod
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-
-    @callback
-    def _handle_device_update(self) -> None:
-        """Handle updated device data."""
+    async def async_added_to_hass(self) -> None:
+        """Notify at once if the filter is already due."""
+        await super().async_added_to_hass()
+        self._update_notification()
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        if device_data := self.coordinator.get_device(self._device.guid):
-            self._device = device_data
-        self._handle_device_update()
+        self._update_notification()
         super()._handle_coordinator_update()
 
-    async def _load(self) -> bool:
-        if device_data := self.coordinator.get_device(self._device.guid):
-            self._device = device_data
-            return True
-
-        return False
-
-
-class TionFilterNeedReplacementBinarySensor(TionBinarySensor):
-    """Tion Breezer filter need replacement binary sensor."""
-
-    _attr_translation_key = "filter_need_replacement"
-
-    def __init__(
-        self,
-        hass: HomeAssistant | None,
-        coordinator: TionDataUpdateCoordinator,
-        device: TionZoneDevice,
-    ) -> None:
-        """Initialize sensor device."""
-        super().__init__(hass, coordinator, device)
-
-        self._attr_device_class = BinarySensorDeviceClass.PROBLEM
-        self._attr_is_on = bool(self._device.data.filter_need_replace)
-        self._notification_id = f"tion_filter_need_replacement_{self._device.guid}"
-
-    async def async_added_to_hass(self):
-        """Run when entity about to be added."""
-        await super().async_added_to_hass()
-        self._sync_filter_notification(None, self._attr_is_on)
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return f"{self._device.guid}_filter_need_replacement"
-
     @callback
-    def _handle_device_update(self) -> None:
-        """Handle updated filter replacement state."""
-        old_state = self._attr_is_on
-        new_state = bool(self._device.data.filter_need_replace)
-        self._sync_filter_notification(old_state, new_state)
-        self._attr_is_on = new_state
-
-        _LOGGER.debug(
-            "%s: fetched data: filter_need_replace=%s",
-            self.name,
-            self._device.data.filter_need_replace,
-        )
-
-    @callback
-    def _sync_filter_notification(
-        self, old_state: bool | None, new_state: bool | None
-    ) -> None:
-        """Create or dismiss the filter replacement notification."""
-        if new_state and old_state is not True:
+    def _update_notification(self) -> None:
+        needs_replacement = self.is_on
+        if needs_replacement and not self._notified:
             persistent_notification.async_create(
                 self.hass,
-                f"{self._device.name} needs filters replacement.",
+                f"{self.device_view.device.name} needs filters replacement.",
                 title="Tion",
                 notification_id=self._notification_id,
             )
-        elif old_state is True and not new_state:
-            persistent_notification.async_dismiss(
-                self.hass,
-                notification_id=self._notification_id,
-            )
+            self._notified = True
+        elif needs_replacement is False and self._notified:
+            persistent_notification.async_dismiss(self.hass, self._notification_id)
+            self._notified = False

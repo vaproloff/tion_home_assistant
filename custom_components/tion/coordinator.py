@@ -1,265 +1,117 @@
-"""Coordinator for Tion integration."""
+"""The Tion account snapshot, pushed by TionCloud and re-read periodically."""
 
-import asyncio
-from collections.abc import Awaitable
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .client import (
+from .api import (
+    TionAccount,
     TionApiError,
     TionAuthError,
-    TionClient,
+    TionCloud,
     TionConnectionError,
-    TionLocation,
-    TionZone,
-    TionZoneDevice,
 )
-from .const import TionDeviceType
-from .reconciler import TionReconciler
-
-_LOGGER = logging.getLogger(__name__)
+from .const import DISCONNECT_GRACE, DOMAIN, REFRESH_INTERVAL
 
 if TYPE_CHECKING:
     from .pid_manager import TionPidManager
 
+_LOGGER = logging.getLogger(__name__)
 
-@dataclass
-class TionData:
-    """Tion coordinator data."""
-
-    locations: list[TionLocation]
-
-    def devices(self) -> list[TionZoneDevice]:
-        """Return all devices across all locations and zones."""
-        return [
-            device
-            for location in self.locations
-            for zone in location.zones
-            for device in zone.devices
-        ]
-
-    def device(self, guid: str) -> TionZoneDevice | None:
-        """Return the device with the given guid, or None."""
-        return next((device for device in self.devices() if device.guid == guid), None)
-
-    def zone(self, guid: str) -> TionZone | None:
-        """Return the zone containing the device with the given guid, or None."""
-        for location in self.locations:
-            for zone in location.zones:
-                if any(device.guid == guid for device in zone.devices):
-                    return zone
-
-        return None
-
-    def is_breezer_reachable(self, guid: str) -> bool:
-        """Return whether a breezer is reachable through an online gateway.
-
-        Breezers reach the cloud only through a MagicAir bound to the same
-        hardware zone (``zone_hwid``), regardless of logical zone. When such a
-        station is present, the breezer is reachable only if that station is
-        online -- the breezer's own ``is_online`` freezes stale once the
-        gateway drops. With no bound station in the snapshot, fall back to the
-        breezer's own flag.
-        """
-        device = self.device(guid)
-        if device is None:
-            return False
-        station_online = self._bound_station_online(device)
-        if station_online is None:
-            return bool(device.is_online)
-        return station_online and bool(device.is_online)
-
-    def _bound_station_online(self, breezer: TionZoneDevice) -> bool | None:
-        """Return whether a MagicAir bound to the breezer's hw zone is online.
-
-        ``None`` means no such station exists in the current snapshot, so the
-        caller should fall back to the breezer's own ``is_online``.
-        """
-        hwid = breezer.zone_hwid
-        if hwid is None:
-            return None
-        stations = [
-            device
-            for device in self.devices()
-            if device.type == TionDeviceType.MAGIC_AIR and device.zone_hwid == hwid
-        ]
-        if not stations:
-            return None
-        return any(bool(station.is_online) for station in stations)
-
-    def is_zone_reachable(self, zone_guid: str) -> bool:
-        """Return whether a zone can be commanded through an online gateway.
-
-        A zone is reachable when it has no MagicAir (cannot tell) or at least
-        one of its MagicAir gateways is online.
-        """
-        for location in self.locations:
-            for zone in location.zones:
-                if zone.guid != zone_guid:
-                    continue
-                stations = [
-                    device
-                    for device in zone.devices
-                    if device.type == TionDeviceType.MAGIC_AIR
-                ]
-                return not stations or any(
-                    bool(station.is_online) for station in stations
-                )
-        return False
+type TionConfigEntry = ConfigEntry[TionCoordinator]
 
 
-class TionDataUpdateCoordinator(DataUpdateCoordinator[TionData]):
-    """Class to manage fetching Tion data."""
+class TionCoordinator(DataUpdateCoordinator[TionAccount]):
+    """Shares the account snapshot of one Tion cloud with the entities."""
+
+    config_entry: TionConfigEntry
+    # Set by async_setup_entry right after the coordinator.
+    pid: TionPidManager
 
     def __init__(
-        self,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        client: TionClient,
-        scan_interval: int,
+        self, hass: HomeAssistant, config_entry: TionConfigEntry, cloud: TionCloud
     ) -> None:
-        """Initialize the coordinator."""
-        self.client = client
-        self.pid_manager: TionPidManager
-        self.reconciler = TionReconciler(self)
-        self._current_command_started_at: float | None = None
-        self._last_command_completed_at: float | None = None
-        self._settings_locks: dict[str, asyncio.Lock] = {}
-
+        """Start from the cloud's current snapshot and follow its changes."""
         super().__init__(
             hass,
             _LOGGER,
-            config_entry=entry,
-            name="Tion",
-            update_interval=timedelta(seconds=scan_interval),
+            config_entry=config_entry,
+            name=DOMAIN,
+            update_interval=REFRESH_INTERVAL,
             always_update=False,
         )
+        self.cloud = cloud
+        self.data = cloud.account
+        # False once the live channel has been down for DISCONNECT_GRACE.
+        self.channel_up = cloud.connected
+        self._unsub_grace: CALLBACK_TYPE | None = None
+        self._unsub_cloud = cloud.add_listener(self._handle_cloud_update)
 
-    @asynccontextmanager
-    async def async_settings_command(self, guid: str):
-        """Serialize settings (backlight/sound) writes for one device.
-
-        Settings live on a separate endpoint from the breezer/zone payload the
-        reconciler drives, so they keep their own lightweight lock.
-        """
-        lock = self._settings_locks.setdefault(guid, asyncio.Lock())
-        async with lock:
-            yield
-
-    def _command_invalidates_fetch(self, request_started_at: float) -> bool:
-        """Return whether a command makes a fetch started at this time stale.
-
-        True when a command is in-flight, or one completed after the fetch
-        began, so the fetched snapshot may predate the command's effect.
-        """
-        return self._current_command_started_at is not None or (
-            self._last_command_completed_at is not None
-            and request_started_at < self._last_command_completed_at
+    def device_available(self, device_id: str) -> bool:
+        """Return True while the channel is up and the device and gateway online."""
+        if not self.channel_up or (device := self.data.device(device_id)) is None:
+            return False
+        gateway = (
+            self.data.device(device.parent_id) if device.parent_id is not None else None
         )
+        return device.is_online and (gateway is None or gateway.is_online)
 
-    async def _async_update_data(self) -> TionData:
-        """Fetch data from Tion API."""
-        request_started_at = self.hass.loop.time()
+    @callback
+    def _handle_cloud_update(self) -> None:
+        # Not async_set_updated_data: it restarts the refresh timer, and pushes
+        # arrive every few seconds, so the periodic refresh would never run.
+        self.data = self.cloud.account
+        if self.cloud.connected:
+            self._cancel_grace()
+            self.channel_up = True
+        elif self.channel_up and self._unsub_grace is None:
+            self._unsub_grace = async_call_later(
+                self.hass, DISCONNECT_GRACE, self._grace_expired
+            )
+        if self.cloud.auth_error is not None:
+            self.config_entry.async_start_reauth(self.hass)
+        self.async_update_listeners()
+
+    @callback
+    def _grace_expired(self, _now: datetime) -> None:
+        self._unsub_grace = None
+        self.channel_up = False
+        self.async_update_listeners()
+
+    @callback
+    def _cancel_grace(self) -> None:
+        if self._unsub_grace is not None:
+            self._unsub_grace()
+            self._unsub_grace = None
+
+    async def _async_update_data(self) -> TionAccount:
+        """Re-read the structure: online flags change only there."""
         try:
-            locations = await self.client.get_locations()
+            await self.cloud.async_refresh()
         except TionAuthError as err:
-            raise ConfigEntryAuthFailed from err
-        except (TionApiError, TionConnectionError) as err:
-            raise UpdateFailed(str(err)) from err
+            raise ConfigEntryAuthFailed(
+                translation_domain=DOMAIN, translation_key="auth_failed"
+            ) from err
+        except TionConnectionError as err:
+            raise UpdateFailed(
+                translation_domain=DOMAIN, translation_key="cloud_unavailable"
+            ) from err
+        except TionApiError as err:
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="cloud_error",
+                translation_placeholders={"message": str(err)},
+            ) from err
+        return self.cloud.account
 
-        if self.data is not None and self._command_invalidates_fetch(
-            request_started_at
-        ):
-            _LOGGER.debug("Ignoring stale Tion location data")
-            return self.data
-
-        data = TionData(locations)
-        self.apply_desired(data)
-        return data
-
-    def apply_desired(self, data: TionData) -> None:
-        """Recompute active PID desired state, then reconcile toward all desired.
-
-        This is the single pipeline that turns desired state into background
-        commands: local PID writes its fields first, so a just-changed input
-        (e.g. an auto-speed limit) is reflected in the very same reconcile pass,
-        then the reconciler drives cloud state toward all desired state. Every
-        writer that wants to push state immediately must go through here rather
-        than calling ``reconcile`` directly, otherwise a PID-driven breezer
-        would dispatch a stale speed and need a second command a cycle later.
-        """
-        if self.pid_manager.has_active_pid():
-            self.pid_manager.write_all(data)
-        self.reconciler.reconcile(data)
-
-    async def _async_send_command(
-        self,
-        command: Awaitable[bool],
-        *,
-        request_refresh: bool = True,
-        track_stale: bool = True,
-    ) -> bool:
-        """Send a command and refresh coordinator data after it succeeds."""
-        command_started_at = self.hass.loop.time()
-        if track_stale:
-            self._current_command_started_at = command_started_at
-        try:
-            result = await command
-            if track_stale:
-                self._last_command_completed_at = self.hass.loop.time()
-        finally:
-            if track_stale and self._current_command_started_at == command_started_at:
-                self._current_command_started_at = None
-
-        if request_refresh:
-            await self.async_request_refresh()
-
-        return result
-
-    async def async_send_breezer(
-        self, *, request_refresh: bool = True, track_stale: bool = True, **kwargs: Any
-    ) -> bool:
-        """Send new breezer data to API."""
-        return await self._async_send_command(
-            self.client.send_breezer(**kwargs),
-            request_refresh=request_refresh,
-            track_stale=track_stale,
-        )
-
-    async def async_send_zone(
-        self, *, request_refresh: bool = True, track_stale: bool = True, **kwargs: Any
-    ) -> bool:
-        """Send new zone data to API."""
-        return await self._async_send_command(
-            self.client.send_zone(**kwargs),
-            request_refresh=request_refresh,
-            track_stale=track_stale,
-        )
-
-    async def async_send_settings(
-        self, *, request_refresh: bool = True, **kwargs: Any
-    ) -> bool:
-        """Send new settings data to API."""
-        return await self._async_send_command(
-            self.client.send_settings(**kwargs), request_refresh=request_refresh
-        )
-
-    def get_devices(self) -> list[TionZoneDevice]:
-        """Get all devices from coordinator data."""
-        return self.data.devices()
-
-    def get_device(self, guid: str) -> TionZoneDevice | None:
-        """Get a device by guid from coordinator data."""
-        return self.data.device(guid)
-
-    def get_device_zone(self, guid: str) -> TionZone | None:
-        """Get a device zone by device guid from coordinator data."""
-        return self.data.zone(guid)
+    async def async_shutdown(self) -> None:
+        """Stop following the cloud; it is stopped after this."""
+        self._unsub_cloud()
+        self._cancel_grace()
+        await super().async_shutdown()

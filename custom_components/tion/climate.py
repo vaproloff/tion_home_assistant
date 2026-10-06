@@ -1,11 +1,12 @@
-"""Support for Tion breezer."""
+"""Climate entity of Tion breezers."""
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
-import logging
 from typing import Any, Self
 
 from homeassistant.components.climate import (
+    ATTR_HVAC_MODE,
     FAN_AUTO,
     PRESET_NONE,
     ClimateEntity,
@@ -13,836 +14,443 @@ from homeassistant.components.climate import (
     HVACAction,
     HVACMode,
 )
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    ATTR_TEMPERATURE,
-    MAJOR_VERSION,
-    MINOR_VERSION,
-    PRECISION_WHOLE,
-    UnitOfTemperature,
-)
+from homeassistant.const import ATTR_TEMPERATURE, PRECISION_WHOLE, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .client import TionZoneDevice
-from .const import (
-    BREEZER_TYPES,
-    CONF_PRESETS,
-    DOMAIN,
-    Heater,
-    SwingMode,
-    TionDeviceType,
-    ZoneMode,
+from .api import Breezer, Flap
+from .const import CONF_PRESETS, FAN_LOCAL_PID, SwingMode
+from .coordinator import TionConfigEntry, TionCoordinator
+from .entity import TionEntity, device_views
+from .pid_manager import TionPidManager
+from .presets import (
+    Baseline,
+    ManualPreset,
+    PidBaseline,
+    PidPreset,
+    Preset,
+    SpeedBaseline,
+    TionPresetController,
+    baseline_from_storage,
+    baseline_to_storage,
+    visible_presets,
 )
-from .coordinator import TionDataUpdateCoordinator
-from .presets import AutoPreset, ManualPreset, Preset, TionPresetController
 
-_LOGGER = logging.getLogger(__name__)
+SWING_MODES = {
+    Flap.OUTSIDE: SwingMode.SWING_OUTSIDE,
+    Flap.INSIDE: SwingMode.SWING_INSIDE,
+    Flap.MIXED: SwingMode.SWING_MIXED,
+}
+FLAPS = {swing_mode: flap for flap, swing_mode in SWING_MODES.items()}
 
 
-@dataclass
-class TionRestoreData(ExtraStoredData):
-    """Climate state restored across restarts and reloads.
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: TionConfigEntry,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Add a climate entity for each breezer."""
+    coordinator = entry.runtime_data
+    async_add_entities(
+        TionClimate(coordinator, device_view)
+        for device_view in device_views(coordinator)
+        if isinstance(device_view, Breezer)
+    )
 
-    Persisted through ``extra_restore_state_data``, which Home Assistant captures
-    even while the entity is unavailable -- unlike state attributes, which are
-    dropped for an unavailable entity. This keeps local PID and the active preset
-    across a reload that lands while the breezer's gateway is offline.
-    """
+
+@dataclass(slots=True)
+class TionClimateExtraData(ExtraStoredData):
+    """What the climate entity keeps across restarts and reloads."""
 
     pid_active: bool
     preset_mode: str | None
-    preset_saved: dict[str, Any] | None
+    preset_baseline: dict[str, Any] | None
 
     def as_dict(self) -> dict[str, Any]:
-        """Return the payload to persist."""
+        """Return the data to store."""
         return {
             "pid_active": self.pid_active,
             "preset_mode": self.preset_mode,
-            "preset_saved": self.preset_saved,
+            "preset_baseline": self.preset_baseline,
         }
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Self:
-        """Rebuild restore data from a persisted payload."""
+        """Rebuild stored data, dropping values of another shape."""
+        preset_mode = data.get("preset_mode")
+        preset_baseline = data.get("preset_baseline")
         return cls(
-            pid_active=bool(data.get("pid_active")),
-            preset_mode=data.get("preset_mode"),
-            preset_saved=data.get("preset_saved"),
+            pid_active=data.get("pid_active") is True,
+            preset_mode=preset_mode if isinstance(preset_mode, str) else None,
+            preset_baseline=preset_baseline
+            if isinstance(preset_baseline, dict)
+            else None,
         )
 
 
-async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
-) -> bool:
-    """Set up climate Tion entities."""
-    coordinator: TionDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+class TionClimate(TionEntity[Breezer], ClimateEntity, RestoreEntity):
+    """A breezer: power, fan speed and regime, presets, heating and the flap."""
 
-    devices = coordinator.get_devices()
-    entities = [
-        TionClimate(coordinator, device)
-        for device in devices
-        if device.guid and device.type in BREEZER_TYPES
-    ]
-
-    async_add_entities(entities)
-    return True
-
-
-class TionClimate(
-    CoordinatorEntity[TionDataUpdateCoordinator], RestoreEntity, ClimateEntity
-):
-    """Tion climate devices,include air conditioner,heater."""
-
+    _attr_name = None
     _attr_translation_key = "tion_breezer"
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_precision = PRECISION_WHOLE
+    _attr_target_temperature_step = 1
 
-    def __init__(
-        self, coordinator: TionDataUpdateCoordinator, breezer: TionZoneDevice
-    ) -> None:
-        """Initialize climate device for Tion Breezer."""
-        super().__init__(coordinator)
-
-        self._breezer_guid = breezer.guid
-        self._attr_name = breezer.name
-        self._type = breezer.type
-        self._attr_max_temp = breezer.t_max
-        self._attr_min_temp = breezer.t_min
-        self._breezer_valid = breezer.valid
-        self._is_on = breezer.data.is_on
-        self._t_in = breezer.data.t_in
-        self._t_out = breezer.data.t_out
-        self._t_set = breezer.data.t_set
-        self._heater_enabled = breezer.data.heater_enabled
-        self._heater_mode = breezer.data.heater_mode
-        self._heater_power = breezer.data.heater_power
-        self._speed = breezer.data.speed
-        self._speed_min_set = breezer.data.speed_min_set
-        self._speed_max_set = breezer.data.speed_max_set
+    def __init__(self, coordinator: TionCoordinator, breezer: Breezer) -> None:
+        """Create the climate entity of one breezer."""
+        super().__init__(coordinator, breezer, None)
+        presets = coordinator.config_entry.options.get(CONF_PRESETS, {})
         self._presets = TionPresetController(
-            self.coordinator.config_entry.options.get(CONF_PRESETS, {}).get(
-                breezer.guid, {}
+            visible_presets(
+                presets.get(breezer.id, {}),
+                pid_configured=coordinator.pid.is_configured(breezer.id),
             )
         )
-        self._gate = breezer.data.gate
-        self._filter_time_seconds = breezer.data.filter_time_seconds
-        self._filter_need_replace = breezer.data.filter_need_replace
+        # While the entity changes the regime, its passing states are no news.
+        self._in_transition = False
 
-        self._zone_guid = None
-        self._zone_name = None
-        self._mode = None
-        self._target_co2 = None
-        self._zone_valid = None
+    @property
+    def _pid(self) -> TionPidManager:
+        return self.coordinator.pid
 
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, breezer.guid)},
+    async def async_added_to_hass(self) -> None:
+        """Follow the breezer's PID and restore the regime and preset."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            self._pid.add_listener(self.device_view.id, self._handle_pid_update)
         )
-        self._hvac_modes = [HVACMode.OFF, HVACMode.FAN_ONLY]
-        self._swing_modes = []
+        if (last := await self.async_get_last_extra_data()) is not None:
+            self._restore(TionClimateExtraData.from_dict(last.as_dict()))
 
-        self._manual_fan_modes = [
-            str(speed) for speed in range(1, breezer.max_speed + 1)
-        ]
+    @property
+    def extra_restore_state_data(self) -> TionClimateExtraData:
+        """Return the PID flag, the active preset and the baseline to restore."""
+        saved = self._presets.saved
+        return TionClimateExtraData(
+            pid_active=self._pid.is_active(self.device_view.id),
+            preset_mode=self._presets.preset_mode,
+            preset_baseline=baseline_to_storage(saved) if saved is not None else None,
+        )
 
-        self._attr_supported_features = ClimateEntityFeature.FAN_MODE
-        if self._gate is not None:
-            self._attr_supported_features |= ClimateEntityFeature.SWING_MODE
-            self._swing_modes.append(SwingMode.SWING_OUTSIDE)
+    @property
+    def _heater_installed(self) -> bool:
+        return self.device_view.heater_installed is True
 
-        if breezer.data.heater_installed or breezer.data.heater_type is not None:
-            self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
-            self._hvac_modes.append(HVACMode.HEAT)
-
-        if (MAJOR_VERSION, MINOR_VERSION) >= (2024, 2):
-            self._enable_turn_on_off_backwards_compatibility = False
-            self._attr_supported_features |= ClimateEntityFeature.TURN_OFF
-            self._attr_supported_features |= ClimateEntityFeature.TURN_ON
-
+    @property
+    def supported_features(self) -> ClimateEntityFeature:
+        """Return the features the breezer has now."""
+        features = (
+            ClimateEntityFeature.FAN_MODE
+            | ClimateEntityFeature.TURN_ON
+            | ClimateEntityFeature.TURN_OFF
+        )
+        if self._heater_installed:
+            features |= ClimateEntityFeature.TARGET_TEMPERATURE
+        if self.device_view.flap_modes:
+            features |= ClimateEntityFeature.SWING_MODE
         if self._presets.has_presets:
-            self._attr_supported_features |= ClimateEntityFeature.PRESET_MODE
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available.
-
-        A breezer reaches the cloud only through its MagicAir gateway, so it is
-        available only while that gateway is online; its own ``is_online`` flag
-        freezes stale once the gateway drops.
-        """
-        return bool(
-            super().available
-            and self.coordinator.data is not None
-            and self.coordinator.data.is_breezer_reachable(self._breezer_guid)
-            and self._breezer_valid
-            and self._zone_valid
-        )
-
-    @property
-    def name(self) -> str:
-        """Return the name of the breezer."""
-        return self._attr_name
-
-    @property
-    def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return self._breezer_guid
-
-    @property
-    def icon(self):
-        """Return the entity picture to use in the frontend, if any."""
-        return "mdi:air-filter"
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Provides extra attributes."""
-        attrs = {
-            "mode": self.mode,
-            "speed": self.speed,
-        }
-        if self._heater_power is not None:
-            attrs.update({"power": self._heater_power})
-
-        attrs.update(
-            self.coordinator.pid_manager.extra_state_attributes(self._breezer_guid)
-        )
-
-        return attrs
-
-    @property
-    def precision(self) -> int:
-        """Return the precision of the system."""
-        return PRECISION_WHOLE
-
-    @property
-    def target_temperature_step(self) -> int:
-        """Return the supported step of target temperature."""
-        return PRECISION_WHOLE
-
-    @property
-    def temperature_unit(self) -> UnitOfTemperature:
-        """Return the unit of measurement used by the platform."""
-        return UnitOfTemperature.CELSIUS
+            features |= ClimateEntityFeature.PRESET_MODE
+        return features
 
     @property
     def min_temp(self) -> float:
-        """Return the minimum temperature."""
-        return self._attr_min_temp
+        """Return the lowest target temperature."""
+        return self.device_view.target_temperature_range[0]
 
     @property
     def max_temp(self) -> float:
-        """Return the maximum temperature."""
-        return self._attr_max_temp
+        """Return the highest target temperature."""
+        return self.device_view.target_temperature_range[1]
 
     @property
-    def current_temperature(self):
-        """Return the current temperature."""
-        return self._t_out if self._breezer_valid else None
+    def current_temperature(self) -> float | None:
+        """Return the temperature of the air the breezer blows in."""
+        return self.device_view.temperature_outlet
 
     @property
-    def target_temperature(self):
-        """Return the temperature we try to reach."""
-        return self._t_set if self._breezer_valid else None
+    def target_temperature(self) -> float | None:
+        """Return the target temperature of the blown-in air."""
+        return self.device_view.target_temperature
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
-        """Return the list of available operation modes."""
-        return self._hvac_modes
+        """Return the modes the breezer has."""
+        modes = [HVACMode.OFF, HVACMode.FAN_ONLY]
+        if self._heater_installed:
+            modes.append(HVACMode.HEAT)
+        return modes
 
     @property
     def hvac_mode(self) -> HVACMode | None:
-        """Return current operation."""
-        if not self._breezer_valid:
+        """Return off, fan only, or heat when the heater is allowed."""
+        breezer = self.device_view
+        if breezer.is_on is None:
             return None
-
-        if not self._is_on and not self.coordinator.pid_manager.is_active(
-            self._breezer_guid
-        ):
+        if not breezer.is_on:
             return HVACMode.OFF
-
-        if self.heater_enabled:
+        if self._heater_installed and breezer.heater_enabled:
             return HVACMode.HEAT
-
         return HVACMode.FAN_ONLY
 
     @property
     def hvac_action(self) -> HVACAction | None:
-        """Return the current running hvac operation if supported."""
-        hvac_mode = self.hvac_mode
-        if hvac_mode is None:
+        """Return what the breezer is doing."""
+        breezer = self.device_view
+        if breezer.is_on is None:
             return None
-
-        if hvac_mode == HVACMode.OFF:
+        if not breezer.is_on:
             return HVACAction.OFF
-
-        if not self._is_on:
-            return HVACAction.IDLE
-
-        if self._heater_power or self._heater_enabled:
-            return HVACAction.HEATING
-
-        return HVACAction.FAN
+        # Only the 4S reports heater power; the others heat whenever allowed.
+        if breezer.supports("heater_power"):
+            heating = (breezer.heater_power or 0) > 0
+        else:
+            heating = self.hvac_mode is HVACMode.HEAT
+        return HVACAction.HEATING if heating else HVACAction.FAN
 
     @property
     def fan_modes(self) -> list[str]:
-        """Return the list of available fan modes."""
-        if self._fan_auto_available():
-            return [FAN_AUTO, *self._manual_fan_modes]
-
-        return list(self._manual_fan_modes)
-
-    def _fan_auto_available(self) -> bool:
-        """Return if Fan Auto can be selected for this breezer."""
-        pid_manager = self.coordinator.pid_manager
-        if pid_manager.is_configured(self._breezer_guid):
-            return True
-
-        zone = self.coordinator.get_device_zone(self._breezer_guid)
-        if zone is None:
-            return True
-
-        return not any(
-            device.guid
-            and device.type in BREEZER_TYPES
-            and pid_manager.is_configured(device.guid)
-            for device in zone.devices
-        )
+        """Return auto (the room has auto mode), local PID (set up) and speeds."""
+        modes = []
+        if self.room_auto is not None:
+            modes.append(FAN_AUTO)
+        if self._pid.is_configured(self.device_view.id):
+            modes.append(FAN_LOCAL_PID)
+        speeds = range(1, (self.device_view.speed_max or 0) + 1)
+        return [*modes, *(str(speed) for speed in speeds)]
 
     @property
     def fan_mode(self) -> str | None:
-        """Return the fan setting."""
-        if self.coordinator.pid_manager.is_active(self._breezer_guid):
+        """Return auto while the room's auto mode is on, local PID, or the speed."""
+        if self._room_auto_enabled:
             return FAN_AUTO
-
-        if self._mode == FAN_AUTO:
-            return FAN_AUTO
-
-        mode = str(self.speed) if self.speed is not None else None
-        return mode if mode in self._manual_fan_modes else None
-
-    def _exact_fan_mode(self) -> str:
-        """Return a log-friendly label for the current fan regime.
-
-        Distinguishes the two auto sources (``local_pid`` vs cloud ``auto``)
-        that ``fan_mode`` collapses into ``FAN_AUTO``, so logs make clear which
-        controller actually drives the breezer.
-        """
-        if self.coordinator.pid_manager.is_active(self._breezer_guid):
-            return "local_pid"
-        if self._mode == ZoneMode.AUTO:
-            return "cloud_auto"
-        return f"manual(speed={self.speed})"
-
-    @property
-    def swing_modes(self) -> list[SwingMode]:
-        """Return the list of available preset modes."""
-        return self._swing_modes
-
-    @property
-    def swing_mode(self) -> SwingMode | None:
-        """Return current swing mode."""
-        if self._type == TionDeviceType.BREEZER_4S:
-            match self._gate:
-                case 0:
-                    return SwingMode.SWING_OUTSIDE
-                case 1:
-                    return SwingMode.SWING_INSIDE
-        elif self._type == TionDeviceType.BREEZER_3S:
-            match self._gate:
-                case 0:
-                    return SwingMode.SWING_INSIDE
-                case 1:
-                    return SwingMode.SWING_MIXED
-                case 2:
-                    return SwingMode.SWING_OUTSIDE
-
+        if self._pid.is_active(self.device_view.id):
+            return FAN_LOCAL_PID
+        breezer = self.device_view
+        if breezer.is_on and breezer.speed is not None and breezer.speed >= 1:
+            return str(breezer.speed)
         return None
 
     @property
     def preset_modes(self) -> list[str] | None:
-        """Return the list of available preset modes."""
+        """Return none and the breezer's presets."""
         return self._presets.preset_modes if self._presets.has_presets else None
 
     @property
     def preset_mode(self) -> str | None:
-        """Return the current preset mode."""
+        """Return the active preset, or none."""
         return self._presets.preset_mode if self._presets.has_presets else None
 
     @property
-    def mode(self) -> ZoneMode | None:
-        """Return the current mode."""
-        return self._mode if self._zone_valid else None
+    def swing_modes(self) -> list[str] | None:
+        """Return where the breezer can take air from."""
+        return [SWING_MODES[flap] for flap in self.device_view.flap_modes] or None
 
     @property
-    def speed(self) -> int | None:
-        """Return the current fan speed.
-
-        Reports 0 while the breezer is not running: is_on=False means no airflow
-        regardless of the stored setpoint, so the speed shown to automations and
-        dashboards matches reality (and the IDLE/OFF hvac_action).
-        """
-        if not self._is_on:
-            return 0
-        try:
-            return int(self._speed)
-        except (TypeError, ValueError) as e:
-            _LOGGER.warning(
-                "%s: unable to convert breezer speed value to int: %s. Error: %s",
-                self.name,
-                self._speed,
-                e,
-            )
-
-        return None
+    def swing_mode(self) -> str | None:
+        """Return where the breezer takes air from."""
+        flap = self.device_view.flap
+        return SWING_MODES[flap] if flap is not None else None
 
     @property
-    def speed_min_set(self) -> int | None:
-        """Return the breezer's lower auto-speed limit."""
-        return self._speed_min_set
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the room's mode, the speed (0 when off), heater power and PID."""
+        breezer = self.device_view
+        auto = self.room_auto
+        attributes: dict[str, Any] = {
+            "mode": None if auto is None else ("auto" if auto.enabled else "manual"),
+            "speed": breezer.speed if breezer.is_on else 0,
+        }
+        if breezer.heater_power is not None:
+            attributes["power"] = breezer.heater_power
+        if self._pid.is_configured(breezer.id):
+            attributes["pid_active"] = self._pid.is_active(breezer.id)
+            attributes["pid_status"] = self._pid.status(breezer.id).value
+        return attributes
 
-    @property
-    def speed_max_set(self) -> int | None:
-        """Return the breezer's upper auto-speed limit."""
-        return self._speed_max_set
+    async def async_turn_on(self) -> None:
+        """Turn the breezer on."""
+        await self.async_send_command(is_on=True)
 
-    @property
-    def heater_enabled(self) -> bool:
-        """Return if heater active now."""
-        if self._type == TionDeviceType.BREEZER_4S:
-            return self._heater_mode == Heater.ON
+    async def async_turn_off(self) -> None:
+        """Turn the breezer off."""
+        await self._async_power_off()
 
-        return self._heater_enabled or False
-
-    async def async_added_to_hass(self):
-        """Run when entity about to be added."""
-        self._load_zone()
-        self._load_breezer()
-        self._set_swing_modes()
-        await super().async_added_to_hass()
-        if (restored := await self.async_get_last_extra_data()) is not None:
-            data = TionRestoreData.from_dict(restored.as_dict())
-            self._restore_local_pid(data.pid_active)
-            self._restore_preset(data.preset_mode, data.preset_saved)
-
-    @property
-    def extra_restore_state_data(self) -> TionRestoreData:
-        """Return state to restore that must survive entity unavailability."""
-        saved = self._presets.saved
-        return TionRestoreData(
-            pid_active=self.coordinator.pid_manager.is_active(self._breezer_guid),
-            preset_mode=self.preset_mode,
-            preset_saved=saved.to_storage() if saved else None,
-        )
-
-    @callback
-    def _restore_local_pid(self, pid_active: bool) -> None:
-        """Restore local PID active state after Home Assistant restart."""
-        pid_manager = self.coordinator.pid_manager
-        if not pid_manager.is_configured(self._breezer_guid):
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Turn the breezer off, or on with the heater allowed or not."""
+        if hvac_mode is HVACMode.OFF:
+            await self._async_power_off()
             return
-        if pid_active:
-            _LOGGER.debug("%s: restoring active local PID", self.name)
-            pid_manager.start_breezer_pid(self._breezer_guid)
+        changes: dict[str, bool] = {"is_on": True}
+        if self._heater_installed:
+            changes["heater_enabled"] = hvac_mode is HVACMode.HEAT
+        await self.async_send_command(**changes)
+
+    async def async_set_temperature(self, **kwargs: Any) -> None:
+        """Set the target temperature, after the mode if one is given."""
+        if (hvac_mode := kwargs.get(ATTR_HVAC_MODE)) is not None:
+            await self.async_handle_set_hvac_mode_service(hvac_mode)
+        if (temperature := kwargs.get(ATTR_TEMPERATURE)) is not None:
+            await self.async_send_command(target_temperature=temperature)
+
+    async def async_set_fan_mode(self, fan_mode: str) -> None:
+        """Hand the speed to the room's auto mode or local PID, or set it."""
+        breezer_id = self.device_view.id
+        with self._transition():
+            if fan_mode == FAN_LOCAL_PID:
+                self._release_preset()
+                await self._async_leave_auto()
+                self._pid.start(breezer_id)
+            else:
+                # Stopped first: releasing a PID preset would step PID once more.
+                self._pid.stop(breezer_id)
+                self._release_preset()
+                if fan_mode == FAN_AUTO:
+                    await self.async_set_room_auto(enabled=True)
+                else:
+                    await self._async_leave_auto()
+                    await self.async_send_command(speed=int(fan_mode))
+        self.async_write_ha_state()
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        """Run the breezer as a preset says, or return to the regime before it."""
+        if preset_mode == PRESET_NONE:
+            await self._async_leave_preset()
         else:
-            _LOGGER.debug(
-                "%s: no need to restore local PID (restored pid_active=%s)",
-                self.name,
-                pid_active,
-            )
+            await self._async_enter_preset(preset_mode)
+        self.async_write_ha_state()
 
-    @callback
-    def _restore_preset(
-        self, preset_mode: str | None, preset_saved: dict[str, Any] | None
-    ) -> None:
-        """Restore active preset and saved preset after Home Assistant restart."""
-        if not self._presets.has_presets:
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        """Set where the breezer takes air from."""
+        await self.async_send_command(flap=FLAPS[SwingMode(swing_mode)])
+
+    async def _async_power_off(self) -> None:
+        with self._transition():
+            self._pid.stop(self.device_view.id)
+            self._release_preset()
+            # The room's auto mode would turn the breezer back on.
+            await self._async_leave_auto()
+            await self.async_send_command(is_on=False)
+        self.async_write_ha_state()
+
+    async def _async_leave_auto(self) -> None:
+        # Before a manual change, or the auto mode overrides it.
+        if self._room_auto_enabled:
+            await self.async_set_room_auto(enabled=False)
+
+    @property
+    def _room_auto_enabled(self) -> bool:
+        return (auto := self.room_auto) is not None and auto.enabled
+
+    async def _async_enter_preset(self, name: str) -> None:
+        preset = self._presets.preset(name)
+        assert preset is not None  # HA checks the name against preset_modes
+        breezer_id = self.device_view.id
+        baseline = self._presets.saved or self._current_baseline()
+        with self._transition():
+            if isinstance(preset, ManualPreset):
+                self._pid.stop(breezer_id)
+                self._pid.set_preset_limits(breezer_id, None)
+                await self._async_leave_auto()
+                await self.async_send_command(is_on=True, speed=preset.speed)
+            else:
+                self._pid.set_preset_limits(
+                    breezer_id, (preset.min_speed, preset.max_speed)
+                )
+                await self._async_leave_auto()
+                self._pid.start(breezer_id)
+        self._presets.activate(name, baseline)
+
+    async def _async_leave_preset(self) -> None:
+        if (baseline := self._presets.saved) is None:
             return
-        if preset_mode is None or preset_mode == PRESET_NONE:
-            _LOGGER.debug(
-                "%s: no preset to restore (restored preset_mode=%s)",
-                self.name,
-                preset_mode,
-            )
-            return
-        saved = Preset.from_storage(preset_saved)
-        _LOGGER.debug(
-            "%s: restoring preset '%s' with saved baseline %s",
-            self.name,
-            preset_mode,
-            saved,
-        )
-        self._presets.restore(preset_mode, saved)
-        # Re-derive the preset's desired fields from its definition (they are
-        # not persisted) so the reconciler holds them and the preset is not
-        # released on the first coordinator update after restart.
-        if (preset := self._presets.active_preset()) is not None:
-            self._write_preset_desired(preset)
+        breezer_id = self.device_view.id
+        with self._transition():
+            if isinstance(baseline, PidBaseline):
+                self._pid.set_preset_limits(breezer_id, None)
+                await self._async_leave_auto()
+                self._pid.start(breezer_id)
+            else:
+                self._pid.stop(breezer_id)
+                self._pid.set_preset_limits(breezer_id, None)
+                await self._async_leave_auto()
+                changes: dict[str, Any] = {"is_on": baseline.is_on}
+                if baseline.speed is not None:
+                    changes["speed"] = baseline.speed
+                await self.async_send_command(**changes)
+        self._presets.deactivate()
+
+    def _current_baseline(self) -> Baseline:
+        if self._pid.is_active(self.device_view.id):
+            return PidBaseline()
+        breezer = self.device_view
+        return SpeedBaseline(breezer.speed, breezer.is_on is True)
+
+    @contextmanager
+    def _transition(self) -> Iterator[None]:
+        self._in_transition = True
+        try:
+            yield
+        finally:
+            self._in_transition = False
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        self._load_zone()
-        self._load_breezer()
-        if self._presets.preset_mode != PRESET_NONE:
-            preset = self._presets.active_preset()
-            if preset is not None and not self.coordinator.reconciler.holds(
-                self._breezer_guid, preset.desired_fields()
-            ):
-                _LOGGER.info(
-                    "%s: preset '%s' released (managed field changed)",
-                    self.name,
-                    self._presets.preset_mode,
-                )
-                self._presets.deactivate()
-        _LOGGER.debug(
-            "%s: state: preset=%s, fan_mode=%s, speed=%s, min=%s, max=%s",
-            self.name,
-            self.preset_mode,
-            self._exact_fan_mode(),
-            self.speed,
-            self._speed_min_set,
-            self._speed_max_set,
-        )
+        self._release_diverged_preset()
         super()._handle_coordinator_update()
 
-    async def async_turn_on(self) -> None:
-        """Turn breezer on."""
-        await self.async_set_hvac_mode(
-            HVACMode.HEAT if self.heater_enabled else HVACMode.FAN_ONLY
-        )
-
-    async def async_turn_off(self) -> None:
-        """Turn breezer off."""
-        await self.async_set_hvac_mode(HVACMode.OFF)
-
-    async def async_set_hvac_mode(self, hvac_mode) -> None:
-        """Set new target operation mode by writing the breezer/zone desired state."""
-        if hvac_mode not in self._hvac_modes:
-            _LOGGER.warning("%s: unsupported hvac mode '%s'", self.name, hvac_mode)
-            return
-
-        if hvac_mode == self.hvac_mode:
-            _LOGGER.debug(
-                "%s: no need to change HVAC mode: %s already set", self.name, hvac_mode
-            )
-            return
-
-        _LOGGER.debug(
-            "%s: changing HVAC mode (%s -> %s)", self.name, self.hvac_mode, hvac_mode
-        )
-        # Power on/off conflicts with an active preset, so leave it first.
-        self._release_active_preset()
-        reconciler = self.coordinator.reconciler
-        if hvac_mode == HVACMode.OFF:
-            self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
-            reconciler.set_breezer(self._breezer_guid, {"is_on": False})
-            if self._zone_guid is not None:
-                reconciler.set_zone(self._zone_guid, {"mode": ZoneMode.MANUAL})
-        else:
-            fields = {"is_on": True, **self._heater_fields(hvac_mode == HVACMode.HEAT)}
-            reconciler.set_breezer(self._breezer_guid, fields)
-        await self._push()
-
-    def _heater_fields(self, enabled: bool) -> dict[str, Any]:
-        """Return the breezer desired field that enables/disables the heater."""
-        if self._type == TionDeviceType.BREEZER_4S:
-            return {"heater_mode": Heater.ON if enabled else Heater.OFF}
-        return {"heater_enabled": enabled}
-
-    def _release_active_preset(self) -> None:
-        """Drop preset-managed desired fields and clear the preset, if any.
-
-        A manual command that overlaps a preset's managed fields (fan speed/auto,
-        power on/off) means the user left the preset by hand; releasing the fields
-        keeps ``set_breezer`` from layering the command on top of stale preset
-        overrides.
-        """
-        if self._presets.preset_mode == PRESET_NONE:
-            return
-        _LOGGER.info(
-            "%s: releasing preset '%s' (manual command overlaps managed fields)",
-            self.name,
-            self._presets.preset_mode,
-        )
-        self.coordinator.reconciler.release(
-            self._breezer_guid, self._presets.managed_fields
-        )
-        self._presets.deactivate()
-
-    async def async_set_temperature(self, **kwargs) -> None:
-        """Set new target temperature by writing the breezer desired state."""
-        if not self._attr_supported_features & ClimateEntityFeature.TARGET_TEMPERATURE:
-            _LOGGER.warning("%s: service not supported", self.name)
-            return
-
-        temperature = kwargs.get(ATTR_TEMPERATURE)
-        if temperature is None:
-            _LOGGER.warning("%s: undefined target temperature", self.name)
-            return
-
-        if temperature == self.target_temperature:
-            _LOGGER.debug(
-                "%s: no need to change target temperature: %s already set",
-                self.name,
-                temperature,
-            )
-            return
-
-        self.coordinator.reconciler.set_breezer(
-            self._breezer_guid, {"t_set": int(temperature)}
-        )
-        await self._push()
-
-    async def async_set_fan_mode(self, fan_mode: str) -> None:
-        """Set new target fan mode (cloud/PID auto or a manual speed)."""
-        if fan_mode not in self.fan_modes:
-            _LOGGER.warning("%s: unsupported fan mode '%s'", self.name, fan_mode)
-            return
-
-        if fan_mode == FAN_AUTO:
-            self._release_active_preset()
-            self._enter_auto_desired()
-            await self._push()
-            return
-
-        try:
-            new_speed = int(fan_mode)
-        except (TypeError, ValueError) as e:
-            _LOGGER.warning(
-                "%s: unable to convert new fan mode to int: %s. Error: %s",
-                self.name,
-                fan_mode,
-                e,
-            )
-            return
-
-        if (
-            self._presets.preset_mode == PRESET_NONE
-            and self.fan_mode != FAN_AUTO
-            and self.speed == new_speed
-            and self._mode == ZoneMode.MANUAL
-        ):
-            _LOGGER.debug("%s: no need to change fan mode: %s set", self.name, fan_mode)
-            return
-
-        _LOGGER.debug("%s: changing breezer speed to %s (manual)", self.name, new_speed)
-        # A manual speed conflicts with an active preset and with local PID/auto.
-        self._release_active_preset()
-        self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
-        if self._zone_guid is not None:
-            self.coordinator.reconciler.set_zone(
-                self._zone_guid, {"mode": ZoneMode.MANUAL}
-            )
-        self.coordinator.reconciler.set_breezer(
-            self._breezer_guid, {"speed": new_speed}
-        )
-        await self._push()
-
-    async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Set a preset by writing its desired state (synchronous, no rollback)."""
-        if preset_mode not in self._presets.preset_modes:
-            _LOGGER.warning("%s: unsupported preset mode '%s'", self.name, preset_mode)
-            return
-
-        if preset_mode == self._presets.preset_mode:
-            _LOGGER.debug(
-                "%s: no need to change preset: %s already set", self.name, preset_mode
-            )
-            return
-
-        target = self._presets.preset(preset_mode)
-        if target is not None and target.is_auto() and FAN_AUTO not in self.fan_modes:
-            _LOGGER.warning(
-                "%s: cannot apply auto preset '%s', Fan Auto is unavailable",
-                self.name,
-                preset_mode,
-            )
-            return
-
-        # The baseline is captured synchronously before any await, so a
-        # restart-mode cancellation cannot interleave and pollute it.
-        if preset_mode == PRESET_NONE:
-            _LOGGER.debug(
-                "%s: leaving preset '%s', restoring baseline %s",
-                self.name,
-                self._presets.preset_mode,
-                self._presets.saved,
-            )
-            self._restore_preset_baseline(self._presets.saved)
-            self._presets.deactivate()
-        else:
-            baseline = self._capture_none_state()
-            _LOGGER.debug(
-                "%s: entering preset '%s' (from fan_mode=%s), saving baseline %s",
-                self.name,
-                preset_mode,
-                self._exact_fan_mode(),
-                baseline,
-            )
-            self._presets.activate(preset_mode, baseline)
-            self._write_preset_desired(target)
-
-        await self._push()
-        _LOGGER.debug(
-            "%s: applied preset '%s': fan_mode=%s, speed=%s, min=%s, max=%s",
-            self.name,
-            preset_mode,
-            self._exact_fan_mode(),
-            self.speed,
-            self._speed_min_set,
-            self._speed_max_set,
-        )
-
-    def _capture_none_state(self) -> Preset:
-        """Model the current PRESET_NONE regime as the baseline to restore later.
-
-        The baseline mirrors the breezer's pre-preset regime: the auto-speed
-        limits when running auto, otherwise the manual speed and power state.
-        Each field is taken from the desired overlay when present, else from the
-        breezer's reported state -- the limits or speed the breezer holds with an
-        empty overlay. Reading the reported value is what lets returning to
-        ``PRESET_NONE`` command the pre-preset regime back, instead of leaving the
-        breezer pinned at the preset's values.
-        """
-        overlay = self.coordinator.reconciler.current_breezer(self._breezer_guid)
-        if self.fan_mode == FAN_AUTO:
-            return AutoPreset(
-                int(overlay.get("speed_min_set", self._speed_min_set)),
-                int(overlay.get("speed_max_set", self._speed_max_set)),
-            )
-        return ManualPreset(
-            int(overlay.get("speed", self._speed)),
-            bool(overlay.get("is_on", self._is_on)),
-        )
-
-    def _write_preset_desired(self, preset: Preset) -> None:
-        """Write a preset's desired fields and arm/disarm its mode."""
-        self.coordinator.reconciler.set_breezer(
-            self._breezer_guid, preset.desired_fields()
-        )
-        if preset.is_auto():
-            self._enter_auto_desired()
-        else:
-            self.coordinator.pid_manager.stop_breezer_pid(self._breezer_guid)
-            if self._zone_guid is not None:
-                self.coordinator.reconciler.set_zone(
-                    self._zone_guid, {"mode": ZoneMode.MANUAL}
-                )
-
-    def _restore_preset_baseline(self, baseline: Preset | None) -> None:
-        """Restore the regime saved before a preset by re-applying it.
-
-        Drop every preset-managed field first so the leaving preset leaves no
-        footprint (e.g. its auto limits when the saved regime is manual), then
-        write the saved baseline through the same path used to apply a preset.
-        """
-        self.coordinator.reconciler.release(
-            self._breezer_guid, self._presets.managed_fields
-        )
-        if baseline is not None:
-            self._write_preset_desired(baseline)
-
-    def _enter_auto_desired(self) -> None:
-        """Write desired auto mode (local PID if configured, else cloud auto)."""
-        if self.coordinator.pid_manager.is_configured(self._breezer_guid):
-            self.coordinator.pid_manager.start_breezer_pid(self._breezer_guid)
-        elif self._zone_guid is not None:
-            self.coordinator.reconciler.set_zone(
-                self._zone_guid, {"mode": ZoneMode.AUTO}
-            )
-
-    async def _push(self) -> None:
-        """Reconcile desired state now (optimistic + dispatch), then refresh.
-
-        The immediate reconcile applies the breezer payload to the coordinator's
-        data optimistically; reloading the entity from it reflects the change in
-        the UI before the trailing refresh lands the authoritative cloud state.
-        """
-        if self.coordinator.data is not None:
-            self.coordinator.reconciler.reconcile(self.coordinator.data)
-        self._load_breezer()
-        self._load_zone()
+    @callback
+    def _handle_pid_update(self) -> None:
+        self._release_diverged_preset()
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
 
-    async def async_set_swing_mode(self, swing_mode: str) -> None:
-        """Set Tion breezer air gate by writing the breezer desired state."""
-        if swing_mode not in self._swing_modes:
-            _LOGGER.debug("%s: not supported swing mode %s", self.name, swing_mode)
+    @callback
+    def _release_diverged_preset(self) -> None:
+        # A regime change that bypassed the preset ends it, without restoring.
+        if self._in_transition or (preset := self._presets.active_preset()) is None:
             return
+        if not self._runs(preset):
+            self._release_preset()
 
-        new_gate = None
-        match swing_mode:
-            case SwingMode.SWING_OUTSIDE:
-                new_gate = 0 if self._type == TionDeviceType.BREEZER_4S else 2
-            case SwingMode.SWING_INSIDE:
-                new_gate = 1 if self._type == TionDeviceType.BREEZER_4S else 0
-            case SwingMode.SWING_MIXED:
-                new_gate = 1 if self._type == TionDeviceType.BREEZER_3S else None
+    def _runs(self, preset: Preset) -> bool:
+        breezer = self.device_view
+        pid_active = self._pid.is_active(breezer.id)
+        if isinstance(preset, PidPreset):
+            return pid_active
+        return (
+            breezer.is_on is True
+            and breezer.speed == preset.speed
+            and not self._room_auto_enabled
+            and not pid_active
+        )
 
-        if new_gate is not None and self._gate != new_gate:
-            _LOGGER.debug(
-                "%s: changing gate (%s -> %s)", self.name, self.swing_mode, swing_mode
-            )
-            self.coordinator.reconciler.set_breezer(
-                self._breezer_guid, {"gate": new_gate}
-            )
-            await self._push()
+    @callback
+    def _release_preset(self) -> None:
+        self._presets.deactivate()
+        self._pid.set_preset_limits(self.device_view.id, None)
 
-    def _set_swing_modes(self):
-        if self._gate is None:
-            self._swing_modes = []
-            return
-
-        self._swing_modes = [SwingMode.SWING_OUTSIDE]
-
-        if self._mode == ZoneMode.MANUAL:
-            self._swing_modes.append(SwingMode.SWING_INSIDE)
-            if self._type == TionDeviceType.BREEZER_3S:
-                self._swing_modes.append(SwingMode.SWING_MIXED)
-
-    def _load_breezer(self):
-        """Update breezer data from API."""
-        if device_data := self.coordinator.get_device(self._breezer_guid):
-            self._attr_name = device_data.name
-            self._breezer_guid = device_data.guid
-            self._breezer_valid = device_data.valid
-            self._is_on = device_data.data.is_on
-            self._heater_enabled = device_data.data.heater_enabled
-            self._heater_mode = device_data.data.heater_mode
-            self._heater_power = device_data.data.heater_power
-            self._t_set = device_data.data.t_set
-            self._speed = device_data.data.speed
-            self._speed_min_set = device_data.data.speed_min_set
-            self._speed_max_set = device_data.data.speed_max_set
-            self._gate = device_data.data.gate
-            self._t_in = device_data.data.t_in
-            self._t_out = device_data.data.t_out
-            self._filter_time_seconds = device_data.data.filter_time_seconds
-            self._filter_need_replace = device_data.data.filter_need_replace
-
-        return self.available
-
-    def _load_zone(self) -> bool:
-        """Update zone data from API."""
-        if zone_data := self.coordinator.get_device_zone(self._breezer_guid):
-            old_mode = self._mode
-            self._mode = zone_data.mode.current
-            self._zone_guid = zone_data.guid
-            self._zone_name = zone_data.name
-            self._zone_valid = zone_data.valid
-
-            if old_mode != self._mode:
-                self._set_swing_modes()
-
-            try:
-                self._target_co2 = int(zone_data.mode.auto_set.co2)
-            except (TypeError, ValueError) as e:
-                _LOGGER.warning(
-                    "%s: unable to convert target CO2 value to int: %s. Error: %s",
-                    self.name,
-                    zone_data.mode.auto_set.co2,
-                    e,
+    @callback
+    def _restore(self, data: TionClimateExtraData) -> None:
+        breezer_id = self.device_view.id
+        name = data.preset_mode or PRESET_NONE
+        preset = self._presets.preset(name)
+        baseline = baseline_from_storage(data.preset_baseline)
+        if isinstance(baseline, PidBaseline) and not self._pid.is_configured(
+            breezer_id
+        ):
+            baseline = None
+        if preset is not None and baseline is not None:
+            self._presets.restore(name, baseline)
+            if isinstance(preset, PidPreset):
+                self._pid.set_preset_limits(
+                    breezer_id, (preset.min_speed, preset.max_speed)
                 )
-
-        return self.available
+        # The room's cloud auto mode, turned on meanwhile, wins over PID.
+        if (
+            data.pid_active
+            and self._pid.is_configured(breezer_id)
+            and not self._room_auto_enabled
+        ):
+            self._pid.start(breezer_id)
+        self._release_diverged_preset()
