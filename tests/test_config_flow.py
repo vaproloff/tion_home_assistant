@@ -181,7 +181,7 @@ def _all_presets() -> dict[str, Any]:
     }
 
 
-async def test_options_init_done_saves_existing_options(
+async def test_options_done_saves_existing_options(
     hass: HomeAssistant, init_integration: MockConfigEntry
 ) -> None:
     """Test Done keeps the existing options."""
@@ -572,7 +572,7 @@ async def test_options_final_done_saves_draft_changes(
         pytest.param("configure_presets", "presets", id="presets"),
     ],
 )
-async def test_options_init_asks_which_breezer(
+async def test_options_menu_item_asks_which_breezer(
     hass: HomeAssistant, init_integration: MockConfigEntry, action: str, step_id: str
 ) -> None:
     """With several breezers the menu items ask which one first."""
@@ -607,7 +607,7 @@ async def test_options_init_asks_which_breezer(
         ),
     ],
 )
-async def test_options_init_skips_breezer_choice_for_one_breezer(
+async def test_options_menu_item_skips_breezer_choice_for_one_breezer(
     hass: HomeAssistant,
     init_integration: MockConfigEntry,
     action: str,
@@ -642,29 +642,18 @@ async def test_options_init_shows_main_menu(
     ]
 
 
-async def test_options_init_without_breezers_aborts(
-    hass: HomeAssistant, config_entry: MockConfigEntry
-) -> None:
-    """An entry that is not loaded cannot offer breezers."""
-    flow = _flow(hass, config_entry)
-
-    result = await flow.async_step_init()
-
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "no_breezers"
-
-
 @pytest.mark.parametrize(
     "action",
     [
+        pytest.param("init", id="init"),
         pytest.param("configure_local_pid", id="local_pid"),
         pytest.param("configure_presets", id="presets"),
     ],
 )
-async def test_options_menu_item_without_breezers_aborts(
+async def test_options_without_breezers_aborts(
     hass: HomeAssistant, config_entry: MockConfigEntry, action: str
 ) -> None:
-    """A menu item aborts when the entry unloaded in the middle of the flow."""
+    """An entry that is not loaded cannot offer breezers or menu items abort when entry unloads."""
     flow = _flow(hass, config_entry)
 
     result = await getattr(flow, f"async_step_{action}")()
