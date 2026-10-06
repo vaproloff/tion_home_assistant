@@ -756,6 +756,48 @@ async def test_regime_change_ends_preset(
     assert cloud.calls == []
 
 
+@pytest.mark.parametrize(
+    ("service", "data", "calls"),
+    [
+        pytest.param(
+            SERVICE_SET_PRESET_MODE,
+            {ATTR_PRESET_MODE: "sleep"},
+            [ON_AT_1],
+            id="manual_preset",
+        ),
+        pytest.param(
+            SERVICE_SET_FAN_MODE,
+            {ATTR_FAN_MODE: "3"},
+            [_command(BREEZER_4S, (140, DPKind.INT, 3))],
+            id="fan_mode",
+        ),
+        pytest.param(
+            SERVICE_TURN_OFF,
+            {},
+            [_command(BREEZER_4S, (70, DPKind.BOOL, False))],
+            id="turn_off",
+        ),
+    ],
+)
+@pytest.mark.parametrize("options", [pytest.param(PID_PRESETS, id="presets")])
+@pytest.mark.usefixtures("init_integration")
+async def test_leaving_a_pid_preset_sends_only_the_new_command(
+    hass: HomeAssistant,
+    cloud: FakeTionCloud,
+    service: str,
+    data: dict[str, Any],
+    calls: list[tuple[str, Any]],
+) -> None:
+    """PID stops before the preset limits go, so it sends no stray speed."""
+    hass.states.async_set(PID_SENSOR, "1200")
+    await _preset(hass, "eco")
+    cloud.calls.clear()
+
+    await _call(hass, service, BREEZER_4S, **data)
+
+    assert cloud.calls == calls
+
+
 @pytest.mark.parametrize("options", [pytest.param(PID_PRESETS, id="presets")])
 @pytest.mark.usefixtures("init_integration")
 async def test_preset_survives_other_settings(hass: HomeAssistant) -> None:
