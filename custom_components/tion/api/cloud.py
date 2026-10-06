@@ -105,6 +105,10 @@ class TionCloud:
         self._pending_commands: dict[int, asyncio.Future[DPUpdateResponse]] = {}
         self._listeners: list[Callable[[], None]] = []
         self._room_locks: dict[UUID, asyncio.Lock] = {}
+        # Server time of the answer to our last auto mode write, per room.
+        self._room_written_at: dict[UUID, float] = {}
+        # Bumped on every change of a room's auto mode in the snapshot.
+        self._room_auto_seq: dict[UUID, int] = {}
         # Serializes structure reloads with the subscription sync that follows.
         self._structure_lock = asyncio.Lock()
         self._reconnect_task: asyncio.Task[None] | None = None
@@ -251,6 +255,7 @@ class TionCloud:
                     location_id=location.id,
                 )
             )
+            self._room_written_at[room_id] = self._transport.server_time()
             self._update_room(room_id, lambda _: auto)
 
     async def _call(
@@ -284,6 +289,7 @@ class TionCloud:
 
     async def _load_structure(self, token: str) -> None:
         """Read the structure with this token; the wstoken is bound to it."""
+        auto_seq = dict(self._room_auto_seq)
         structure = await self._read_structure(token)
         unknown = structure.profile_ids() - self._profiles.keys()
         # One catalog reload per unknown profile; then the device stays without one.
@@ -291,8 +297,37 @@ class TionCloud:
             await self._load_profiles()
             self._profiles_retried |= unknown
             structure = await self._read_structure(token)
-        self._locations = structure.locations
+        self._locations = self._keep_newer_autos(structure.locations, auto_seq)
         self._wstoken = structure.wstoken
+
+    def _keep_newer_autos(
+        self, locations: tuple[Location, ...], auto_seq: dict[UUID, int]
+    ) -> tuple[Location, ...]:
+        """Keep the auto mode of rooms that changed while the structure was read."""
+        changed = {
+            room_id
+            for room_id, seq in self._room_auto_seq.items()
+            if auto_seq.get(room_id) != seq
+        }
+        if not changed:
+            return locations
+        current = {
+            room.id: room.auto
+            for location in self._locations
+            for room in location.rooms
+        }
+        return tuple(
+            replace(
+                location,
+                rooms=tuple(
+                    replace(room, auto=current[room.id])
+                    if room.id in changed and room.id in current
+                    else room
+                    for room in location.rooms
+                ),
+            )
+            for location in locations
+        )
 
     async def _read_structure(self, token: str) -> Structure:
         payload = await self._transport.async_call(
@@ -436,6 +471,15 @@ class TionCloud:
         except TionApiError as err:
             _LOGGER.warning("Skipping malformed %s: %s", event, err)
             return
+        written_at = self._room_written_at.get(change.room_id)
+        if (
+            change.occurred_at is not None
+            and written_at is not None
+            and change.occurred_at < written_at
+        ):
+            # Our later full-set write already replaced what this event reports.
+            _LOGGER.debug("Skipping %s older than our last write", event)
+            return
         self._update_room(change.room_id, change.apply)
 
     @staticmethod
@@ -458,6 +502,7 @@ class TionCloud:
         update: Callable[[AutoControl | None], AutoControl | None],
     ) -> None:
         """Replace the room's auto mode with update(current auto mode)."""
+        self._room_auto_seq[room_id] = self._room_auto_seq.get(room_id, 0) + 1
         self._locations = tuple(
             replace(
                 location,
