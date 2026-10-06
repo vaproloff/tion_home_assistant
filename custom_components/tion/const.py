@@ -27,6 +27,10 @@ DEFAULT_PID_BASE_OUTPUT = 20.0
 DEFAULT_PID_KP = 0.5
 DEFAULT_PID_KI = 0.001
 DEFAULT_PID_KD = 0.0
+DEFAULT_PID_INTERVAL = 60
+PID_INTERVAL_RANGE = (10, 600)
+DEFAULT_PID_MIN_SPEED = 1
+FAN_LOCAL_PID = "local_pid"
 CONF_CAPTCHA_TOKEN = "captcha_token"
 CONF_DEVICE_KEY = "device_key"
 CONF_DEVICE_KEY_ID = "device_key_id"
@@ -39,6 +43,10 @@ CONF_PID_BASE_OUTPUT = "pid_base_output"
 CONF_PID_KP = "pid_kp"
 CONF_PID_KI = "pid_ki"
 CONF_PID_KD = "pid_kd"
+CONF_PID_INTERVAL = "pid_interval"
+CONF_PID_MIN_SPEED = "pid_min_speed"
+CONF_PID_MAX_SPEED = "pid_max_speed"
+CONF_PID_TARGET_CO2 = "pid_target_co2"
 CONF_PRESETS = "presets"
 CONF_PRESET_MIN_SPEED = "min_speed"
 CONF_PRESET_MAX_SPEED = "max_speed"
@@ -87,3 +95,15 @@ class TionPresetType(StrEnum):
 
     AUTO = "auto"
     MANUAL = "manual"
+    LOCAL_PID = "local_pid"
+
+
+class PidStatus(StrEnum):
+    """What the local PID of a breezer is doing."""
+
+    INACTIVE = "inactive"
+    RUNNING = "running"
+    PAUSED_DEVICE_UNAVAILABLE = "paused_device_unavailable"
+    PAUSED_INVALID_DEVICE_DATA = "paused_invalid_device_data"
+    PAUSED_SENSOR_UNAVAILABLE = "paused_sensor_unavailable"
+    SEND_FAILED = "send_failed"

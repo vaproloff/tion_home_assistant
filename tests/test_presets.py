@@ -1,130 +1,134 @@
-"""Tests for the Tion breezer speed preset controller."""
+"""Tests for the Tion breezer speed presets."""
+
+from typing import Any
 
 import pytest
 
-from custom_components.tion.const import (
-    CONF_PRESET_MAX_SPEED,
-    CONF_PRESET_MIN_SPEED,
-    CONF_PRESET_SPEED,
-    CONF_PRESET_TYPE,
-    TionPresetType,
-)
 from custom_components.tion.presets import (
-    AutoPreset,
+    Baseline,
     ManualPreset,
-    Preset,
+    PidBaseline,
+    PidPreset,
+    SpeedBaseline,
     TionPresetController,
+    baseline_from_storage,
+    baseline_to_storage,
+    preset_from_config,
+    visible_presets,
 )
 from homeassistant.components.climate import PRESET_NONE
 
-PRESETS = {
-    "eco": {"type": "auto", "min_speed": 1, "max_speed": 2},
+CONFIGS = {
+    "eco": {"type": "local_pid", "min_speed": 1, "max_speed": 2},
     "boost": {"type": "manual", "speed": 5},
+    "away": {"type": "auto", "min_speed": 1, "max_speed": 3},
 }
 
 
+@pytest.mark.parametrize(
+    ("cfg", "expected"),
+    [
+        pytest.param({"type": "manual", "speed": 4}, ManualPreset(4), id="manual"),
+        pytest.param(
+            {"type": "local_pid", "min_speed": 1, "max_speed": 3},
+            PidPreset(1, 3),
+            id="local_pid",
+        ),
+        pytest.param(
+            {"type": "auto", "min_speed": 1, "max_speed": 3}, None, id="old_auto"
+        ),
+        pytest.param({}, None, id="no_type"),
+    ],
+)
+def test_preset_from_config(cfg: dict[str, Any], expected: object) -> None:
+    """Options become presets; types this version lacks are skipped."""
+    assert preset_from_config(cfg) == expected
+
+
+@pytest.mark.parametrize(
+    ("pid_configured", "expected"),
+    [
+        pytest.param(False, {"boost": ManualPreset(5)}, id="without_pid"),
+        pytest.param(
+            True,
+            {"eco": PidPreset(1, 2), "boost": ManualPreset(5)},
+            id="with_pid",
+        ),
+    ],
+)
+def test_visible_presets(pid_configured: bool, expected: dict[str, object]) -> None:
+    """PID presets show only while PID is set up; old auto presets never."""
+    assert visible_presets(CONFIGS, pid_configured=pid_configured) == expected
+
+
+@pytest.mark.parametrize(
+    "baseline",
+    [
+        pytest.param(SpeedBaseline(3, True), id="speed_on"),
+        pytest.param(SpeedBaseline(None, False), id="unknown_speed_off"),
+        pytest.param(PidBaseline(), id="pid"),
+    ],
+)
+def test_baseline_storage_roundtrip(baseline: Baseline) -> None:
+    """A baseline survives the restore data."""
+    assert baseline_from_storage(baseline_to_storage(baseline)) == baseline
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param(None, id="none"),
+        pytest.param({}, id="empty"),
+        pytest.param({"type": "auto", "min_speed": 1, "max_speed": 3}, id="old_auto"),
+        pytest.param({"type": "manual", "speed": "3", "is_on": True}, id="bad_speed"),
+        pytest.param({"type": "manual", "speed": 3}, id="no_power"),
+    ],
+)
+def test_baseline_from_storage_drops_unknown(data: dict[str, Any] | None) -> None:
+    """Restore data of another shape is dropped instead of failing."""
+    assert baseline_from_storage(data) is None
+
+
 def _controller() -> TionPresetController:
-    """Return a controller with one auto and one manual preset."""
-    return TionPresetController({name: dict(cfg) for name, cfg in PRESETS.items()})
+    return TionPresetController({"eco": PidPreset(1, 2), "boost": ManualPreset(5)})
 
 
-def test_no_presets() -> None:
-    """Test a controller without presets reports none configured."""
+def test_controller_without_presets() -> None:
+    """A breezer without presets offers only PRESET_NONE."""
     controller = TionPresetController({})
 
     assert controller.has_presets is False
     assert controller.preset_modes == [PRESET_NONE]
     assert controller.preset_mode == PRESET_NONE
+    assert controller.active_preset() is None
 
 
-def test_preset_modes_lists_none_and_configured() -> None:
-    """Test preset_modes starts with PRESET_NONE then configured names."""
+def test_controller_lists_presets() -> None:
+    """PRESET_NONE comes first, then the presets in their order."""
     controller = _controller()
 
     assert controller.has_presets is True
     assert controller.preset_modes == [PRESET_NONE, "eco", "boost"]
-
-
-def test_preset_returns_configured_object() -> None:
-    """Test preset() returns the configured Preset object by name."""
-    controller = _controller()
-
-    assert controller.preset("eco") == AutoPreset(1, 2)
     assert controller.preset("boost") == ManualPreset(5)
     assert controller.preset(PRESET_NONE) is None
 
 
-def test_auto_preset_desired_fields_and_mode() -> None:
-    """Test an auto preset overlays speed limits and runs in auto."""
-    assert AutoPreset(1, 2).desired_fields() == {"speed_min_set": 1, "speed_max_set": 2}
-    assert AutoPreset(1, 2).is_auto() is True
-
-
-def test_manual_preset_desired_fields_and_mode() -> None:
-    """Test a manual preset overlays on/speed and does not run in auto."""
-    assert ManualPreset(3).desired_fields() == {"is_on": True, "speed": 3}
-    assert ManualPreset(3).is_auto() is False
-
-
-def test_manual_preset_off_overlays_power_state() -> None:
-    """Test a manual baseline preset carries a real (off) power state."""
-    assert ManualPreset(3, is_on=False).desired_fields() == {
-        "is_on": False,
-        "speed": 3,
-    }
-
-
-def test_managed_fields_union() -> None:
-    """Test managed_fields is the union of every preset's desired fields."""
+def test_activate_keeps_first_baseline() -> None:
+    """Switching between presets keeps the baseline from before the first one."""
     controller = _controller()
 
-    assert controller.managed_fields == {
-        "speed_min_set",
-        "speed_max_set",
-        "is_on",
-        "speed",
-    }
-
-
-def test_activate_saves_baseline_from_passed_preset() -> None:
-    """Test activating a preset saves the supplied baseline preset."""
-    controller = _controller()
-    baseline = AutoPreset(1, 4)
-
-    controller.activate("eco", baseline)
-
-    assert controller.preset_mode == "eco"
-    assert controller.active_preset() == AutoPreset(1, 2)
-    assert controller.saved == baseline
-
-
-def test_repeated_activate_keeps_first_baseline() -> None:
-    """Test re-activating while active does not overwrite the saved baseline."""
-    controller = _controller()
-    first = AutoPreset(1, 4)
-    controller.activate("eco", first)
-
-    controller.activate("eco", AutoPreset(1, 2))
-
-    assert controller.saved == first
-
-
-def test_activate_preset_to_preset_keeps_saved() -> None:
-    """Test switching preset to preset does not overwrite the saved baseline."""
-    controller = _controller()
-    first = AutoPreset(1, 4)
-    controller.activate("eco", first)
-
-    controller.activate("boost", AutoPreset(1, 2))
+    controller.activate("eco", SpeedBaseline(2, True))
+    controller.activate("boost", PidBaseline())
 
     assert controller.preset_mode == "boost"
-    assert controller.saved == first
+    assert controller.active_preset() == ManualPreset(5)
+    assert controller.saved == SpeedBaseline(2, True)
 
 
-def test_deactivate_clears_active_and_saved() -> None:
-    """Test deactivate drops to PRESET_NONE and clears the baseline."""
+def test_deactivate_forgets_baseline() -> None:
+    """Leaving the preset clears the active name and the baseline."""
     controller = _controller()
-    controller.activate("eco", AutoPreset(1, 4))
+    controller.activate("eco", PidBaseline())
 
     controller.deactivate()
 
@@ -132,93 +136,20 @@ def test_deactivate_clears_active_and_saved() -> None:
     assert controller.saved is None
 
 
-def test_restore_rehydrates_active_and_saved() -> None:
-    """Test restore sets the active preset and saved baseline after a restart."""
-    controller = _controller()
-    baseline = AutoPreset(1, 4)
-
-    controller.restore("eco", baseline)
-
-    assert controller.preset_mode == "eco"
-    assert controller.saved == baseline
-
-
-def test_restore_without_saved_clears_saved() -> None:
-    """Test restore with no saved baseline leaves the saved state cleared."""
-    controller = _controller()
-
-    controller.restore("boost", None)
-
-    assert controller.preset_mode == "boost"
-    assert controller.saved is None
-
-
-def test_restore_ignores_unknown_preset() -> None:
-    """Test restore ignores a preset name that is not configured."""
-    controller = _controller()
-
-    controller.restore("nonexistent", ManualPreset(1))
-
-    assert controller.preset_mode == PRESET_NONE
-
-
-def test_from_config_manual() -> None:
-    """Test from_config builds a ManualPreset for the manual type."""
-    preset = Preset.from_config(
-        {CONF_PRESET_TYPE: TionPresetType.MANUAL.value, CONF_PRESET_SPEED: 3}
-    )
-
-    assert preset == ManualPreset(3)
-
-
-def test_from_config_auto() -> None:
-    """Test from_config builds an AutoPreset for the auto type."""
-    preset = Preset.from_config(
-        {
-            CONF_PRESET_TYPE: TionPresetType.AUTO.value,
-            CONF_PRESET_MIN_SPEED: 1,
-            CONF_PRESET_MAX_SPEED: 4,
-        }
-    )
-
-    assert preset == AutoPreset(1, 4)
-
-
-def test_equality_across_types() -> None:
-    """Test manual and auto presets are never equal even with matching numbers."""
-    assert ManualPreset(3) != AutoPreset(3, 3)
-
-
 @pytest.mark.parametrize(
-    "preset",
+    ("active", "expected_mode", "expected_saved"),
     [
-        AutoPreset(1, 4),
-        ManualPreset(3),
-        ManualPreset(0, is_on=False),
+        pytest.param("eco", "eco", SpeedBaseline(1, False), id="known"),
+        pytest.param("sleep", PRESET_NONE, None, id="unknown"),
     ],
-    ids=["auto", "manual_on", "manual_off"],
 )
-def test_preset_storage_roundtrip(preset: Preset) -> None:
-    """Test a preset round-trips through storage."""
-    assert Preset.from_storage(preset.to_storage()) == preset
-
-
-def test_preset_from_storage_none() -> None:
-    """Test Preset.from_storage returns None for missing data."""
-    assert Preset.from_storage(None) is None
-
-
-@pytest.mark.parametrize(
-    "data",
-    [
-        {"overrides": {"speed_min_set": 1, "speed_max_set": 4}, "was_auto": True},
-        {"overrides": {}, "was_auto": False},
-        {"type": "unknown"},
-    ],
-    ids=["legacy_auto", "legacy_empty", "unknown_type"],
-)
-def test_preset_from_storage_drops_unrecognized_payload(
-    data: dict[str, object],
+def test_restore(
+    active: str, expected_mode: str, expected_saved: Baseline | None
 ) -> None:
-    """Test from_storage drops a legacy/unknown payload instead of crashing."""
-    assert Preset.from_storage(data) is None
+    """Restore rehydrates a known preset and ignores an unknown one."""
+    controller = _controller()
+
+    controller.restore(active, SpeedBaseline(1, False))
+
+    assert controller.preset_mode == expected_mode
+    assert controller.saved == expected_saved
