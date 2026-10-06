@@ -381,6 +381,7 @@ async def test_removing_the_entry_clears_the_issue(
     """Removing the entry removes its issue."""
     with patch("custom_components.tion.PLATFORMS", []):
         await setup_entry(hass, config_entry, cloud, auth)
+    assert issue_registry.async_get_issue(DOMAIN, _issue_id(config_entry)) is not None
 
     await hass.config_entries.async_remove(config_entry.entry_id)
 

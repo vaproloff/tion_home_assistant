@@ -42,7 +42,7 @@ from .const import (
     TionPresetType,
 )
 from .coordinator import TionConfigEntry, TionCoordinator
-from .pid_manager import FALLBACK_SPEED_MAX, TionPidManager, is_pid_set_up
+from .pid_manager import TionPidManager, breezer_speed_max, is_pid_set_up
 from .session import async_create_cloud
 
 _LOGGER = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
     coordinator = entry.runtime_data = TionCoordinator(hass, entry, cloud)
     coordinator.pid = TionPidManager(hass, entry, coordinator)
     entry.async_on_unload(coordinator.pid.async_stop)
-    _register_devices(hass, entry, cloud.account)
+    _register_devices(hass, entry, account)
     _remove_stale_pid_numbers(hass, entry, coordinator.pid)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -157,28 +157,34 @@ def _migrate_old_ids(
     MAC, the same in both clouds, ties them to the current ones. Returns the
     moves, old ID to current ID.
     """
-    current = {
-        value: device.id
-        for device in account.devices()
-        for mac in device.macs
-        if (value := _mac_value(mac)) is not None
-    }
+    current = _current_ids_by_mac(account)
     device_registry = dr.async_get(hass)
     moves: dict[str, str] = {}
+    moved_devices = moved_entities = 0
     for device_entry in dr.async_entries_for_config_entry(
         device_registry, entry.entry_id
     ):
-        if (current_id := _current_id(device_entry, current)) is None:
-            _LOGGER.debug(
-                "No Tion device in the account matches a %s", device_entry.model
-            )
-            continue
         old = {
             identifier
             for identifier in device_entry.identifiers
-            if identifier[0] == DOMAIN and identifier[1] != current_id
+            if identifier[0] == DOMAIN and account.device(identifier[1]) is None
         }
         if not old:
+            continue
+        if (current_id := _current_id(device_entry, current)) is None:
+            _LOGGER.debug(
+                "No Tion device in the account matches a %s"
+                " (registered MAC digits %s, account MAC digits %s)",
+                device_entry.model,
+                sorted(_mac_digits(mac) for mac in _device_macs(device_entry)),
+                sorted(
+                    {
+                        _mac_digits(mac)
+                        for device in account.devices()
+                        for mac in device.macs
+                    }
+                ),
+            )
             continue
         try:
             device_registry.async_update_device(
@@ -191,6 +197,7 @@ def _migrate_old_ids(
                 "Another device already has the current ID of a %s", device_entry.model
             )
             continue
+        moved_devices += 1
         moves.update((old_id, current_id) for _, old_id in old)
 
     entity_registry = er.async_get(hass)
@@ -206,6 +213,14 @@ def _migrate_old_ids(
                 _LOGGER.debug(
                     "The current unique ID of a %s entity is taken", entity.domain
                 )
+            else:
+                moved_entities += 1
+    if moved_devices or moved_entities:
+        _LOGGER.info(
+            "Moved %d Tion devices and %d entities to the new cloud IDs",
+            moved_devices,
+            moved_entities,
+        )
     return moves
 
 
@@ -217,11 +232,31 @@ def _mac_value(mac: str) -> int | None:
     return int(digits, 16) or None
 
 
+def _mac_digits(mac: str) -> int:
+    return sum(char in hexdigits for char in mac)
+
+
+def _device_macs(device_entry: dr.DeviceEntry) -> list[str]:
+    return [
+        mac
+        for kind, mac in device_entry.connections
+        if kind == dr.CONNECTION_NETWORK_MAC
+    ]
+
+
+def _current_ids_by_mac(account: TionAccount) -> dict[int, str]:
+    """Map MAC values to device IDs; a value of several devices is left out."""
+    owners: dict[int, set[str]] = {}
+    for device in account.devices():
+        for mac in device.macs:
+            if (value := _mac_value(mac)) is not None:
+                owners.setdefault(value, set()).add(device.id)
+    return {value: next(iter(ids)) for value, ids in owners.items() if len(ids) == 1}
+
+
 def _current_id(device_entry: dr.DeviceEntry, current: Mapping[int, str]) -> str | None:
     """Return the current ID of a registered device, found by its MAC."""
-    for kind, mac in device_entry.connections:
-        if kind != dr.CONNECTION_NETWORK_MAC:
-            continue
+    for mac in _device_macs(device_entry):
         if (value := _mac_value(mac)) is not None and value in current:
             return current[value]
     return None
@@ -258,7 +293,7 @@ def _migrate_options(
         kept = _without_auto_presets(
             breezer_presets,
             pid_set_up=is_pid_set_up(pid_breezers.get(breezer_id, {})),
-            speed_max=_speed_max(account, breezer_id),
+            speed_max=breezer_speed_max(account, breezer_id),
         )
         if kept == breezer_presets:
             continue
@@ -295,7 +330,7 @@ def _room_pid_limits(account: TionAccount, breezer_id: str) -> dict[str, int]:
     auto = room.configured_auto if room is not None else None
     if auto is None:
         return {}
-    speed_max = min(auto.speed_max, _speed_max(account, breezer_id))
+    speed_max = min(auto.speed_max, breezer_speed_max(account, breezer_id))
     return {
         CONF_PID_MIN_SPEED: min(auto.speed_min, speed_max),
         CONF_PID_MAX_SPEED: speed_max,
@@ -321,14 +356,6 @@ def _without_auto_presets(
                 CONF_PRESET_MAX_SPEED: top,
             }
     return result
-
-
-def _speed_max(account: TionAccount, breezer_id: str) -> int:
-    device = account.device(breezer_id)
-    breezer = view(device) if device is not None else None
-    if isinstance(breezer, Breezer) and breezer.speed_max is not None:
-        return breezer.speed_max
-    return FALLBACK_SPEED_MAX
 
 
 def _migration_issue_id(entry: TionConfigEntry) -> str:

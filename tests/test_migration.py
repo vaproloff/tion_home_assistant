@@ -1,5 +1,6 @@
 """Tests for moving a setup from before the v4 cloud to the current device IDs."""
 
+import logging
 from typing import Any
 from unittest.mock import patch
 
@@ -464,3 +465,105 @@ async def test_moved_climate_keeps_its_entity_id(
         for moved in _unique_ids(entity_registry, config_entry)
         if moved.endswith("_2")
     ]
+
+
+SHARED_MAC_ACCOUNT = replace_device(
+    default_account(), MAGICAIR, macs=(_mac(default_account(), BREEZER_4S),)
+)
+
+
+def _device_identifiers(
+    device_registry: dr.DeviceRegistry, entry: MockConfigEntry
+) -> dict[str, set[tuple[str, str]]]:
+    return {
+        device.id: device.identifiers
+        for device in dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    }
+
+
+@pytest.mark.parametrize("account", [pytest.param(SHARED_MAC_ACCOUNT, id="shared_mac")])
+async def test_current_devices_are_never_moved(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """On a v4 setup, devices sharing a MAC value keep their IDs on a reload."""
+    await setup_entry(hass, config_entry, FakeTionCloud(account), FakeAuth())
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    unique_ids = _unique_ids(entity_registry, config_entry)
+    identifiers = _device_identifiers(device_registry, config_entry)
+
+    await setup_entry(hass, config_entry, FakeTionCloud(account), FakeAuth())
+
+    assert _unique_ids(entity_registry, config_entry) == unique_ids
+    assert _device_identifiers(device_registry, config_entry) == identifiers
+
+
+@pytest.mark.parametrize("account", [pytest.param(SHARED_MAC_ACCOUNT, id="shared_mac")])
+async def test_ambiguous_mac_matches_nothing(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """An old device whose MAC two account devices share stays as it was."""
+    device = _old_device(
+        device_registry, config_entry, OLD_4S, _mac(default_account(), BREEZER_4S)
+    )
+    climate = _old_entity(
+        entity_registry, config_entry, Platform.CLIMATE, OLD_4S, "old_4s", device
+    )
+
+    await _load(hass, config_entry, account)
+
+    assert (DOMAIN, OLD_4S) in _identifiers(device_registry, device)
+    assert _unique_ids(entity_registry, config_entry) == {climate: OLD_4S}
+
+
+async def test_unmatched_old_device_logs_only_mac_shapes(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log tells how many digits the MACs have, never the MACs or IDs."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.tion")
+    _old_device(device_registry, config_entry, OLD_4S, "aa:bb:cc:dd:ee:ff")
+
+    await _load(hass, config_entry, account)
+
+    assert "registered MAC digits [12], account MAC digits [12]" in caplog.text
+    for secret in (OLD_4S, "aa:bb:cc:dd:ee:ff", _mac(account, BREEZER_4S)):
+        assert secret not in caplog.text
+
+
+async def test_moving_is_logged_once(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    account: TionAccount,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A load that moved something says how much; the next one stays quiet."""
+    caplog.set_level(logging.INFO, logger="custom_components.tion")
+    device = _old_device(
+        device_registry, config_entry, OLD_4S, _mac(account, BREEZER_4S)
+    )
+    _old_entity(
+        entity_registry, config_entry, Platform.CLIMATE, OLD_4S, "old_4s", device
+    )
+
+    await _load(hass, config_entry, account)
+
+    assert "Moved 1 Tion devices and 1 entities to the new cloud IDs" in caplog.text
+    caplog.clear()
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+
+    await _load(hass, config_entry, account)
+
+    assert "Moved" not in caplog.text
