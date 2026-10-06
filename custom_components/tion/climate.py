@@ -302,15 +302,16 @@ class TionClimate(TionEntity[Breezer], ClimateEntity, RestoreEntity):
                 self._release_preset()
                 await self._async_leave_auto()
                 self._pid.start(breezer_id)
-                return
-            # Stopped first: releasing a PID preset would step PID once more.
-            self._pid.stop(breezer_id)
-            self._release_preset()
-            if fan_mode == FAN_AUTO:
-                await self.async_set_room_auto(enabled=True)
             else:
-                await self._async_leave_auto()
-                await self.async_send_command(speed=int(fan_mode))
+                # Stopped first: releasing a PID preset would step PID once more.
+                self._pid.stop(breezer_id)
+                self._release_preset()
+                if fan_mode == FAN_AUTO:
+                    await self.async_set_room_auto(enabled=True)
+                else:
+                    await self._async_leave_auto()
+                    await self.async_send_command(speed=int(fan_mode))
+        self.async_write_ha_state()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Run the breezer as a preset says, or return to the regime before it."""
@@ -331,6 +332,7 @@ class TionClimate(TionEntity[Breezer], ClimateEntity, RestoreEntity):
             # The room's auto mode would turn the breezer back on.
             await self._async_leave_auto()
             await self.async_send_command(is_on=False)
+        self.async_write_ha_state()
 
     async def _async_leave_auto(self) -> None:
         # Before a manual change, or the auto mode overrides it.

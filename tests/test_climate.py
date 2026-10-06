@@ -504,6 +504,26 @@ async def test_local_pid_fan_mode(hass: HomeAssistant, cloud: FakeTionCloud) -> 
     ) == ("local_pid", True, "running")
 
 
+@pytest.mark.parametrize("options", [pytest.param(PID_PRESETS, id="presets")])
+@pytest.mark.usefixtures("init_integration")
+async def test_local_pid_fan_mode_again_ends_the_pid_preset(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """Picking local PID while a PID preset runs publishes the end of the preset."""
+    hass.states.async_set(PID_SENSOR, "400")
+    await _call(hass, SERVICE_SET_FAN_MODE, BREEZER_4S, **{ATTR_FAN_MODE: "local_pid"})
+    await _preset(hass, "eco")
+    cloud.calls.clear()
+
+    await _call(hass, SERVICE_SET_FAN_MODE, BREEZER_4S, **{ATTR_FAN_MODE: "local_pid"})
+
+    attributes = _attributes(hass, BREEZER_4S)
+    assert (attributes[ATTR_PRESET_MODE], attributes[ATTR_FAN_MODE]) == (
+        "none",
+        "local_pid",
+    )
+
+
 @pytest.mark.parametrize(
     ("service", "data", "calls", "fan_mode"),
     [
