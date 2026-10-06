@@ -18,7 +18,7 @@ from custom_components.tion.api import (
     TionConnectionError,
     TionTokens,
 )
-from custom_components.tion.api.views import (  # noqa: TID251
+from custom_components.tion.api.views import (
     BREEZER_PRODUCTS,
     STATION_PRODUCTS,
 )
