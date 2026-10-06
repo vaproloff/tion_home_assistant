@@ -295,6 +295,9 @@
     "cloud_unavailable": {
       "message": "The Tion cloud is unreachable."
     },
+    "device_not_responding": {
+      "message": "{device} did not answer the command. Check that the device is online."
+    },
     "cloud_error": {
       "message": "The Tion cloud returned an error: {message}"
     },

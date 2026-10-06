@@ -10,6 +10,7 @@ from custom_components.tion.api import (
     TionAuthError,
     TionCommandError,
     TionConnectionError,
+    TionDeviceTimeoutError,
 )
 from custom_components.tion.api.datapoints import DPKind, DPValue
 from custom_components.tion.const import DOMAIN
@@ -208,6 +209,12 @@ async def test_auto_mode_without_room_auto(hass: HomeAssistant) -> None:
             "cloud_unavailable",
             id="unavailable",
         ),
+        pytest.param(
+            TionDeviceTimeoutError("silent"),
+            HomeAssistantError,
+            "device_not_responding",
+            id="device_silent",
+        ),
         pytest.param(TionApiError("bad"), HomeAssistantError, "cloud_error", id="api"),
         pytest.param(
             ValueError("out of range"),
@@ -232,6 +239,19 @@ async def test_command_errors(
         await _switch(hass, f"{BREEZER_4S}_sound", SERVICE_TURN_ON)
 
     assert exc_info.value.translation_key == translation_key
+
+
+@pytest.mark.usefixtures("init_integration")
+async def test_silent_device_is_named(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """The device that did not answer is named in the error."""
+    cloud.command_error = TionDeviceTimeoutError("silent")
+
+    with pytest.raises(HomeAssistantError) as exc_info:
+        await _switch(hass, f"{BREEZER_4S}_sound", SERVICE_TURN_ON)
+
+    assert exc_info.value.translation_placeholders == {"device": "Breezer 4S"}
 
 
 @pytest.mark.usefixtures("init_integration")

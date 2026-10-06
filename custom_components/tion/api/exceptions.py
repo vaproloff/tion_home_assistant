@@ -13,6 +13,10 @@ class TionConnectionError(TionError):
     """Tion connection error."""
 
 
+class TionDeviceTimeoutError(TionConnectionError):
+    """A device did not answer a command in time."""
+
+
 class TionApiError(TionError):
     """Unexpected Tion API error."""
 

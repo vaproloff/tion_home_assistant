@@ -396,3 +396,11 @@ def test_translations_cover_the_issue_and_reauth(language: str) -> None:
     assert "{" not in issue["title"]
     assert "{email}" in issue["description"]
     assert "{email}" in strings["config"]["step"]["reauth_confirm"]["description"]
+
+
+@pytest.mark.parametrize("language", ["en", "ru"])
+def test_translations_cover_the_device_error(language: str) -> None:
+    """The device timeout error is translated and names the device."""
+    strings = json.loads((TRANSLATIONS / f"{language}.json").read_text("utf-8"))
+
+    assert "{device}" in strings["exceptions"]["device_not_responding"]["message"]

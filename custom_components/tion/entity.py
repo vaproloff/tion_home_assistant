@@ -16,6 +16,7 @@ from .api import (
     TionAuthError,
     TionCommandError,
     TionConnectionError,
+    TionDeviceTimeoutError,
     view,
 )
 from .const import DOMAIN
@@ -100,6 +101,12 @@ class TionEntity[ViewT: Breezer | Station](CoordinatorEntity[TionCoordinator]):
                     "device": self.device_view.device.name,
                     "message": err.message,
                 },
+            ) from err
+        except TionDeviceTimeoutError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="device_not_responding",
+                translation_placeholders={"device": self.device_view.device.name},
             ) from err
         except TionConnectionError as err:
             raise HomeAssistantError(

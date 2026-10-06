@@ -294,6 +294,9 @@
     "cloud_unavailable": {
       "message": "Облако Tion недоступно."
     },
+    "device_not_responding": {
+      "message": "{device} не ответил на команду. Проверьте, что устройство в сети."
+    },
     "cloud_error": {
       "message": "Облако Tion вернуло ошибку: {message}"
     },

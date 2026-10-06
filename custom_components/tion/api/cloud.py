@@ -30,6 +30,7 @@ from .exceptions import (
     TionAuthError,
     TionCommandError,
     TionConnectionError,
+    TionDeviceTimeoutError,
     TionError,
 )
 from .model import AutoControl, AutoControlAlgorithm, Device, Location, TionAccount
@@ -197,9 +198,7 @@ class TionCloud:
             async with asyncio.timeout(REPLY_TIMEOUT):
                 response = await future
         except TimeoutError as err:
-            raise TionConnectionError(
-                f"Device {command.device_id} did not answer the command"
-            ) from err
+            raise TionDeviceTimeoutError("Device did not answer the command") from err
         finally:
             self._pending_commands.pop(command_id, None)
             _discard(future)
