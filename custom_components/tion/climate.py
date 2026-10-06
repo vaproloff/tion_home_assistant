@@ -434,6 +434,10 @@ class TionClimate(TionEntity[Breezer], ClimateEntity, RestoreEntity):
         name = data.preset_mode or PRESET_NONE
         preset = self._presets.preset(name)
         baseline = baseline_from_storage(data.preset_baseline)
+        if isinstance(baseline, PidBaseline) and not self._pid.is_configured(
+            breezer_id
+        ):
+            baseline = None
         if preset is not None and baseline is not None:
             self._presets.restore(name, baseline)
             if isinstance(preset, PidPreset):

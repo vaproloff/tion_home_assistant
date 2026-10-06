@@ -904,6 +904,45 @@ async def test_restore_pid_preset_keeps_its_limits(
     assert cloud.calls == [_command(BREEZER_4S, (140, DPKind.INT, 2))]
 
 
+@pytest.mark.parametrize(
+    ("account", "options"),
+    [
+        pytest.param(
+            set_values(
+                default_account(), BREEZER_4S, dps(PROFILE_4S, fan_speed_level=1)
+            ),
+            PRESETS,
+            id="without_pid",
+        )
+    ],
+)
+async def test_restore_drops_a_pid_baseline_once_pid_is_gone(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+) -> None:
+    """A preset that would return to PID is not restored when PID is gone."""
+    mock_restore_cache_with_extra_data(
+        hass,
+        [
+            (
+                State(CLIMATE_4S, "heat"),
+                {
+                    "pid_active": False,
+                    "preset_mode": "sleep",
+                    "preset_baseline": {"type": "local_pid"},
+                },
+            )
+        ],
+    )
+
+    with patch("custom_components.tion.PLATFORMS", [Platform.CLIMATE]):
+        await setup_entry(hass, config_entry, cloud, auth)
+
+    assert _attributes(hass, BREEZER_4S)[ATTR_PRESET_MODE] == "none"
+
+
 @pytest.mark.parametrize("options", [pytest.param(pid_options(), id="pid")])
 async def test_restored_local_pid_waits_for_its_sensor(
     hass: HomeAssistant,
