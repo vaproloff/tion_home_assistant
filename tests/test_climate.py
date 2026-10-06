@@ -455,7 +455,7 @@ PRESETS = {
         BREEZER_4S: {
             "sleep": {"type": "manual", "speed": 1},
             "eco": {"type": "local_pid", "min_speed": 1, "max_speed": 2},
-            "away": {"type": "auto", "min_speed": 1, "max_speed": 3},
+            "away": {"type": "unsupported", "min_speed": 1, "max_speed": 3},
         }
     }
 }
@@ -598,7 +598,7 @@ async def test_room_auto_from_the_app_wins_over_local_pid(
 )
 @pytest.mark.usefixtures("init_integration")
 async def test_presets_offered(hass: HomeAssistant, preset_modes: list[str]) -> None:
-    """PID presets show only with PID set up; old auto presets never."""
+    """PID presets show only with PID set up; presets of unknown types never."""
     attributes = _attributes(hass, BREEZER_4S)
 
     assert attributes[ATTR_PRESET_MODES] == preset_modes

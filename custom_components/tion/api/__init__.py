@@ -8,6 +8,7 @@ from .exceptions import (
     TionAuthError,
     TionCommandError,
     TionConnectionError,
+    TionDeviceTimeoutError,
     TionError,
 )
 from .model import AutoControl, Device, Location, Room, TionAccount
@@ -31,6 +32,7 @@ __all__ = [
     "TionCommandError",
     "TionConnectionError",
     "TionDeviceKey",
+    "TionDeviceTimeoutError",
     "TionError",
     "TionTokens",
     "TionTransport",

@@ -12,7 +12,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 
-from .api import Breezer, TionError, view
+from .api import Breezer, TionAccount, TionError, view
 from .const import (
     CONF_CO2_SENSOR_ENTITY_ID,
     CONF_PID_BASE_OUTPUT,
@@ -42,6 +42,15 @@ _LOGGER = logging.getLogger(__name__)
 
 # Top speed when the breezer does not report one.
 FALLBACK_SPEED_MAX = 6
+
+
+def breezer_speed_max(account: TionAccount, breezer_id: str) -> int:
+    """Return the breezer's top speed, FALLBACK_SPEED_MAX when it is unknown."""
+    device = account.device(breezer_id)
+    breezer = view(device) if device is not None else None
+    if isinstance(breezer, Breezer) and breezer.speed_max is not None:
+        return breezer.speed_max
+    return FALLBACK_SPEED_MAX
 
 
 def is_pid_set_up(pid_options: Mapping[str, Any]) -> bool:
@@ -147,7 +156,12 @@ class TionPidManager:
         pid_options = self._pid_options(breezer_id)
         return (
             int(pid_options.get(CONF_PID_MIN_SPEED, DEFAULT_PID_MIN_SPEED)),
-            int(pid_options.get(CONF_PID_MAX_SPEED, self._speed_max(breezer_id))),
+            int(
+                pid_options.get(
+                    CONF_PID_MAX_SPEED,
+                    breezer_speed_max(self._coordinator.data, breezer_id),
+                )
+            ),
         )
 
     def effective_limits(self, breezer_id: str) -> tuple[int, int]:
@@ -300,12 +314,6 @@ class TionPidManager:
         device = self._coordinator.data.device(breezer_id)
         device_view = view(device) if device is not None else None
         return device_view if isinstance(device_view, Breezer) else None
-
-    def _speed_max(self, breezer_id: str) -> int:
-        breezer = self._breezer(breezer_id)
-        if breezer is None or breezer.speed_max is None:
-            return FALLBACK_SPEED_MAX
-        return breezer.speed_max
 
     def _room_auto_enabled(self, breezer_id: str) -> bool:
         account = self._coordinator.data

@@ -19,6 +19,7 @@ from custom_components.tion.api.exceptions import (
     TionAuthError,
     TionCommandError,
     TionConnectionError,
+    TionDeviceTimeoutError,
 )
 from custom_components.tion.api.model import AutoControl
 from custom_components.tion.api.nats import NatsConnection, TaskFactory
@@ -988,23 +989,29 @@ async def test_command_refused(harness: Harness) -> None:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("short_replies")
 async def test_command_unanswered(harness: Harness) -> None:
-    """A device that does not answer in time is a connection error."""
+    """A device that does not answer in time is a device timeout, without its ID."""
     await harness.cloud.async_start()
     harness.broker.answer_commands = False
+    breezer = harness.breezer()
 
-    with pytest.raises(TionConnectionError):
-        await harness.cloud.async_command(harness.breezer().command(speed=3))
+    with pytest.raises(TionDeviceTimeoutError) as exc_info:
+        await harness.cloud.async_command(breezer.command(speed=3))
+
+    assert isinstance(exc_info.value, TionConnectionError)
+    assert breezer.id not in str(exc_info.value)
 
 
 @pytest.mark.asyncio
 async def test_command_when_disconnected(harness: Harness) -> None:
-    """Without the live channel commands fail at once."""
+    """Without the live channel commands fail at once, as a connection error."""
     await harness.cloud.async_start()
     command = harness.breezer().command(speed=3)
     await harness.cloud.async_stop()
 
-    with pytest.raises(TionConnectionError):
+    with pytest.raises(TionConnectionError) as exc_info:
         await harness.cloud.async_command(command)
+
+    assert not isinstance(exc_info.value, TionDeviceTimeoutError)
 
 
 @pytest.mark.asyncio
@@ -1028,10 +1035,24 @@ async def test_command_for_unknown_device(harness: Harness) -> None:
     """Commands must target a device of the account."""
     await harness.cloud.async_start()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as exc_info:
         await harness.cloud.async_command(
             DeviceCommand("NOPE000001", (DPValue(70, DPKind.BOOL, True),))
         )
+
+    assert "NOPE000001" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_set_auto_control_for_unknown_room(harness: Harness) -> None:
+    """Auto control must target a room of the account; the error carries no ID."""
+    await harness.cloud.async_start()
+    unknown_room = UUID(int=0xBAD)
+
+    with pytest.raises(ValueError) as exc_info:
+        await harness.cloud.async_set_auto_control(unknown_room, enabled=True)
+
+    assert str(unknown_room) not in str(exc_info.value)
 
 
 def _sent_auto_controls(harness: Harness) -> list[bytes]:
@@ -1118,8 +1139,9 @@ async def test_set_auto_control_on_room_without_auto(
     ]
     await harness.cloud.async_start()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as exc_info:
         await harness.cloud.async_set_auto_control(ROOM_ID, enabled=True)
+    assert str(ROOM_ID) not in str(exc_info.value)
     await harness.cloud.async_set_auto_control(
         ROOM_ID, enabled=True, speed_min=1, speed_max=3, co2_target=800
     )

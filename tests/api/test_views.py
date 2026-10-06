@@ -138,6 +138,18 @@ def test_device_without_profile_has_no_view(
     assert view(orphan) is None
 
 
+def test_view_of_device_without_profile_raises(
+    profiles: dict[UUID, DeviceProfile],
+) -> None:
+    """Wrapping a device that has no profile fails without naming the device."""
+    orphan = replace(_device(profiles, PROFILE_4S), profile=None)
+
+    with pytest.raises(ValueError) as exc_info:
+        Breezer(orphan)
+
+    assert DEVICE_ID not in str(exc_info.value)
+
+
 def test_recorded_4s_state(profiles: dict[UUID, DeviceProfile]) -> None:
     """Live 4S values read in natural units."""
     breezer = _breezer(profiles, PROFILE_4S, *RECORDED_4S)

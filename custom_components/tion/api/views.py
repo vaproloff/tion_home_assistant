@@ -53,7 +53,7 @@ class _DeviceView:
     def __init__(self, device: Device) -> None:
         """Wrap a device that has a profile."""
         if device.profile is None:
-            raise ValueError(f"Device {device.id} has no profile")
+            raise ValueError("Device has no profile")
         self.device = device
         self._profile = device.profile
 
