@@ -299,10 +299,10 @@ class TionOptionsFlow(OptionsFlowWithReload):
                     self._breezer_guid = breezers[0].id
                     return await self.async_step_local_pid_menu()
                 return await self.async_step_local_pid()
-            elif len(breezers) == 1:
-                self._breezer_guid = breezers[0].id
-                return await self.async_step_presets_menu()
-            else:
+            elif action == OPTIONS_ACTION_CONFIGURE_PRESETS:
+                if len(breezers) == 1:
+                    self._breezer_guid = breezers[0].id
+                    return await self.async_step_presets_menu()
                 return await self.async_step_presets()
 
         return self.async_show_form(
@@ -349,6 +349,8 @@ class TionOptionsFlow(OptionsFlowWithReload):
         if self._pid_configured(self._breezer_guid):
             menu_options.append("pid_remove")
             sensor = self._pid_options(self._breezer_guid)[CONF_CO2_SENSOR_ENTITY_ID]
+            if state := self.hass.states.get(sensor):
+                sensor = state.name
         menu_options.append("init")
 
         return self.async_show_menu(

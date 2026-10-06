@@ -723,6 +723,19 @@ async def test_options_local_pid_menu_offers_what_applies(
     }
 
 
+async def test_options_local_pid_menu_names_the_sensor(
+    hass: HomeAssistant, init_integration: MockConfigEntry
+) -> None:
+    """The menu shows the sensor's friendly name when it has a state."""
+    hass.states.async_set(SENSOR_ENTITY_ID, "700", {"friendly_name": "Living room CO2"})
+    flow = _flow(hass, init_integration, _pid_options())
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = await flow.async_step_local_pid_menu()
+
+    assert result["description_placeholders"]["sensor"] == "Living room CO2"
+
+
 async def test_options_local_pid_menu_shows_the_chosen_breezer(
     hass: HomeAssistant, init_integration: MockConfigEntry
 ) -> None:
