@@ -30,7 +30,7 @@
       },
       "reauth_confirm": {
         "title": "Sign in to Tion again",
-        "description": "The Tion session for {email} has ended; it lasts at most 30 days. Enter the password to sign in again; a captcha and an e-mail code follow.",
+        "description": "Sign in to Tion again for {email}: the session has ended (it lasts at most 30 days) or the integration moved to the new Tion cloud. Enter the password; a captcha and an e-mail code follow.",
         "data": {
           "password": "Password"
         },
@@ -306,6 +306,12 @@
     },
     "speed_limits_invalid": {
       "message": "The minimum speed cannot exceed the maximum speed"
+    }
+  },
+  "issues": {
+    "account_not_migrated": {
+      "title": "Tion account not moved to the new cloud",
+      "description": "The Tion account {email} has not been moved to the new cloud yet. Move it in the Tion MagicAir app, then reload the integration or restart Home Assistant."
     }
   }
 }

@@ -9,7 +9,11 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_SCAN_INTERVAL, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 
 from .api import (
     Breezer,
@@ -95,6 +99,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
 
     account = cloud.account
     _migrate_options(hass, entry, account, _migrate_old_ids(hass, entry, account))
+    _update_migration_issue(hass, entry, account)
     coordinator = entry.runtime_data = TionCoordinator(hass, entry, cloud)
     coordinator.pid = TionPidManager(hass, entry, coordinator)
     entry.async_on_unload(coordinator.pid.async_stop)
@@ -107,6 +112,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
 async def async_unload_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: TionConfigEntry) -> None:
+    """Drop the entry's repair issue."""
+    ir.async_delete_issue(hass, DOMAIN, _migration_issue_id(entry))
 
 
 async def async_remove_config_entry_device(
@@ -319,6 +329,28 @@ def _speed_max(account: TionAccount, breezer_id: str) -> int:
     if isinstance(breezer, Breezer) and breezer.speed_max is not None:
         return breezer.speed_max
     return FALLBACK_SPEED_MAX
+
+
+def _migration_issue_id(entry: TionConfigEntry) -> str:
+    return f"account_not_migrated_{entry.entry_id}"
+
+
+def _update_migration_issue(
+    hass: HomeAssistant, entry: TionConfigEntry, account: TionAccount
+) -> None:
+    """Ask to move the account in the Tion app while a location is on the old cloud."""
+    if any(location.needs_migration for location in account.locations):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            _migration_issue_id(entry),
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="account_not_migrated",
+            translation_placeholders={"email": entry.title},
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, _migration_issue_id(entry))
 
 
 def _register_devices(

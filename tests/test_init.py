@@ -1,5 +1,8 @@
 """Tests for setting up and unloading a Tion account."""
 
+from dataclasses import replace
+import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -9,6 +12,7 @@ from syrupy.assertion import SnapshotAssertion
 
 from custom_components.tion import async_remove_config_entry_device
 from custom_components.tion.api import (
+    TionAccount,
     TionApiError,
     TionAuthError,
     TionConnectionError,
@@ -28,6 +32,7 @@ from homeassistant.helpers import (
     area_registry as ar,
     device_registry as dr,
     entity_registry as er,
+    issue_registry as ir,
 )
 
 from .common import EMAIL, ENTRY_DATA, pid_options, setup_entry  # noqa: TID251
@@ -38,6 +43,7 @@ from .fake_cloud import (  # noqa: TID251
     MAGICAIR,
     FakeAuth,
     FakeTionCloud,
+    default_account,
     replace_device,
 )
 
@@ -301,3 +307,92 @@ async def test_pid_numbers_of_breezers_without_pid_are_removed(
             entity_registry, config_entry.entry_id
         )
     } == remaining
+
+
+TRANSLATIONS = Path(__file__).parents[1] / "custom_components/tion/translations"
+
+
+def _not_moved(account: TionAccount) -> TionAccount:
+    return replace(
+        account,
+        locations=tuple(
+            replace(location, needs_migration=True) for location in account.locations
+        ),
+    )
+
+
+def _issue_id(entry: MockConfigEntry) -> str:
+    return f"account_not_migrated_{entry.entry_id}"
+
+
+@pytest.mark.parametrize("account", [_not_moved(default_account())])
+async def test_account_not_moved_raises_an_issue(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """An account still on the old cloud loads and asks to move it in the app."""
+    with patch("custom_components.tion.PLATFORMS", []):
+        await setup_entry(hass, config_entry, cloud, auth)
+
+    assert config_entry.state is ConfigEntryState.LOADED
+    issue = issue_registry.async_get_issue(DOMAIN, _issue_id(config_entry))
+    assert issue is not None
+    assert issue.translation_key == "account_not_migrated"
+    assert issue.translation_placeholders == {"email": EMAIL}
+    assert issue.severity is ir.IssueSeverity.ERROR
+    assert not issue.is_fixable
+
+
+async def test_moved_account_clears_the_issue(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Once the account is moved, the next load removes the issue."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        _issue_id(config_entry),
+        is_fixable=False,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key="account_not_migrated",
+        translation_placeholders={"email": EMAIL},
+    )
+
+    with patch("custom_components.tion.PLATFORMS", []):
+        await setup_entry(hass, config_entry, cloud, auth)
+
+    assert issue_registry.async_get_issue(DOMAIN, _issue_id(config_entry)) is None
+
+
+@pytest.mark.parametrize("account", [_not_moved(default_account())])
+async def test_removing_the_entry_clears_the_issue(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    """Removing the entry removes its issue."""
+    with patch("custom_components.tion.PLATFORMS", []):
+        await setup_entry(hass, config_entry, cloud, auth)
+
+    await hass.config_entries.async_remove(config_entry.entry_id)
+
+    assert issue_registry.async_get_issue(DOMAIN, _issue_id(config_entry)) is None
+
+
+@pytest.mark.parametrize("language", ["en", "ru"])
+def test_translations_cover_the_issue_and_reauth(language: str) -> None:
+    """The issue and the re-login text are translated with their placeholders."""
+    strings = json.loads((TRANSLATIONS / f"{language}.json").read_text("utf-8"))
+
+    issue = strings["issues"]["account_not_migrated"]
+    assert "{" not in issue["title"]
+    assert "{email}" in issue["description"]
+    assert "{email}" in strings["config"]["step"]["reauth_confirm"]["description"]
