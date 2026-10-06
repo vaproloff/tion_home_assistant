@@ -31,8 +31,6 @@ A custom Home Assistant integration for Tion Breezer O2/3S/4S, MagicAir and Modu
 - Управлять подогревом, подсветкой и звуковыми сигналами.
 - Напоминать о замене фильтров и сбрасывать счётчик после замены.
 
-Состояние устройств приходит из облака сразу, без опроса.
-
 ## Поддерживаемые устройства
 
 - Tion Breezer 4S
@@ -40,8 +38,6 @@ A custom Home Assistant integration for Tion Breezer O2/3S/4S, MagicAir and Modu
 - Tion Breezer O2
 - Tion MagicAir
 - Tion Module CO2+
-
-Вживую проверены Breezer 4S и MagicAir. Breezer 3S, Breezer O2, Module CO2+ и MagicAir с датчиком PM2.5 поддержаны по описаниям устройств из облака, но вживую не проверялись. Если что-то работает не так, создайте issue.
 
 ## Требования
 
