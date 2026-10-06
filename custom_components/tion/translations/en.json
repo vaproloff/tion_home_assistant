@@ -79,7 +79,7 @@
       },
       "local_pid_menu": {
         "title": "Local PID — {breezer}",
-        "description": "CO2 sensor: {sensor}. Changes apply after Save on the main options step.",
+        "description": "CO2 sensor: {sensor}. Changes apply after Done on the main options step.",
         "menu_options": {
           "breezer": "Set up PID",
           "pid_remove": "Remove PID",
@@ -120,7 +120,7 @@
       },
       "presets_menu": {
         "title": "Presets — {breezer}",
-        "description": "Presets: {count}. Changes apply after Save on the main options step.",
+        "description": "Presets: {count}. Changes apply after Done on the main options step.",
         "menu_options": {
           "preset_add": "Add a preset",
           "preset_edit": "Edit a preset",
