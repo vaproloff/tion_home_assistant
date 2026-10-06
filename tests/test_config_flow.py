@@ -5,9 +5,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 from ha_tests.common import MockConfigEntry
 import pytest
+import voluptuous as vol  # noqa: TID251
 
 from custom_components.tion import config_flow
 from custom_components.tion.api.auth import (
@@ -47,9 +49,13 @@ from custom_components.tion.const import (
     CONF_PID_BASE_OUTPUT,
     CONF_PID_BREEZERS,
     CONF_PID_ENABLED,
+    CONF_PID_INTERVAL,
     CONF_PID_KD,
     CONF_PID_KI,
     CONF_PID_KP,
+    CONF_PID_MAX_SPEED,
+    CONF_PID_MIN_SPEED,
+    CONF_PID_TARGET_CO2,
     CONF_PRESET_MAX_SPEED,
     CONF_PRESET_MIN_SPEED,
     CONF_PRESET_SPEED,
@@ -67,7 +73,18 @@ from homeassistant.helpers.config_entry_oauth2_flow import HEADER_FRONTEND_BASE
 from homeassistant.helpers.http import current_request
 from homeassistant.helpers.typing import UNDEFINED
 
-from .fake_cloud import BREEZER_3S, BREEZER_4S, BREEZER_O2  # noqa: TID251
+from .api.payloads import PROFILE_4S  # noqa: TID251
+from .common import setup_entry  # noqa: TID251
+from .fake_cloud import (  # noqa: TID251
+    BREEZER_3S,
+    BREEZER_4S,
+    BREEZER_O2,
+    FakeAuth as CloudAuth,
+    FakeTionCloud,
+    default_account,
+    dps,
+    set_values,
+)
 
 BREEZER_GUID = BREEZER_4S
 SECOND_BREEZER_GUID = BREEZER_3S
@@ -80,7 +97,7 @@ def _preset_options() -> dict[str, Any]:
         CONF_PRESETS: {
             BREEZER_GUID: {
                 "boost": {
-                    CONF_PRESET_TYPE: TionPresetType.AUTO.value,
+                    CONF_PRESET_TYPE: TionPresetType.LOCAL_PID.value,
                     CONF_PRESET_MIN_SPEED: 4,
                     CONF_PRESET_MAX_SPEED: 6,
                 },
@@ -118,7 +135,7 @@ def _flow(
     entry: MockConfigEntry,
     options: dict[str, Any] | None = None,
 ) -> TionOptionsFlow:
-    """Return an options flow of the entry; the UI does not offer it yet."""
+    """Return an options flow of the entry, driven step by step."""
     if options is not None:
         hass.config_entries.async_update_entry(entry, options=options)
     flow = TionOptionsFlow()
@@ -136,11 +153,18 @@ def _pid_form_input(
     return {
         CONF_PID_ENABLED: enabled,
         CONF_CO2_SENSOR_ENTITY_ID: sensor_entity_id,
+        CONF_PID_INTERVAL: 45,
         CONF_PID_BASE_OUTPUT: 20.0,
         CONF_PID_KP: 0.5,
         CONF_PID_KI: 0.002,
         CONF_PID_KD: 0.0,
     }
+
+
+def _select_options(result: dict[str, Any], field: str) -> list[str]:
+    """Return the choices of a select field of a shown form."""
+    fields = {str(key): value for key, value in result["data_schema"].schema.items()}
+    return list(fields[field].config["options"])
 
 
 async def test_options_init_done_saves_existing_options(
@@ -241,6 +265,114 @@ async def test_options_pid_form_saves_draft_and_returns_to_local_pid(
     assert result["step_id"] == "local_pid"
     assert pid_options[CONF_PID_ENABLED] is False
     assert pid_options[CONF_CO2_SENSOR_ENTITY_ID] == SENSOR_ENTITY_ID
+    assert pid_options[CONF_PID_INTERVAL] == 45
+
+
+async def test_options_pid_form_defaults_interval(
+    hass: HomeAssistant, init_integration: MockConfigEntry
+) -> None:
+    """A breezer without PID settings gets the default PID interval."""
+    flow = _flow(hass, init_integration)
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = await flow.async_step_breezer()
+
+    assert result["data_schema"]({})[CONF_PID_INTERVAL] == 60
+
+
+@pytest.mark.parametrize(
+    "interval", [pytest.param(9, id="below"), pytest.param(601, id="above")]
+)
+async def test_options_pid_form_rejects_interval_out_of_range(
+    hass: HomeAssistant, init_integration: MockConfigEntry, interval: int
+) -> None:
+    """The PID interval stays within 10 to 600 seconds."""
+    flow = _flow(hass, init_integration)
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = await flow.async_step_breezer()
+
+    with pytest.raises(vol.Invalid):
+        result["data_schema"]({CONF_PID_INTERVAL: interval})
+
+
+@pytest.mark.parametrize(
+    "interval", [pytest.param(10, id="lowest"), pytest.param(600, id="highest")]
+)
+async def test_options_pid_form_accepts_interval_bounds(
+    hass: HomeAssistant, init_integration: MockConfigEntry, interval: int
+) -> None:
+    """Both ends of the PID interval range are accepted."""
+    flow = _flow(hass, init_integration)
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = await flow.async_step_breezer()
+
+    assert (
+        result["data_schema"]({CONF_PID_INTERVAL: interval})[CONF_PID_INTERVAL]
+        == interval
+    )
+
+
+def _pid_options_with_entity_settings(min_speed: int) -> dict[str, Any]:
+    """Return PID options with the values the number entities edit."""
+    options = _pid_options()
+    options[CONF_PID_BREEZERS][BREEZER_GUID] |= {
+        CONF_PID_MIN_SPEED: min_speed,
+        CONF_PID_MAX_SPEED: 4,
+        CONF_PID_TARGET_CO2: 700,
+    }
+    return options
+
+
+async def test_options_pid_form_keeps_entity_settings(
+    hass: HomeAssistant, init_integration: MockConfigEntry
+) -> None:
+    """Saving the PID form keeps the limits and target the entities set."""
+    flow = _flow(hass, init_integration, _pid_options_with_entity_settings(2))
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    await flow.async_step_breezer(_pid_form_input())
+
+    pid_options = flow._options[CONF_PID_BREEZERS][BREEZER_GUID]  # noqa: SLF001
+    assert pid_options[CONF_PID_MIN_SPEED] == 2
+    assert pid_options[CONF_PID_MAX_SPEED] == 4
+    assert pid_options[CONF_PID_TARGET_CO2] == 700
+
+
+async def test_options_save_takes_entity_settings_changed_meanwhile(
+    hass: HomeAssistant, init_integration: MockConfigEntry
+) -> None:
+    """A limit moved while the flow is open is not undone by saving."""
+    flow = _flow(hass, init_integration, _pid_options())
+    draft = flow._options  # noqa: SLF001
+    hass.config_entries.async_update_entry(
+        init_integration, options=_pid_options_with_entity_settings(3)
+    )
+
+    result = await flow.async_step_init({CONF_OPTIONS_ACTION: OPTIONS_ACTION_DONE})
+
+    assert CONF_PID_MIN_SPEED not in draft[CONF_PID_BREEZERS][BREEZER_GUID]
+    assert result["data"][CONF_PID_BREEZERS][BREEZER_GUID][CONF_PID_MIN_SPEED] == 3
+
+
+async def test_options_pid_removed_in_session_starts_fresh(
+    hass: HomeAssistant, init_integration: MockConfigEntry
+) -> None:
+    """Removing and setting up PID again in one session drops the old values."""
+    flow = _flow(hass, init_integration, _pid_options_with_entity_settings(3))
+    await flow.async_step_local_pid(
+        {
+            CONF_BREEZER_GUID: BREEZER_GUID,
+            CONF_LOCAL_PID_ACTION: LOCAL_PID_ACTION_REMOVE_BREEZER_PID,
+        }
+    )
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+    await flow.async_step_breezer(_pid_form_input())
+
+    result = await flow.async_step_init({CONF_OPTIONS_ACTION: OPTIONS_ACTION_DONE})
+
+    assert CONF_PID_MIN_SPEED not in result["data"][CONF_PID_BREEZERS][BREEZER_GUID]
 
 
 async def test_options_local_pid_remove_requires_breezer(
@@ -370,11 +502,11 @@ async def test_options_presets_add_opens_name_form(
 async def test_options_preset_config_rejects_min_above_max(
     hass: HomeAssistant, init_integration: MockConfigEntry
 ) -> None:
-    """Test auto preset config validates min_speed <= max_speed."""
+    """Test PID preset config validates min_speed <= max_speed."""
     flow = _flow(hass, init_integration)
     flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
     flow._preset_name = "boost"  # noqa: SLF001
-    flow._preset_type = TionPresetType.AUTO.value  # noqa: SLF001
+    flow._preset_type = TionPresetType.LOCAL_PID.value  # noqa: SLF001
 
     result = await flow.async_step_preset_config(
         {CONF_PRESET_MIN_SPEED: 5, CONF_PRESET_MAX_SPEED: 2}
@@ -385,14 +517,14 @@ async def test_options_preset_config_rejects_min_above_max(
     assert result["errors"]["base"] == "min_above_max"
 
 
-async def test_options_preset_config_saves_auto_preset(
+async def test_options_preset_config_saves_pid_preset(
     hass: HomeAssistant, init_integration: MockConfigEntry
 ) -> None:
-    """Test a valid auto preset config is stored with its type."""
+    """Test a valid PID preset config is stored with its type."""
     flow = _flow(hass, init_integration)
     flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
     flow._preset_name = "boost"  # noqa: SLF001
-    flow._preset_type = TionPresetType.AUTO.value  # noqa: SLF001
+    flow._preset_type = TionPresetType.LOCAL_PID.value  # noqa: SLF001
 
     result = await flow.async_step_preset_config(
         {CONF_PRESET_MIN_SPEED: 4, CONF_PRESET_MAX_SPEED: 6}
@@ -402,9 +534,81 @@ async def test_options_preset_config_saves_auto_preset(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "presets"
     assert stored == {
-        CONF_PRESET_TYPE: TionPresetType.AUTO.value,
+        CONF_PRESET_TYPE: TionPresetType.LOCAL_PID.value,
         CONF_PRESET_MIN_SPEED: 4,
         CONF_PRESET_MAX_SPEED: 6,
+    }
+
+
+async def test_options_pid_preset_defaults(
+    hass: HomeAssistant, init_integration: MockConfigEntry
+) -> None:
+    """A new PID preset starts at speed 1 up to the breezer's top speed."""
+    flow = _flow(hass, init_integration, _pid_options())
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+    flow._preset_name = "eco"  # noqa: SLF001
+    flow._preset_type = TionPresetType.LOCAL_PID.value  # noqa: SLF001
+
+    result = await flow.async_step_preset_config()
+
+    assert result["data_schema"]({}) == {
+        CONF_PRESET_MIN_SPEED: 1,
+        CONF_PRESET_MAX_SPEED: 6,
+    }
+
+
+@pytest.mark.parametrize(
+    ("options", "types"),
+    [
+        pytest.param({}, ["manual"], id="without_pid"),
+        pytest.param(_pid_options(enabled=False), ["manual"], id="pid_disabled"),
+        pytest.param(_pid_options(), ["manual", "local_pid"], id="with_pid"),
+    ],
+)
+async def test_options_preset_types_follow_draft_pid(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+    options: dict[str, Any],
+    types: list[str],
+) -> None:
+    """PID presets are offered only while the draft sets up PID."""
+    flow = _flow(hass, init_integration, options)
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    result = await flow.async_step_preset_add()
+
+    assert _select_options(result, CONF_PRESET_TYPE) == types
+
+
+async def test_options_ignore_presets_of_old_types(
+    hass: HomeAssistant, init_integration: MockConfigEntry
+) -> None:
+    """Old auto presets are not listed, and their name can be taken."""
+    old_auto = {
+        CONF_PRESET_TYPE: "auto",
+        CONF_PRESET_MIN_SPEED: 1,
+        CONF_PRESET_MAX_SPEED: 3,
+    }
+    manual = {CONF_PRESET_TYPE: TionPresetType.MANUAL.value, CONF_PRESET_SPEED: 5}
+    flow = _flow(
+        hass,
+        init_integration,
+        {CONF_PRESETS: {BREEZER_GUID: {"eco": old_auto, "boost": manual}}},
+    )
+    flow._breezer_guid = BREEZER_GUID  # noqa: SLF001
+
+    edit = await flow.async_step_preset_edit()
+    add = await flow.async_step_preset_add()
+    await flow.async_step_preset_add(
+        {CONF_PRESET_NAME: "eco", CONF_PRESET_TYPE: TionPresetType.MANUAL.value}
+    )
+    await flow.async_step_preset_config({CONF_PRESET_SPEED: 2})
+
+    assert _select_options(edit, CONF_PRESET_NAME) == ["boost"]
+    assert "eco" in _select_options(add, CONF_PRESET_NAME)
+    assert flow._options[CONF_PRESETS][BREEZER_GUID] == {  # noqa: SLF001
+        "eco": {CONF_PRESET_TYPE: TionPresetType.MANUAL.value, CONF_PRESET_SPEED: 2},
+        "boost": manual,
     }
 
 
@@ -489,7 +693,7 @@ async def test_options_preset_edit_selects_and_opens_prefilled_config(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "preset_config"
     assert flow._preset_name == "boost"  # noqa: SLF001
-    assert flow._preset_type == TionPresetType.AUTO.value  # noqa: SLF001
+    assert flow._preset_type == TionPresetType.LOCAL_PID.value  # noqa: SLF001
 
 
 async def test_options_preset_add_all_configured_returns_to_presets(
@@ -498,7 +702,7 @@ async def test_options_preset_add_all_configured_returns_to_presets(
     """Test Add when every preset is already configured returns to presets."""
     all_presets = {
         name: {
-            CONF_PRESET_TYPE: TionPresetType.AUTO.value,
+            CONF_PRESET_TYPE: TionPresetType.LOCAL_PID.value,
             CONF_PRESET_MIN_SPEED: 1,
             CONF_PRESET_MAX_SPEED: 2,
         }
@@ -539,9 +743,53 @@ async def test_options_final_done_saves_draft_changes(
     assert SECOND_BREEZER_GUID in result["data"][CONF_PID_BREEZERS]
 
 
-async def test_options_flow_not_offered(config_entry: MockConfigEntry) -> None:
-    """Options stay hidden until local PID and presets return."""
-    assert not TionConfigFlow.async_supports_options_flow(config_entry)
+async def test_options_flow_offered(config_entry: MockConfigEntry) -> None:
+    """The entry offers the options flow."""
+    assert TionConfigFlow.async_supports_options_flow(config_entry)
+
+
+@pytest.mark.parametrize(
+    ("steps", "reloads"),
+    [
+        pytest.param(
+            [
+                {CONF_OPTIONS_ACTION: OPTIONS_ACTION_CONFIGURE_LOCAL_PID},
+                {
+                    CONF_BREEZER_GUID: BREEZER_GUID,
+                    CONF_LOCAL_PID_ACTION: LOCAL_PID_ACTION_REMOVE_BREEZER_PID,
+                },
+                {CONF_LOCAL_PID_ACTION: LOCAL_PID_ACTION_DONE},
+                {CONF_OPTIONS_ACTION: OPTIONS_ACTION_DONE},
+            ],
+            1,
+            id="changed",
+        ),
+        pytest.param([{CONF_OPTIONS_ACTION: OPTIONS_ACTION_DONE}], 0, id="unchanged"),
+    ],
+)
+async def test_options_save_reloads_changed_entry(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: CloudAuth,
+    steps: list[dict[str, Any]],
+    reloads: int,
+) -> None:
+    """Saving changed options reloads the entry; saving unchanged ones does not."""
+    hass.config_entries.async_update_entry(config_entry, options=_pid_options())
+    await setup_entry(hass, config_entry, cloud, auth)
+    create_cloud = AsyncMock(return_value=(auth, cloud))
+
+    with patch("custom_components.tion.async_create_cloud", create_cloud):
+        result = await hass.config_entries.options.async_init(config_entry.entry_id)
+        for user_input in steps:
+            result = await hass.config_entries.options.async_configure(
+                result["flow_id"], user_input
+            )
+        await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert create_cloud.call_count == reloads
 
 
 async def test_options_list_the_account_breezers(
@@ -565,11 +813,18 @@ async def test_options_without_loaded_entry_list_no_breezers(
 
 
 @pytest.mark.parametrize(
-    ("breezer", "max_speed"),
+    ("account", "breezer", "max_speed"),
     [
-        pytest.param(BREEZER_4S, 6, id="reported"),
-        pytest.param(BREEZER_O2, 4, id="model_table"),
-        pytest.param("UNKNOWN001", 6, id="unknown"),
+        pytest.param(
+            set_values(
+                default_account(), BREEZER_4S, dps(PROFILE_4S, fan_speed_maxavail=5)
+            ),
+            BREEZER_4S,
+            5,
+            id="reported",
+        ),
+        pytest.param(default_account(), BREEZER_O2, 4, id="model_table"),
+        pytest.param(default_account(), "UNKNOWN001", 6, id="unknown"),
     ],
 )
 async def test_options_preset_speed_limit(

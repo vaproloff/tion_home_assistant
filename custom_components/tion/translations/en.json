@@ -75,7 +75,7 @@
           "local_pid_action": "Local PID action"
         },
         "data_description": {
-          "breezer_guid": "Breezer that should use an external Home Assistant CO2 sensor instead of Tion cloud auto control.",
+          "breezer_guid": "Breezer that gets the Local PID fan mode, driven by an external Home Assistant CO2 sensor.",
           "local_pid_action": "Configure the selected breezer, remove its PID settings, or return without changing local PID settings."
         }
       },
@@ -85,14 +85,16 @@
         "data": {
           "pid_enabled": "Enable local CO2 PID control",
           "co2_sensor_entity_id": "External CO2 sensor",
+          "pid_interval": "PID interval",
           "pid_base_output": "PID base output",
           "pid_kp": "PID proportional gain",
           "pid_ki": "PID integral gain",
           "pid_kd": "PID derivative gain"
         },
         "data_description": {
-          "pid_enabled": "When enabled, selecting Fan Auto on this breezer starts local PID control and keeps the Tion zone in manual mode.",
+          "pid_enabled": "Adds the Local PID fan mode and PID presets to this breezer.",
           "co2_sensor_entity_id": "Required when enabled. Select a Home Assistant sensor with CO2 device class and a numeric ppm value.",
+          "pid_interval": "How often local PID recalculates the fan speed. Default: 60 seconds.",
           "pid_base_output": "Baseline output in percent before PID correction. Default: 20. Keep the default unless the breezer under-ventilates near the target.",
           "pid_kp": "Default: 0.5. Higher values react more strongly to the current CO2 error.",
           "pid_ki": "Default: 0.001. Integral gain accumulates long-running error; increase carefully to avoid overshoot.",
@@ -120,7 +122,7 @@
         },
         "data_description": {
           "preset_name": "Preset name to expose on this breezer climate entity.",
-          "type": "Auto stores minimum and maximum Auto-mode speeds; Manual stores one fixed fan speed."
+          "type": "Manual stores one fixed fan speed; Local PID stores the speed limits local PID keeps to while the preset is active (offered only when local PID is set up for the breezer)."
         }
       },
       "preset_config": {
@@ -132,8 +134,8 @@
           "speed": "Speed"
         },
         "data_description": {
-          "min_speed": "Lower speed limit used when the Auto preset is active.",
-          "max_speed": "Upper speed limit used when the Auto preset is active. It cannot be lower than the minimum speed.",
+          "min_speed": "Lower speed limit of local PID while the preset is active.",
+          "max_speed": "Upper speed limit of local PID while the preset is active. It cannot be lower than the minimum speed.",
           "speed": "Fixed fan speed used when the Manual preset is active."
         }
       },
@@ -200,8 +202,8 @@
     },
     "preset_type_selector": {
       "options": {
-        "auto": "Auto (speed limits)",
-        "manual": "Manual (fixed speed)"
+        "manual": "Manual (fixed speed)",
+        "local_pid": "Local PID (speed limits)"
       }
     }
   },

@@ -14,7 +14,7 @@ from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.const import (
     CONF_CODE,
@@ -22,7 +22,9 @@ from homeassistant.const import (
     CONF_PASSWORD,
     CONF_USERNAME,
     Platform,
+    UnitOfTime,
 )
+from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .api.auth import (
@@ -45,23 +47,31 @@ from .const import (
     CONF_PID_BASE_OUTPUT,
     CONF_PID_BREEZERS,
     CONF_PID_ENABLED,
+    CONF_PID_INTERVAL,
     CONF_PID_KD,
     CONF_PID_KI,
     CONF_PID_KP,
+    CONF_PID_MAX_SPEED,
+    CONF_PID_MIN_SPEED,
+    CONF_PID_TARGET_CO2,
     CONF_PRESET_MAX_SPEED,
     CONF_PRESET_MIN_SPEED,
     CONF_PRESET_SPEED,
     CONF_PRESET_TYPE,
     CONF_PRESETS,
     DEFAULT_PID_BASE_OUTPUT,
+    DEFAULT_PID_INTERVAL,
     DEFAULT_PID_KD,
     DEFAULT_PID_KI,
     DEFAULT_PID_KP,
+    DEFAULT_PID_MIN_SPEED,
     DOMAIN,
+    PID_INTERVAL_RANGE,
     SUPPORTED_PRESETS,
     TionPresetType,
 )
 from .coordinator import TionConfigEntry
+from .pid_manager import is_pid_set_up
 from .session import async_create_auth
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +96,9 @@ PRESETS_ACTION_DONE = "done"
 PRESETS_ACTION_EDIT = "edit"
 PRESETS_ACTION_REMOVE = "remove"
 
+# PID settings the number entities edit while the options flow may be open.
+PID_ENTITY_SETTINGS = (CONF_PID_MIN_SPEED, CONF_PID_MAX_SPEED, CONF_PID_TARGET_CO2)
+
 STEP_USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_EMAIL): str,
@@ -107,6 +120,12 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         self._password = ""
         self._auth: TionAuth | None = None
         self._login_error: str | None = None
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: TionConfigEntry) -> TionOptionsFlow:
+        """Return the options flow: local PID and presets."""
+        return TionOptionsFlow()
 
     @staticmethod
     def _unique_id(email: str) -> str:
@@ -254,8 +273,8 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(title=self._email, data=data)
 
 
-class TionOptionsFlow(OptionsFlow):
-    """Tion options flow handler; not offered until local PID returns."""
+class TionOptionsFlow(OptionsFlowWithReload):
+    """Tion options flow: local PID and speed presets per breezer."""
 
     config_entry: TionConfigEntry
 
@@ -264,6 +283,7 @@ class TionOptionsFlow(OptionsFlow):
         self._breezer_guid: str | None = None
         self._preset_name: str | None = None
         self._preset_type: str | None = None
+        self._pid_removed: set[str] = set()
 
     @cached_property
     def _options(self) -> dict[str, Any]:
@@ -281,7 +301,7 @@ class TionOptionsFlow(OptionsFlow):
             if user_input[CONF_OPTIONS_ACTION] == OPTIONS_ACTION_CONFIGURE_PRESETS:
                 return await self.async_step_presets()
 
-            return self.async_create_entry(title="", data=self._options)
+            return self.async_create_entry(title="", data=self._options_to_save())
 
         return self.async_show_form(
             step_id="init",
@@ -325,6 +345,7 @@ class TionOptionsFlow(OptionsFlow):
             elif local_pid_action == LOCAL_PID_ACTION_REMOVE_BREEZER_PID:
                 pid_breezers = dict(self._options.get(CONF_PID_BREEZERS, {}))
                 pid_breezers.pop(self._breezer_guid, None)
+                self._pid_removed.add(self._breezer_guid)
 
                 if pid_breezers:
                     self._options[CONF_PID_BREEZERS] = pid_breezers
@@ -375,8 +396,10 @@ class TionOptionsFlow(OptionsFlow):
             else:
                 pid_breezers = dict(self._options.get(CONF_PID_BREEZERS, {}))
                 pid_breezers[self._breezer_guid] = {
+                    **pid_breezers.get(self._breezer_guid, {}),
                     CONF_PID_ENABLED: user_input[CONF_PID_ENABLED],
                     CONF_CO2_SENSOR_ENTITY_ID: co2_sensor_entity_id,
+                    CONF_PID_INTERVAL: int(user_input[CONF_PID_INTERVAL]),
                     CONF_PID_BASE_OUTPUT: float(user_input[CONF_PID_BASE_OUTPUT]),
                     CONF_PID_KP: float(user_input[CONF_PID_KP]),
                     CONF_PID_KI: float(user_input[CONF_PID_KI]),
@@ -473,13 +496,10 @@ class TionOptionsFlow(OptionsFlow):
                         )
                     ),
                     vol.Required(
-                        CONF_PRESET_TYPE, default=TionPresetType.AUTO.value
+                        CONF_PRESET_TYPE, default=TionPresetType.MANUAL.value
                     ): selector.SelectSelector(
                         selector.SelectSelectorConfig(
-                            options=[
-                                TionPresetType.AUTO.value,
-                                TionPresetType.MANUAL.value,
-                            ],
+                            options=self._preset_types(),
                             mode=selector.SelectSelectorMode.LIST,
                             translation_key="preset_type_selector",
                         )
@@ -511,7 +531,7 @@ class TionOptionsFlow(OptionsFlow):
             else:
                 self._store_preset(
                     {
-                        CONF_PRESET_TYPE: TionPresetType.AUTO.value,
+                        CONF_PRESET_TYPE: TionPresetType.LOCAL_PID.value,
                         CONF_PRESET_MIN_SPEED: min_speed,
                         CONF_PRESET_MAX_SPEED: max_speed,
                     }
@@ -604,10 +624,45 @@ class TionOptionsFlow(OptionsFlow):
         )
 
     def _breezer_presets(self, breezer_guid: str | None) -> dict[str, Any]:
-        """Return stored presets for a breezer."""
+        """Return a breezer's stored presets of the types this version offers."""
         if breezer_guid is None:
             return {}
-        return self._options.get(CONF_PRESETS, {}).get(breezer_guid, {})
+        presets = self._options.get(CONF_PRESETS, {}).get(breezer_guid, {})
+        return {
+            name: preset
+            for name, preset in presets.items()
+            if preset.get(CONF_PRESET_TYPE) in tuple(TionPresetType)
+        }
+
+    def _preset_types(self) -> list[str]:
+        """Return the preset types for the breezer: PID ones need PID set up."""
+        types = [TionPresetType.MANUAL.value]
+        if self._pid_configured(self._breezer_guid):
+            types.append(TionPresetType.LOCAL_PID.value)
+        return types
+
+    def _pid_configured(self, breezer_guid: str | None) -> bool:
+        """Return whether the draft sets up local PID for the breezer."""
+        return breezer_guid is not None and is_pid_set_up(
+            self._pid_options(breezer_guid)
+        )
+
+    def _options_to_save(self) -> dict[str, Any]:
+        """Return the draft with the PID settings entities changed meanwhile."""
+        draft = self._options.get(CONF_PID_BREEZERS)
+        if not draft:
+            return self._options
+        current = self.config_entry.options.get(CONF_PID_BREEZERS, {})
+        pid_breezers = {}
+        for breezer_id, pid_options in draft.items():
+            live = (
+                {} if breezer_id in self._pid_removed else current.get(breezer_id, {})
+            )
+            pid_breezers[breezer_id] = {
+                **pid_options,
+                **{key: live[key] for key in PID_ENTITY_SETTINGS if key in live},
+            }
+        return {**self._options, CONF_PID_BREEZERS: pid_breezers}
 
     def _breezers(self) -> list[Breezer]:
         """Return the breezers of the loaded config entry."""
@@ -654,7 +709,7 @@ class TionOptionsFlow(OptionsFlow):
             {
                 vol.Required(
                     CONF_PRESET_MIN_SPEED,
-                    default=preset.get(CONF_PRESET_MIN_SPEED, 0),
+                    default=preset.get(CONF_PRESET_MIN_SPEED, DEFAULT_PID_MIN_SPEED),
                 ): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=0,
@@ -715,6 +770,18 @@ class TionOptionsFlow(OptionsFlow):
                     selector.EntitySelectorConfig(
                         domain=Platform.SENSOR,
                         device_class=SensorDeviceClass.CO2,
+                    )
+                ),
+                vol.Required(
+                    CONF_PID_INTERVAL,
+                    default=pid_options.get(CONF_PID_INTERVAL, DEFAULT_PID_INTERVAL),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=PID_INTERVAL_RANGE[0],
+                        max=PID_INTERVAL_RANGE[1],
+                        step=1,
+                        unit_of_measurement=UnitOfTime.SECONDS,
+                        mode=selector.NumberSelectorMode.BOX,
                     )
                 ),
                 vol.Required(

@@ -93,7 +93,6 @@ class SwingMode(StrEnum):
 class TionPresetType(StrEnum):
     """Supported preset types."""
 
-    AUTO = "auto"
     MANUAL = "manual"
     LOCAL_PID = "local_pid"
 
