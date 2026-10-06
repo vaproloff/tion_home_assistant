@@ -235,14 +235,20 @@
       "target_co2": {
         "name": "Target CO2"
       },
-      "external_target_co2": {
-        "name": "External CO2 Target"
+      "auto_min_speed": {
+        "name": "Auto min speed"
       },
-      "min_speed_set": {
-        "name": "Min Speed Set"
+      "auto_max_speed": {
+        "name": "Auto max speed"
       },
-      "max_speed_set": {
-        "name": "Max Speed Set"
+      "pid_min_speed": {
+        "name": "PID min speed"
+      },
+      "pid_max_speed": {
+        "name": "PID max speed"
+      },
+      "pid_target_co2": {
+        "name": "PID target CO2"
       }
     },
     "sensor": {
@@ -298,6 +304,9 @@
     },
     "invalid_value": {
       "message": "The value cannot be set: {message}"
+    },
+    "speed_limits_invalid": {
+      "message": "The minimum speed cannot exceed the maximum speed"
     }
   }
 }

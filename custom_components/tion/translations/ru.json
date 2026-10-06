@@ -234,14 +234,20 @@
       "target_co2": {
         "name": "Целевой уровень CO2"
       },
-      "external_target_co2": {
-        "name": "Целевой уровень внешнего CO2"
+      "auto_min_speed": {
+        "name": "Минимальная скорость авторежима"
       },
-      "min_speed_set": {
-        "name": "Минимальная скорость"
+      "auto_max_speed": {
+        "name": "Максимальная скорость авторежима"
       },
-      "max_speed_set": {
-        "name": "Максимальная скорость"
+      "pid_min_speed": {
+        "name": "Минимальная скорость PID"
+      },
+      "pid_max_speed": {
+        "name": "Максимальная скорость PID"
+      },
+      "pid_target_co2": {
+        "name": "Целевой уровень CO2 PID"
       }
     },
     "sensor": {
@@ -297,6 +303,9 @@
     },
     "invalid_value": {
       "message": "Значение нельзя установить: {message}"
+    },
+    "speed_limits_invalid": {
+      "message": "Минимальная скорость не может быть больше максимальной"
     }
   }
 }

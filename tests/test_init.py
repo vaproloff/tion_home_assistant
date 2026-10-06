@@ -1,6 +1,7 @@
 """Tests for setting up and unloading a Tion account."""
 
 from typing import Any
+from unittest.mock import patch
 
 from ha_tests.common import MockConfigEntry
 import pytest
@@ -13,18 +14,28 @@ from custom_components.tion.api import (
     TionConnectionError,
     TionTokens,
 )
-from custom_components.tion.const import CONF_DEVICE_KEY, DOMAIN
+from custom_components.tion.const import (
+    CONF_DEVICE_KEY,
+    CONF_PID_ENABLED,
+    DOMAIN,
+    PID_NUMBER_KEYS,
+)
 from custom_components.tion.coordinator import TionCoordinator
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import area_registry as ar, device_registry as dr
+from homeassistant.helpers import (
+    area_registry as ar,
+    device_registry as dr,
+    entity_registry as er,
+)
 
-from .common import EMAIL, ENTRY_DATA, setup_entry  # noqa: TID251
+from .common import EMAIL, ENTRY_DATA, pid_options, setup_entry  # noqa: TID251
 from .fake_cloud import (  # noqa: TID251
     BREEZER_4S,
     BREEZER_O2,
     CLEVER,
+    MAGICAIR,
     FakeAuth,
     FakeTionCloud,
     replace_device,
@@ -251,3 +262,42 @@ async def test_device_is_kept_while_entry_is_not_loaded(
     )
 
     assert not await async_remove_config_entry_device(hass, config_entry, device)
+
+
+PID_NUMBERS_4S = {f"{BREEZER_4S}_{key}" for key in PID_NUMBER_KEYS}
+KEPT_NUMBERS = {f"{MAGICAIR}_min_speed_set", "GONE000001_min_speed_set"}
+
+
+@pytest.mark.parametrize(
+    ("options", "remaining"),
+    [
+        pytest.param({}, KEPT_NUMBERS, id="without_pid"),
+        pytest.param(
+            pid_options(**{CONF_PID_ENABLED: False}), KEPT_NUMBERS, id="pid_disabled"
+        ),
+        pytest.param(pid_options(), KEPT_NUMBERS | PID_NUMBERS_4S, id="pid_set_up"),
+    ],
+)
+async def test_pid_numbers_of_breezers_without_pid_are_removed(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    remaining: set[str],
+) -> None:
+    """Setup drops PID numbers of breezers without PID; others stay."""
+    for unique_id in PID_NUMBERS_4S | KEPT_NUMBERS:
+        entity_registry.async_get_or_create(
+            Platform.NUMBER, DOMAIN, unique_id, config_entry=config_entry
+        )
+
+    with patch("custom_components.tion.PLATFORMS", []):
+        await setup_entry(hass, config_entry, cloud, auth)
+
+    assert {
+        entity.unique_id
+        for entity in er.async_entries_for_config_entry(
+            entity_registry, config_entry.entry_id
+        )
+    } == remaining

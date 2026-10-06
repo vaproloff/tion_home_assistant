@@ -31,6 +31,8 @@ DEFAULT_PID_INTERVAL = 60
 PID_INTERVAL_RANGE = (10, 600)
 DEFAULT_PID_MIN_SPEED = 1
 FAN_LOCAL_PID = "local_pid"
+# unique_id keys of a breezer's local PID numbers.
+PID_NUMBER_KEYS = ("min_speed_set", "max_speed_set", "external_target_co2")
 CONF_CAPTCHA_TOKEN = "captcha_token"
 CONF_DEVICE_KEY = "device_key"
 CONF_DEVICE_KEY_ID = "device_key_id"
