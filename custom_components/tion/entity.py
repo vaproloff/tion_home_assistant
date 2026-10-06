@@ -57,16 +57,9 @@ class TionEntity[ViewT: Breezer | Station](CoordinatorEntity[TionCoordinator]):
         """Return True while the device and its gateway are reachable."""
         # Not CoordinatorEntity.available: while the live channel is up, a
         # failed periodic refresh does not make the pushed state stale.
-        latest = self._latest_view()
-        if not self.coordinator.channel_up or latest is None:
-            return False
-        device = latest.device
-        gateway = (
-            self.coordinator.data.device(device.parent_id)
-            if device.parent_id is not None
-            else None
+        return self._latest_view() is not None and self.coordinator.device_available(
+            self._view.id
         )
-        return device.is_online and (gateway is None or gateway.is_online)
 
     @property
     def room(self) -> Room | None:

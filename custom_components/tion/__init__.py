@@ -18,6 +18,7 @@ from .api import (
 )
 from .const import CONF_DEVICE_KEY, DOMAIN, MANUFACTURER, MODEL_NAMES, PLATFORMS
 from .coordinator import TionConfigEntry, TionCoordinator
+from .pid_manager import TionPidManager
 from .session import async_create_cloud
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,7 +70,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
     # below, stops listening before the cloud stops.
     entry.async_on_unload(cloud.async_stop)
 
-    entry.runtime_data = TionCoordinator(hass, entry, cloud)
+    coordinator = entry.runtime_data = TionCoordinator(hass, entry, cloud)
+    coordinator.pid = TionPidManager(hass, entry, coordinator)
+    entry.async_on_unload(coordinator.pid.async_stop)
     _register_devices(hass, entry, cloud.account)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
