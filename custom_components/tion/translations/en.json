@@ -227,6 +227,11 @@
               "inside": "Inside",
               "mixed": "Mixed"
             }
+          },
+          "fan_mode": {
+            "state": {
+              "local_pid": "Local PID"
+            }
           }
         }
       }
