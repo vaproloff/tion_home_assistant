@@ -60,11 +60,10 @@
       "init": {
         "title": "Tion options",
         "description": "Choose what to configure. Option changes are saved only when you return to this step and select Done.",
-        "data": {
-          "options_action": "Action"
-        },
-        "data_description": {
-          "options_action": "Open local PID settings, configure speed presets, or select Done to save all pending option changes."
+        "menu_options": {
+          "configure_local_pid": "Configure local PID",
+          "configure_presets": "Configure presets",
+          "done": "Done"
         }
       },
       "local_pid": {
@@ -177,18 +176,13 @@
     },
     "error": {
       "required": "Required",
-      "min_above_max": "Minimum speed must not be greater than maximum speed",
+      "min_above_max": "Minimum speed must not be greater than maximum speed"
+    },
+    "abort": {
       "no_breezers": "The account has no breezers, or the integration is not loaded yet"
     }
   },
   "selector": {
-    "init_menu_selector": {
-      "options": {
-        "configure_local_pid": "Configure local PID",
-        "configure_presets": "Configure presets",
-        "done": "Done"
-      }
-    },
     "preset_name_selector": {
       "options": {
         "eco": "Eco",

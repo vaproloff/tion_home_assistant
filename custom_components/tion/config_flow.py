@@ -1,6 +1,6 @@
 """Adds config flow (UI flow) for Tion component."""
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from functools import cached_property
 import hashlib
 import logging
@@ -75,13 +75,6 @@ from .pid_manager import is_pid_set_up
 from .session import async_create_auth
 
 _LOGGER = logging.getLogger(__name__)
-
-CONF_OPTIONS_ACTION = "options_action"
-
-OPTIONS_ACTION_DONE = "done"
-OPTIONS_ACTION_CONFIGURE_LOCAL_PID = "configure_local_pid"
-
-OPTIONS_ACTION_CONFIGURE_PRESETS = "configure_presets"
 
 CONF_PRESET_NAME = "preset_name"
 
@@ -282,50 +275,50 @@ class TionOptionsFlow(OptionsFlowWithReload):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage the options."""
+        """Show the main options menu."""
+        if not self._breezers():
+            return self.async_abort(reason="no_breezers")
 
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            action = user_input[CONF_OPTIONS_ACTION]
-            if action == OPTIONS_ACTION_DONE:
-                return self.async_create_entry(title="", data=self._options_to_save())
-
-            breezers = self._breezers()
-            if not breezers:
-                errors["base"] = "no_breezers"
-            elif action == OPTIONS_ACTION_CONFIGURE_LOCAL_PID:
-                if len(breezers) == 1:
-                    self._breezer_guid = breezers[0].id
-                    return await self.async_step_local_pid_menu()
-                return await self.async_step_local_pid()
-            elif action == OPTIONS_ACTION_CONFIGURE_PRESETS:
-                if len(breezers) == 1:
-                    self._breezer_guid = breezers[0].id
-                    return await self.async_step_presets_menu()
-                return await self.async_step_presets()
-
-        return self.async_show_form(
+        return self.async_show_menu(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_OPTIONS_ACTION, default=OPTIONS_ACTION_DONE
-                    ): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=[
-                                OPTIONS_ACTION_CONFIGURE_LOCAL_PID,
-                                OPTIONS_ACTION_CONFIGURE_PRESETS,
-                                OPTIONS_ACTION_DONE,
-                            ],
-                            mode=selector.SelectSelectorMode.LIST,
-                            translation_key="init_menu_selector",
-                        )
-                    ),
-                }
-            ),
-            errors=errors,
+            menu_options=["configure_local_pid", "configure_presets", "done"],
         )
+
+    async def async_step_configure_local_pid(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Open local PID settings, asking for the breezer when there are several."""
+        return await self._async_open_breezer_step(
+            self.async_step_local_pid_menu, self.async_step_local_pid
+        )
+
+    async def async_step_configure_presets(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Open preset settings, asking for the breezer when there are several."""
+        return await self._async_open_breezer_step(
+            self.async_step_presets_menu, self.async_step_presets
+        )
+
+    async def async_step_done(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Save the draft options."""
+        return self.async_create_entry(title="", data=self._options_to_save())
+
+    async def _async_open_breezer_step(
+        self,
+        menu_step: Callable[[], Awaitable[ConfigFlowResult]],
+        choice_step: Callable[[], Awaitable[ConfigFlowResult]],
+    ) -> ConfigFlowResult:
+        """Go to the breezer's menu, or ask which breezer when there are several."""
+        breezers = self._breezers()
+        if not breezers:
+            return self.async_abort(reason="no_breezers")
+        if len(breezers) == 1:
+            self._breezer_guid = breezers[0].id
+            return await menu_step()
+        return await choice_step()
 
     async def async_step_local_pid(
         self, user_input: dict[str, Any] | None = None
