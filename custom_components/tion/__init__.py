@@ -389,15 +389,21 @@ def _register_devices(
             _LOGGER.debug("Skipping unsupported Tion device model %s", device.model)
             continue
         room = account.room_of(device)
-        registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, device.id)},
-            connections={(dr.CONNECTION_NETWORK_MAC, mac) for mac in device.macs},
-            manufacturer=MANUFACTURER,
-            model=MODEL_NAMES[device.product_id],
-            model_id=device.product_id,
-            name=device.name,
-            sw_version=str(device.firmware),
-            hw_version=str(device.hardware),
-            suggested_area=room.name if room is not None else None,
-        )
+        try:
+            registry.async_get_or_create(
+                config_entry_id=entry.entry_id,
+                identifiers={(DOMAIN, device.id)},
+                connections={(dr.CONNECTION_NETWORK_MAC, mac) for mac in device.macs},
+                manufacturer=MANUFACTURER,
+                model=MODEL_NAMES[device.product_id],
+                model_id=device.product_id,
+                name=device.name,
+                sw_version=str(device.firmware),
+                hw_version=str(device.hardware),
+                suggested_area=room.name if room is not None else None,
+            )
+        except dr.DeviceInfoError, dr.DeviceCollisionError:
+            _LOGGER.warning(
+                "Could not register a %s: another device in the registry conflicts with it",
+                MODEL_NAMES[device.product_id],
+            )

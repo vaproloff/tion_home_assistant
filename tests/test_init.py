@@ -309,6 +309,42 @@ async def test_pid_numbers_of_breezers_without_pid_are_removed(
     } == remaining
 
 
+async def test_conflicting_registry_device_does_not_fail_the_account(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A device that cannot be registered is skipped; the others still load."""
+    mac = cloud.account.device(BREEZER_4S).macs[0]
+    device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={(DOMAIN, BREEZER_4S)},
+    )
+    device_registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={("other", "device")},
+        connections={(dr.CONNECTION_NETWORK_MAC, mac)},
+    )
+
+    with patch("custom_components.tion.PLATFORMS", []):
+        await setup_entry(hass, config_entry, cloud, auth)
+
+    assert config_entry.state is ConfigEntryState.LOADED
+    assert _device(device_registry, config_entry, MAGICAIR) is not None
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and "Could not register" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "Breezer 4S" in warnings[0]
+    assert BREEZER_4S not in caplog.text
+    assert mac not in caplog.text
+
+
 TRANSLATIONS = Path(__file__).parents[1] / "custom_components/tion/translations"
 
 
