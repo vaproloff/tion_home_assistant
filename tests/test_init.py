@@ -509,8 +509,14 @@ async def test_removing_the_entry_clears_the_issue(
     assert issue_registry.async_get_issue(DOMAIN, _issue_id(config_entry)) is None
 
 
-@pytest.mark.parametrize("language", ["en", "ru"])
-def test_translations_cover_the_issue_and_reauth(language: str) -> None:
+@pytest.mark.parametrize(
+    ("language", "promise"),
+    [
+        pytest.param("en", "disappears by itself", id="en"),
+        pytest.param("ru", "исчезнет сам", id="ru"),
+    ],
+)
+def test_translations_cover_the_issue_and_reauth(language: str, promise: str) -> None:
     """The issue and the re-login text are translated with their placeholders."""
     strings = json.loads((TRANSLATIONS / f"{language}.json").read_text("utf-8"))
 
@@ -523,7 +529,11 @@ def test_translations_cover_the_issue_and_reauth(language: str) -> None:
         assert "{docs_url}" in config["step"][step]["description"]
         assert "captcha_base_url" in config["step"][step]["data"]
         assert "captcha_base_url" in config["step"][step]["data_description"]
-    assert "30" not in config["step"]["reauth_confirm"]["description"]
+    reauth = config["step"]["reauth_confirm"]["description"]
+    assert "30" not in reauth
+    assert promise in reauth
+    assert "reload" not in reauth.lower()
+    assert "перезагрузите" not in reauth
     assert "invalid_captcha_url" in config["error"]
     assert "localhost" in config["error"]["invalid_captcha"]
 

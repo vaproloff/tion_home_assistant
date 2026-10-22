@@ -32,7 +32,7 @@
       },
       "reauth_confirm": {
         "title": "Sign in to Tion again",
-        "description": "Sign in to Tion again for {email}: Tion rejected the saved session, or the integration moved to the new Tion cloud. Enter the password; a captcha and an e-mail code follow.\n\nTion currently accepts the captcha only from a page at http://localhost, see the [instructions]({docs_url}). If your devices still work, close this dialog and reload the integration first: the request may be a false alarm.",
+        "description": "Sign in to Tion again for {email}: Tion rejected the saved session, or the integration moved to the new Tion cloud. Enter the password; a captcha and an e-mail code follow.\n\nTion currently accepts the captcha only from a page at http://localhost, see the [instructions]({docs_url}). If your devices stopped working only recently, Tion may be having an outage: the integration keeps trying, and this request disappears by itself once the connection is back. If it stays for more than a day, sign in again.",
         "data": {
           "password": "Password",
           "captcha_base_url": "Captcha page address"
