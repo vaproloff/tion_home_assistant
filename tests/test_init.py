@@ -440,6 +440,14 @@ def test_translations_cover_the_issue_and_reauth(language: str) -> None:
     assert "{" not in issue["title"]
     assert "{email}" in issue["description"]
     assert "{email}" in strings["config"]["step"]["reauth_confirm"]["description"]
+    config = strings["config"]
+    for step in ("user", "reauth_confirm"):
+        assert "{docs_url}" in config["step"][step]["description"]
+        assert "captcha_base_url" in config["step"][step]["data"]
+        assert "captcha_base_url" in config["step"][step]["data_description"]
+    assert "30" not in config["step"]["reauth_confirm"]["description"]
+    assert "invalid_captcha_url" in config["error"]
+    assert "localhost" in config["error"]["invalid_captcha"]
 
 
 @pytest.mark.parametrize("language", ["en", "ru"])
