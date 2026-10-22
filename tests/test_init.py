@@ -195,13 +195,13 @@ async def test_start_failures_open_reauth_after_an_hour(
         AsyncMock(return_value=(auth, cloud)),
     ):
         await hass.config_entries.async_setup(config_entry.entry_id)
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
         assert config_entry.state is ConfigEntryState.SETUP_RETRY
         assert not _reauth_started(hass)
 
         freezer.tick(timedelta(seconds=RENEW_STALE_AFTER))
         async_fire_time_changed(hass)
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
 
         assert config_entry.state is ConfigEntryState.SETUP_RETRY
         assert _reauth_started(hass)
@@ -229,13 +229,13 @@ async def test_auth_failure_at_start_resets_the_failure_record(
         AsyncMock(return_value=(auth, cloud)),
     ):
         await hass.config_entries.async_setup(config_entry.entry_id)
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
         assert config_entry.state is ConfigEntryState.SETUP_RETRY
 
         cloud.start_error = TionAuthError("dead")
         freezer.tick(timedelta(minutes=10))
         async_fire_time_changed(hass)
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
         assert config_entry.state is ConfigEntryState.SETUP_ERROR
         assert _reauth_started(hass)
 

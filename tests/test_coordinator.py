@@ -151,22 +151,32 @@ async def test_refresh_success_keeps_reauth_while_cloud_auth_error(
     assert len(_reauth_flows(hass)) == 1
 
 
+@pytest.mark.parametrize(
+    ("error", "translation_key"),
+    [
+        pytest.param(TionConnectionError("down"), "cloud_unavailable", id="connection"),
+        pytest.param(TionApiError("bad"), "cloud_error", id="api"),
+    ],
+)
 async def test_refresh_failure_with_auth_error_opens_and_closes_reauth(
-    hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
+    hass: HomeAssistant,
+    coordinator: TionCoordinator,
+    cloud: FakeTionCloud,
+    error: Exception,
+    translation_key: str,
 ) -> None:
-    """A failed refresh still reports a flagged session; recovery closes it."""
+    """A failed refresh still reports a flagged session; clearing it closes the request."""
     cloud.auth_error = TionAuthError("RenewAccess has been failing since 0")
-    cloud.refresh_error = TionConnectionError("down")
+    cloud.refresh_error = error
 
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
     assert isinstance(coordinator.last_exception, UpdateFailed)
-    assert coordinator.last_exception.translation_key == "cloud_unavailable"
+    assert coordinator.last_exception.translation_key == translation_key
     assert len(_reauth_flows(hass)) == 1
 
     cloud.auth_error = None
-    cloud.refresh_error = None
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
