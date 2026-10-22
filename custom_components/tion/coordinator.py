@@ -16,7 +16,7 @@ from .api import (
     TionCloud,
     TionConnectionError,
 )
-from .const import DISCONNECT_GRACE, DOMAIN, REFRESH_INTERVAL
+from .const import DATA_START_FAILURES, DISCONNECT_GRACE, DOMAIN, REFRESH_INTERVAL
 
 if TYPE_CHECKING:
     from .pid_manager import TionPidManager
@@ -34,6 +34,12 @@ def async_abort_reauth_flows(hass: HomeAssistant, entry: ConfigEntry) -> None:
         match_context={"entry_id": entry.entry_id, "source": SOURCE_REAUTH},
     ):
         hass.config_entries.flow.async_abort(flow["flow_id"])
+
+
+@callback
+def async_forget_failed_starts(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Drop the entry's failed-start record; return whether there was one."""
+    return hass.data.get(DATA_START_FAILURES, {}).pop(entry.entry_id, None) is not None
 
 
 class TionCoordinator(DataUpdateCoordinator[TionAccount]):

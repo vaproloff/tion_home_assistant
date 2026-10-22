@@ -44,7 +44,12 @@ from .const import (
     PLATFORMS,
     TionPresetType,
 )
-from .coordinator import TionConfigEntry, TionCoordinator, async_abort_reauth_flows
+from .coordinator import (
+    TionConfigEntry,
+    TionCoordinator,
+    async_abort_reauth_flows,
+    async_forget_failed_starts,
+)
 from .pid_manager import TionPidManager, breezer_speed_max, is_pid_set_up
 from .session import async_create_cloud
 
@@ -84,7 +89,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
         await cloud.async_start()
     except TionAuthError as err:
         # A refusal ends HA's retry loop; the next start is a new streak.
-        _forget_failed_starts(hass, entry)
+        async_forget_failed_starts(hass, entry)
         raise ConfigEntryAuthFailed(
             translation_domain=DOMAIN, translation_key="auth_failed"
         ) from err
@@ -100,7 +105,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
             translation_key="cloud_error",
             translation_placeholders={"message": str(err)},
         ) from err
-    if _forget_failed_starts(hass, entry):
+    if async_forget_failed_starts(hass, entry):
         async_abort_reauth_flows(hass, entry)
     # Unload callbacks run last-in first-out: the coordinator, registered
     # below, stops listening before the cloud stops.
@@ -116,12 +121,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
     _remove_stale_pid_numbers(hass, entry, coordinator.pid)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
-
-
-@callback
-def _forget_failed_starts(hass: HomeAssistant, entry: TionConfigEntry) -> bool:
-    """Drop the entry's failed-start record; return whether there was one."""
-    return hass.data.get(DATA_START_FAILURES, {}).pop(entry.entry_id, None) is not None
 
 
 @callback

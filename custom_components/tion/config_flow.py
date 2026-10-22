@@ -77,7 +77,7 @@ from .const import (
     SUPPORTED_PRESETS,
     TionPresetType,
 )
-from .coordinator import TionConfigEntry
+from .coordinator import TionConfigEntry, async_forget_failed_starts
 from .pid_manager import is_pid_set_up
 from .session import async_create_auth
 
@@ -314,8 +314,11 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             data[CONF_CAPTCHA_BASE_URL] = self._captcha_base_url
         if self.source == SOURCE_REAUTH:
             self._abort_if_unique_id_mismatch(reason="wrong_account")
+            entry = self._get_reauth_entry()
+            # Fresh tokens start a new episode of failed starts.
+            async_forget_failed_starts(self.hass, entry)
             return self.async_update_reload_and_abort(
-                self._get_reauth_entry(), title=self._email, data=data
+                entry, title=self._email, data=data
             )
         self._abort_if_unique_id_configured()
         return self.async_create_entry(title=self._email, data=data)

@@ -52,6 +52,7 @@ from custom_components.tion.const import (
     CONF_PRESET_SPEED,
     CONF_PRESET_TYPE,
     CONF_PRESETS,
+    DATA_START_FAILURES,
     DOCS_CAPTCHA_URL,
     DOMAIN,
     SUPPORTED_PRESETS,
@@ -1511,6 +1512,24 @@ async def test_reauth_replaces_entry_data(
         **TOKENS.as_dict(),
     }
     assert hass.config_entries.reloaded == [REAUTH_ENTRY_ID]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("auths")
+async def test_reauth_login_ends_the_failed_start_streak() -> None:
+    """Fresh tokens start a new episode of failed starts for that entry only."""
+    entry = _entry({CONF_EMAIL: EMAIL, CONF_DEVICE_KEY: "old"})
+    hass = FakeFlowHass([entry])
+    hass.data[DATA_START_FAILURES] = {REAUTH_ENTRY_ID: 1.0, "other": 2.0}
+    flow = _config_flow(hass, SOURCE_REAUTH, entry)
+
+    await flow.async_step_reauth(entry.data)
+    await flow.async_step_reauth_confirm({CONF_PASSWORD: "new"})
+    await flow.async_step_captcha({CONF_CAPTCHA_TOKEN: "dD0xtoken"})
+    result = await flow.async_step_code({CONF_CODE: "6483"})
+
+    assert result["reason"] == "reauth_successful"
+    assert hass.data[DATA_START_FAILURES] == {"other": 2.0}
 
 
 @pytest.mark.asyncio
