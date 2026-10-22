@@ -151,6 +151,40 @@ async def test_refresh_success_keeps_reauth_while_cloud_auth_error(
     assert len(_reauth_flows(hass)) == 1
 
 
+async def test_refresh_failure_with_auth_error_opens_and_closes_reauth(
+    hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
+) -> None:
+    """A failed refresh still reports a flagged session; recovery closes it."""
+    cloud.auth_error = TionAuthError("RenewAccess has been failing since 0")
+    cloud.refresh_error = TionConnectionError("down")
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+    assert coordinator.last_exception.translation_key == "cloud_unavailable"
+    assert len(_reauth_flows(hass)) == 1
+
+    cloud.auth_error = None
+    cloud.refresh_error = None
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert _reauth_flows(hass) == []
+
+
+async def test_refresh_failure_without_auth_error_opens_nothing(
+    hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
+) -> None:
+    """An ordinary outage is not a sign-in problem."""
+    cloud.refresh_error = TionConnectionError("down")
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+
+
 @pytest.mark.usefixtures("coordinator")
 async def test_cloud_auth_error_opens_and_resolves_reauth(
     hass: HomeAssistant, cloud: FakeTionCloud

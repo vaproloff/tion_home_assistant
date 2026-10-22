@@ -74,11 +74,16 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
             self._unsub_grace = async_call_later(
                 self.hass, DISCONNECT_GRACE, self._grace_expired
             )
+        self._async_sync_reauth()
+        self.async_update_listeners()
+
+    @callback
+    def _async_sync_reauth(self) -> None:
+        """Open or close the reauth flow to match the cloud's auth_error."""
         if self.cloud.auth_error is not None:
             self.async_request_reauth()
         else:
             self._async_resolve_reauth()
-        self.async_update_listeners()
 
     @callback
     def async_request_reauth(self) -> None:
@@ -128,17 +133,18 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
                 translation_domain=DOMAIN, translation_key="auth_failed"
             ) from err
         except TionConnectionError as err:
+            self._async_sync_reauth()
             raise UpdateFailed(
                 translation_domain=DOMAIN, translation_key="cloud_unavailable"
             ) from err
         except TionApiError as err:
+            self._async_sync_reauth()
             raise UpdateFailed(
                 translation_domain=DOMAIN,
                 translation_key="cloud_error",
                 translation_placeholders={"message": str(err)},
             ) from err
-        if self.cloud.auth_error is None:
-            self._async_resolve_reauth()
+        self._async_sync_reauth()
         return self.cloud.account
 
     async def async_shutdown(self) -> None:

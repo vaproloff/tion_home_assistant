@@ -692,6 +692,35 @@ async def test_reconnect_survives_unreachable_renewal(harness: Harness) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reconnect_failure_notifies_when_auth_error_is_set(
+    harness: Harness,
+) -> None:
+    """With the channel down, the HA layer learns about auth_error from reconnect."""
+    await harness.cloud.async_start()
+    harness.hold.update({1.0, 2.0})
+    harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
+    harness.auth.renew_failure = TionConnectionError("down")
+    harness.broker.last.drop(TionAuthError("User Authentication Expired"))
+    await _eventually(lambda: 1.0 in harness.sleeps)
+    # The disconnect notification has fired; only the failed attempt can notify now.
+    harness.auth.renew_error = TionAuthError("RenewAccess has been failing since 0")
+    before = harness.notifications
+
+    harness.release()
+    await _eventually(lambda: harness.notifications > before)
+
+    assert str(harness.cloud.auth_error) == "RenewAccess has been failing since 0"
+    assert not harness.cloud.connected
+
+    harness.auth.renew_failure = None
+    harness.auth.renew_error = None
+    harness.release()
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.cloud.auth_error is None
+
+
+@pytest.mark.asyncio
 async def test_rpc_auth_error_renews_once(harness: Harness) -> None:
     """A rejected token is renewed once and the call retried."""
     harness.transport.answers["GetDeviceProfiles"] = [

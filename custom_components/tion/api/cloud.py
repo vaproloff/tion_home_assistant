@@ -579,6 +579,9 @@ class TionCloud:
                 attempt = 0
             except TionError as err:
                 _LOGGER.debug("Reconnect attempt %s failed: %s", attempt + 1, err)
+                # With the channel down, only this loop can report a changed level.
+                if self.auth_error is not None:
+                    self._notify()
                 attempt += 1
             except Exception:
                 _LOGGER.exception(
