@@ -4,6 +4,7 @@ import asyncio
 import base64
 from collections.abc import Callable
 import hashlib
+import logging
 from types import SimpleNamespace
 
 from cryptography.hazmat.primitives import hashes
@@ -16,6 +17,7 @@ from custom_components.tion.api.auth import (
     LOGIN_ERROR_INVALID_CAPTCHA,
     LOGIN_ERROR_INVALID_CODE,
     LOGIN_ERROR_PASSWORD_NOT_SET,
+    RENEW_RETRY_INTERVAL,
     SVC_ACCOUNT,
     TionAuth,
     TionLoginError,
@@ -190,14 +192,19 @@ async def test_login_chain_sends_linked_verifiers_and_registers_key() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_get_confirmation_code_rejections(code: int, reason: str) -> None:
+async def test_get_confirmation_code_rejections(
+    code: int, reason: str, caplog: pytest.LogCaptureFixture
+) -> None:
     """Known GetConfirmationCode errors become config flow error keys."""
+    caplog.set_level(logging.DEBUG)
     auth = TionAuth(FakeTransport(_error(2, code)), TionDeviceKey.generate())
 
     with pytest.raises(TionLoginError) as exc_info:
         await auth.async_get_confirmation_code("user@example.com", "bad", "captcha")
 
     assert exc_info.value.reason == reason
+    assert "nope" in caplog.text
+    assert "user@example.com" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -439,16 +446,61 @@ async def test_concurrent_ensure_valid_renews_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_expired_refresh_window_requires_login() -> None:
-    """After the 30-day window no renewal is attempted."""
-    transport = FakeTransport()
+async def test_expired_refresh_window_still_asks_server() -> None:
+    """The stored window is advisory: the server decides whether to renew."""
+    transport = FakeTransport(_token())
     transport.now = NOW + REFRESH_TTL
+    auth = TionAuth(transport, TionDeviceKey.generate(), _tokens(access_expires_in=0))
+
+    assert await auth.async_ensure_valid() == "access-2"
+    assert [call.method for call in transport.calls] == ["RenewAccess"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_renew_error_is_remembered_until_interval() -> None:
+    """After a terminal code the server is not asked again for RENEW_RETRY_INTERVAL."""
+    transport = FakeTransport(_error(2, 1), _token())
+    auth = TionAuth(transport, TionDeviceKey.generate(), _tokens(access_expires_in=0))
+
+    with pytest.raises(TionAuthError) as first:
+        await auth.async_ensure_valid()
+    with pytest.raises(TionAuthError) as second:
+        await auth.async_renew_access()
+    assert auth.renew_error is first.value
+    assert second.value is first.value
+    assert len(transport.calls) == 1
+
+    transport.now = NOW + RENEW_RETRY_INTERVAL
+    tokens = await auth.async_renew_access()
+
+    assert tokens.access_token == "access-2"
+    assert auth.renew_error is None
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_renew_transport_auth_error_is_connection_error() -> None:
+    """A 401 on the RenewAccess call itself is a server fault, not a dead session."""
+    transport = FakeTransport(TionAuthError("RenewAccess: HTTP 401"))
     auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
 
-    with pytest.raises(TionAuthError):
-        await auth.async_ensure_valid()
+    with pytest.raises(TionConnectionError, match="rejected by transport"):
+        await auth.async_renew_access()
 
-    assert transport.calls == []
+    assert auth.renew_error is None
+    assert auth.tokens == _tokens()
+
+
+@pytest.mark.asyncio
+async def test_renew_error_starts_empty_and_survives_connection_errors() -> None:
+    """Only a terminal server answer is remembered; a network error is not."""
+    transport = FakeTransport(TionConnectionError("down"))
+    auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
+
+    assert auth.renew_error is None
+    with pytest.raises(TionConnectionError):
+        await auth.async_renew_access()
+    assert auth.renew_error is None
 
 
 @pytest.mark.asyncio
@@ -470,8 +522,11 @@ async def test_not_logged_in_is_auth_error() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_renew_rejections(code: int, error: type[Exception]) -> None:
+async def test_renew_rejections(
+    code: int, error: type[Exception], caplog: pytest.LogCaptureFixture
+) -> None:
     """Terminal renew errors demand a new login; others are API errors."""
+    caplog.set_level(logging.DEBUG)
     transport = FakeTransport(_error(2, code))
     auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
 
@@ -480,6 +535,7 @@ async def test_renew_rejections(code: int, error: type[Exception]) -> None:
 
     assert auth.tokens == _tokens()
     assert len(transport.calls) == 1
+    assert "nope" in caplog.text
 
 
 @pytest.mark.asyncio
