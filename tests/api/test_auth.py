@@ -18,6 +18,7 @@ from custom_components.tion.api.auth import (
     LOGIN_ERROR_INVALID_CODE,
     LOGIN_ERROR_PASSWORD_NOT_SET,
     RENEW_RETRY_INTERVAL,
+    RENEW_STALE_AFTER,
     SVC_ACCOUNT,
     TionAuth,
     TionLoginError,
@@ -622,3 +623,111 @@ def test_tokens_repr_hides_secrets() -> None:
     assert "secret-access" not in token_repr
     assert "secret-renew" not in token_repr
     assert "access_expires_at" in token_repr
+
+
+@pytest.mark.asyncio
+async def test_renew_failed_precondition_is_terminal() -> None:
+    """A gRPC FAILED_PRECONDITION on RenewAccess means the device proof is dead."""
+    transport = FakeTransport(
+        TionApiError("RenewAccess: grpc-status 9 FAILED_PRECONDITION", grpc_status=9)
+    )
+    auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
+
+    with pytest.raises(TionAuthError, match="device proof rejected") as first:
+        await auth.async_renew_access()
+    with pytest.raises(TionAuthError) as second:
+        await auth.async_renew_access()
+
+    assert auth.renew_error is first.value
+    assert second.value is first.value
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_other_api_errors_on_renew_start_a_streak_only() -> None:
+    """Any other API error is retried and merely starts the failure streak."""
+    transport = FakeTransport(
+        TionApiError("RenewAccess: grpc-status 2 UNKNOWN", grpc_status=2), _token()
+    )
+    auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
+
+    with pytest.raises(TionApiError):
+        await auth.async_renew_access()
+    assert auth.renew_error is None
+    assert auth.renew_failing_since == NOW
+
+    assert (await auth.async_renew_access()).access_token == "access-2"
+    assert auth.renew_failing_since is None
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_renew_failure_streak_becomes_auth_error_after_stale_interval() -> None:
+    """An hour of failed renewals flags the session without blocking retries."""
+    transport = FakeTransport(
+        TionConnectionError("down"),
+        TionConnectionError("down"),
+        TionConnectionError("down"),
+        _token(),
+    )
+    auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
+
+    with pytest.raises(TionConnectionError):
+        await auth.async_renew_access()
+    assert auth.renew_error is None
+
+    transport.now = NOW + RENEW_STALE_AFTER - 1
+    with pytest.raises(TionConnectionError):
+        await auth.async_renew_access()
+    assert auth.renew_error is None
+
+    transport.now = NOW + RENEW_STALE_AFTER
+    with pytest.raises(TionConnectionError):
+        await auth.async_renew_access()
+    assert isinstance(auth.renew_error, TionAuthError)
+    assert "failing since" in str(auth.renew_error)
+
+    tokens = await auth.async_renew_access()
+
+    assert tokens.access_token == "access-2"
+    assert auth.renew_error is None
+    assert auth.renew_failing_since is None
+    assert len(transport.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_renew_success_clears_streak_before_listeners() -> None:
+    """Listeners of a successful renewal already see renew_error cleared."""
+    transport = FakeTransport(
+        TionConnectionError("down"), TionConnectionError("down"), _token()
+    )
+    auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
+    seen: list[TionAuthError | None] = []
+    auth.add_update_listener(lambda _tokens: seen.append(auth.renew_error))
+
+    with pytest.raises(TionConnectionError):
+        await auth.async_renew_access()
+    transport.now = NOW + RENEW_STALE_AFTER
+    with pytest.raises(TionConnectionError):
+        await auth.async_renew_access()
+    assert auth.renew_error is not None
+
+    await auth.async_renew_access()
+
+    assert seen == [None]
+
+
+@pytest.mark.asyncio
+async def test_terminal_error_outranks_the_streak() -> None:
+    """A remembered terminal refusal is what renew_error reports."""
+    transport = FakeTransport(TionConnectionError("down"), _error(2, 1))
+    auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
+
+    with pytest.raises(TionConnectionError):
+        await auth.async_renew_access()
+    transport.now = NOW + RENEW_STALE_AFTER
+    with pytest.raises(TionAuthError) as err:
+        await auth.async_renew_access()
+
+    assert auth.renew_error is err.value
+    assert "rejected (1)" in str(auth.renew_error)

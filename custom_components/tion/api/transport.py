@@ -20,6 +20,7 @@ REQUEST_TIMEOUT = 30
 
 GRPC_OK = 0
 GRPC_DEADLINE_EXCEEDED = 4
+GRPC_FAILED_PRECONDITION = 9
 GRPC_UNAVAILABLE = 14
 GRPC_UNAUTHENTICATED = 16
 _GRPC_CONNECTION_STATUSES = frozenset({GRPC_DEADLINE_EXCEEDED, GRPC_UNAVAILABLE})
@@ -195,7 +196,7 @@ class TionTransport:
             raise TionAuthError(error)
         if grpc_status in _GRPC_CONNECTION_STATUSES:
             raise TionConnectionError(error)
-        raise TionApiError(error)
+        raise TionApiError(error, grpc_status=grpc_status)
 
     def _update_server_time(self, headers: Mapping[str, str]) -> None:
         if (server_time := _server_time(headers)) is not None:
