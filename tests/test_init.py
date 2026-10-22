@@ -214,6 +214,39 @@ async def test_start_failures_open_reauth_after_an_hour(
     assert not _reauth_started(hass)
 
 
+async def test_auth_failure_at_start_resets_the_failure_record(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An explicit refusal ends the retry streak; the next start counts from zero."""
+    cloud.start_error = TionConnectionError("down")
+    with patch(
+        "custom_components.tion.async_create_cloud",
+        AsyncMock(return_value=(auth, cloud)),
+    ):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+        assert config_entry.state is ConfigEntryState.SETUP_RETRY
+
+        cloud.start_error = TionAuthError("dead")
+        freezer.tick(timedelta(minutes=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+        assert config_entry.state is ConfigEntryState.SETUP_ERROR
+        assert _reauth_started(hass)
+
+        cloud.start_error = TionConnectionError("down")
+        freezer.tick(timedelta(seconds=RENEW_STALE_AFTER))
+        await hass.config_entries.async_reload(config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert config_entry.state is ConfigEntryState.SETUP_RETRY
+    assert not _reauth_started(hass)
+
+
 async def test_renewed_tokens_are_saved_without_reload(
     init_integration: MockConfigEntry, auth: FakeAuth
 ) -> None:
