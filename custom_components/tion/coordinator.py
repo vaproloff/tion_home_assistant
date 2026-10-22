@@ -4,9 +4,8 @@ from datetime import datetime
 import logging
 from typing import TYPE_CHECKING
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -51,6 +50,7 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
         # False once the live channel has been down for DISCONNECT_GRACE.
         self.channel_up = cloud.connected
         self._unsub_grace: CALLBACK_TYPE | None = None
+        self._reauth_open = False
         self._unsub_cloud = cloud.add_listener(self._handle_cloud_update)
 
     def device_available(self, device_id: str) -> bool:
@@ -75,8 +75,32 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
                 self.hass, DISCONNECT_GRACE, self._grace_expired
             )
         if self.cloud.auth_error is not None:
-            self.config_entry.async_start_reauth(self.hass)
+            self.async_request_reauth()
+        else:
+            self._async_resolve_reauth()
         self.async_update_listeners()
+
+    @callback
+    def async_request_reauth(self) -> None:
+        """Ask the user to sign in again; does nothing while a request is open."""
+        self._reauth_open = True
+        self.config_entry.async_start_reauth(self.hass)
+
+    @callback
+    def _async_resolve_reauth(self) -> None:
+        """Close the reauth flows this coordinator opened."""
+        # HA itself aborts reauth flows only on reload and removal of the entry.
+        if not self._reauth_open:
+            return
+        self._reauth_open = False
+        for flow in self.hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN,
+            match_context={
+                "entry_id": self.config_entry.entry_id,
+                "source": SOURCE_REAUTH,
+            },
+        ):
+            self.hass.config_entries.flow.async_abort(flow["flow_id"])
 
     @callback
     def _grace_expired(self, _now: datetime) -> None:
@@ -95,7 +119,8 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
         try:
             await self.cloud.async_refresh()
         except TionAuthError as err:
-            raise ConfigEntryAuthFailed(
+            self.async_request_reauth()
+            raise UpdateFailed(
                 translation_domain=DOMAIN, translation_key="auth_failed"
             ) from err
         except TionConnectionError as err:
@@ -108,6 +133,8 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
                 translation_key="cloud_error",
                 translation_placeholders={"message": str(err)},
             ) from err
+        if self.cloud.auth_error is None:
+            self._async_resolve_reauth()
         return self.cloud.account
 
     async def async_shutdown(self) -> None:
