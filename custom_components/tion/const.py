@@ -13,8 +13,10 @@ from homeassistant.components.climate import (
     PRESET_SLEEP,
 )
 from homeassistant.const import Platform
+from homeassistant.util.hass_dict import HassKey
 
 DOMAIN = "tion"
+DATA_START_FAILURES: HassKey[dict[str, float]] = HassKey(f"{DOMAIN}.start_failures")
 # v4 pushes no online/offline events: only re-reading the structure shows them.
 REFRESH_INTERVAL = timedelta(seconds=60)
 # Seconds entities stay available after the live channel drops.

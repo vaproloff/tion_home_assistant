@@ -26,6 +26,16 @@ _LOGGER = logging.getLogger(__name__)
 type TionConfigEntry = ConfigEntry[TionCoordinator]
 
 
+@callback
+def async_abort_reauth_flows(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Abort the entry's open reauth flows."""
+    for flow in hass.config_entries.flow.async_progress_by_handler(
+        DOMAIN,
+        match_context={"entry_id": entry.entry_id, "source": SOURCE_REAUTH},
+    ):
+        hass.config_entries.flow.async_abort(flow["flow_id"])
+
+
 class TionCoordinator(DataUpdateCoordinator[TionAccount]):
     """Shares the account snapshot of one Tion cloud with the entities."""
 
@@ -102,14 +112,7 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
         if not self._reauth_open:
             return
         self._reauth_open = False
-        for flow in self.hass.config_entries.flow.async_progress_by_handler(
-            DOMAIN,
-            match_context={
-                "entry_id": self.config_entry.entry_id,
-                "source": SOURCE_REAUTH,
-            },
-        ):
-            self.hass.config_entries.flow.async_abort(flow["flow_id"])
+        async_abort_reauth_flows(self.hass, self.config_entry)
 
     @callback
     def _grace_expired(self, _now: datetime) -> None:

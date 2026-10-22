@@ -1,12 +1,14 @@
 """Tests for setting up and unloading a Tion account."""
 
 from dataclasses import replace
+from datetime import timedelta
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from ha_tests.common import MockConfigEntry
+from freezegun.api import FrozenDateTimeFactory
+from ha_tests.common import MockConfigEntry, async_fire_time_changed
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
@@ -18,6 +20,7 @@ from custom_components.tion.api import (
     TionConnectionError,
     TionTokens,
 )
+from custom_components.tion.api.auth import RENEW_STALE_AFTER
 from custom_components.tion.api.views import BREEZER_PRODUCTS, STATION_PRODUCTS
 from custom_components.tion.const import (
     CONF_DEVICE_KEY,
@@ -167,6 +170,48 @@ async def test_start_errors(
     assert config_entry.state is state
     assert _reauth_started(hass) is reauth
     assert auth.listeners == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(TionConnectionError("down"), id="connection"),
+        pytest.param(TionApiError("bad"), id="api"),
+    ],
+)
+async def test_start_failures_open_reauth_after_an_hour(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    freezer: FrozenDateTimeFactory,
+    error: Exception,
+) -> None:
+    """An hour of failed starts asks to sign in; the first successful start closes it."""
+    cloud.start_error = error
+    with patch(
+        "custom_components.tion.async_create_cloud",
+        AsyncMock(return_value=(auth, cloud)),
+    ):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+        assert config_entry.state is ConfigEntryState.SETUP_RETRY
+        assert not _reauth_started(hass)
+
+        freezer.tick(timedelta(seconds=RENEW_STALE_AFTER))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+
+        assert config_entry.state is ConfigEntryState.SETUP_RETRY
+        assert _reauth_started(hass)
+
+        cloud.start_error = None
+        freezer.tick(timedelta(minutes=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert config_entry.state is ConfigEntryState.LOADED
+    assert not _reauth_started(hass)
 
 
 async def test_renewed_tokens_are_saved_without_reload(
