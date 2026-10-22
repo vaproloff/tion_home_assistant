@@ -720,12 +720,19 @@ async def test_renew_success_clears_streak_before_listeners() -> None:
 @pytest.mark.asyncio
 async def test_terminal_error_outranks_the_streak() -> None:
     """A remembered terminal refusal is what renew_error reports."""
-    transport = FakeTransport(TionConnectionError("down"), _error(2, 1))
+    transport = FakeTransport(
+        TionConnectionError("down"), TionConnectionError("down"), _error(2, 1)
+    )
     auth = TionAuth(transport, TionDeviceKey.generate(), _tokens())
 
     with pytest.raises(TionConnectionError):
         await auth.async_renew_access()
     transport.now = NOW + RENEW_STALE_AFTER
+    with pytest.raises(TionConnectionError):
+        await auth.async_renew_access()
+    assert isinstance(auth.renew_error, TionAuthError)
+    assert "failing since" in str(auth.renew_error)
+
     with pytest.raises(TionAuthError) as err:
         await auth.async_renew_access()
 
