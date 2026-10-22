@@ -11,7 +11,7 @@ import pytest
 from custom_components.tion.api import TionApiError, TionAuthError, TionConnectionError
 from custom_components.tion.const import DOMAIN
 from custom_components.tion.coordinator import TionCoordinator
-from homeassistant.config_entries import SOURCE_REAUTH
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -167,6 +167,20 @@ async def test_cloud_auth_error_opens_and_resolves_reauth(
     await hass.async_block_till_done()
 
     assert _reauth_flows(hass) == []
+
+
+async def test_push_during_unload_does_not_open_reauth(
+    hass: HomeAssistant, init_integration: MockConfigEntry, cloud: FakeTionCloud
+) -> None:
+    """The old coordinator stays quiet while the entry reloads after a reauth."""
+    cloud.auth_error = TionAuthError("expired")
+    init_integration.mock_state(hass, ConfigEntryState.UNLOAD_IN_PROGRESS)
+
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+    init_integration.mock_state(hass, ConfigEntryState.LOADED)
 
 
 @pytest.mark.usefixtures("coordinator")

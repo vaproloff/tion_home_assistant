@@ -321,6 +321,7 @@ def test_captcha_page_url_with_base_ignores_request() -> None:
             id="port_and_spaces",
         ),
         pytest.param("http://[::1]", "http://[::1]", id="ipv6"),
+        pytest.param("HTTP://localhost", "http://localhost", id="upper_scheme"),
     ],
 )
 def test_parse_captcha_base_url(value: str | None, expected: str | None) -> None:
@@ -338,6 +339,11 @@ def test_parse_captcha_base_url(value: str | None, expected: str | None) -> None
         pytest.param("http://localhost/?x=1", id="query"),
         pytest.param("http://localhost#top", id="fragment"),
         pytest.param("http://user:pw@localhost", id="userinfo"),
+        pytest.param("http://:8123", id="no_host_with_port"),
+        pytest.param("http://localhost:", id="empty_port"),
+        pytest.param("http://localhost:abc", id="bad_port"),
+        pytest.param("http://localhost:99999", id="port_out_of_range"),
+        pytest.param("http://local host", id="space_in_host"),
     ],
 )
 def test_parse_captcha_base_url_rejects(value: str) -> None:

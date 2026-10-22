@@ -4,7 +4,7 @@ from datetime import datetime
 import logging
 from typing import TYPE_CHECKING
 
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry, ConfigEntryState
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -83,6 +83,10 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
     @callback
     def async_request_reauth(self) -> None:
         """Ask the user to sign in again; does nothing while a request is open."""
+        # A reload after a successful reauth leaves the old coordinator pushing
+        # the old auth_error, and a new flow would outlive the reload.
+        if self.config_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS:
+            return
         self._reauth_open = True
         self.config_entry.async_start_reauth(self.hass)
 

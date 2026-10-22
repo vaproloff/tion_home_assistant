@@ -35,14 +35,17 @@ def parse_captcha_base_url(value: str | None) -> str | None:
         return None
     parts = urlsplit(value)
     if (
-        parts.scheme not in ("http", "https")
-        or not parts.netloc
+        any(char.isspace() for char in value)
+        or parts.scheme not in ("http", "https")
+        or not parts.hostname
         or "@" in parts.netloc
+        or parts.netloc.endswith(":")
         or parts.path not in ("", "/")
         or parts.query
         or parts.fragment
     ):
         raise ValueError(value)
+    _ = parts.port
     return f"{parts.scheme}://{parts.netloc}"
 
 

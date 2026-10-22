@@ -1534,6 +1534,30 @@ async def test_reauth_prefills_stored_captcha_url() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("auths")
+async def test_reauth_rejects_bad_captcha_url() -> None:
+    """A malformed address returns the reauth form with a field error."""
+    entry_data = {CONF_EMAIL: EMAIL, CONF_DEVICE_KEY: "old"}
+    entry = _entry(entry_data)
+    flow = _config_flow(FakeFlowHass([entry]), SOURCE_REAUTH, entry)
+    await flow.async_step_reauth(entry_data)
+
+    result = await flow.async_step_reauth_confirm(
+        {CONF_PASSWORD: "secret", CONF_CAPTCHA_BASE_URL: "localhost"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {CONF_CAPTCHA_BASE_URL: "invalid_captcha_url"}
+    url_key = next(
+        k for k in result["data_schema"].schema if k == CONF_CAPTCHA_BASE_URL
+    )
+    assert url_key.description == {"suggested_value": "localhost"}
+    assert result["description_placeholders"]["email"] == EMAIL
+    assert result["description_placeholders"]["docs_url"] == DOCS_CAPTCHA_URL
+
+
+@pytest.mark.asyncio
 async def test_reauth_captcha_failure_returns_to_reauth_form(
     auths: list[FakeAuth],
 ) -> None:
