@@ -133,7 +133,7 @@ class TionCloud:
 
     @property
     def auth_error(self) -> TionAuthError | None:
-        """Return the session's remembered refusal or stale-streak error, None once renewed."""
+        """Return the remembered refusal or stale-streak error, None once renewed."""
         return self._auth.renew_error
 
     def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
@@ -579,7 +579,8 @@ class TionCloud:
                 attempt = 0
             except TionError as err:
                 _LOGGER.debug("Reconnect attempt %s failed: %s", attempt + 1, err)
-                # With the channel down, refresh is otherwise the only way listeners see auth_error.
+                # With the channel down, refresh is otherwise the only way
+                # listeners see auth_error.
                 if self.auth_error is not None:
                     self._notify()
                 attempt += 1
