@@ -8,7 +8,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from .auth import TionAuth
+from .auth import RENEW_RETRY_INTERVAL, TionAuth, TionTokens
 from .datapoints import (
     SERVICE_STATE,
     SERVICE_UPDATE,
@@ -116,7 +116,10 @@ class TionCloud:
         self._structure_task: asyncio.Task[None] | None = None
         self._started = False
         self._stopped = False
-        self.auth_error: TionAuthError | None = None
+        self._renew_wakeup = asyncio.Event()
+        self._unsub_tokens: Callable[[], None] | None = auth.add_update_listener(
+            self._on_tokens
+        )
 
     @property
     def account(self) -> TionAccount:
@@ -128,6 +131,11 @@ class TionCloud:
         """Return True while the live channel is up."""
         return self._account.connected
 
+    @property
+    def auth_error(self) -> TionAuthError | None:
+        """Return the session's last terminal renewal refusal, None once renewed."""
+        return self._auth.renew_error
+
     def add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         """Call listener after every change of the snapshot; returns unsubscribe."""
         self._listeners.append(listener)
@@ -136,7 +144,6 @@ class TionCloud:
     async def async_start(self) -> None:
         """Load profiles and structure, open the live channel, poll devices."""
         self._stopped = False
-        self.auth_error = None
         try:
             await self._load_profiles()
             await self._connect()
@@ -152,9 +159,7 @@ class TionCloud:
             try:
                 await self._load_structure(token)
             except TionAuthError:
-                await self._load_structure(
-                    (await self._auth.async_renew_access()).access_token
-                )
+                await self._with_fresh_token(METHOD_GET_STRUCTURE, self._load_structure)
             if (connection := self._connection) is not None:
                 await self._sync_subscriptions(connection)
         if self._connection is not None:
@@ -165,6 +170,10 @@ class TionCloud:
         """Close the live channel and cancel background work."""
         self._started = False
         self._stopped = True
+        if self._unsub_tokens is not None:
+            self._unsub_tokens()
+            self._unsub_tokens = None
+        self._renew_wakeup.set()
         for task in (self._reconnect_task, self._structure_task):
             if task is not None:
                 task.cancel()
@@ -272,14 +281,22 @@ class TionCloud:
                 service, method, payload, token, location_id=location_id
             )
         except TionAuthError:
-            tokens = await self._auth.async_renew_access()
-            return await self._transport.async_call(
-                service,
+            return await self._with_fresh_token(
                 method,
-                payload,
-                tokens.access_token,
-                location_id=location_id,
+                lambda fresh: self._transport.async_call(
+                    service, method, payload, fresh, location_id=location_id
+                ),
             )
+
+    async def _with_fresh_token[T](
+        self, what: str, call: Callable[[str], Awaitable[T]]
+    ) -> T:
+        """Renew the access token and retry; a refusal then is a server fault."""
+        token = (await self._auth.async_renew_access()).access_token
+        try:
+            return await call(token)
+        except TionAuthError as err:
+            raise TionConnectionError(f"{what}: fresh token rejected: {err}") from err
 
     async def _load_profiles(self) -> None:
         self._profiles = decode_profiles(
@@ -339,9 +356,13 @@ class TionCloud:
         attempt = object()
         async with self._structure_lock:
             try:
-                connection = await self._open_channel(attempt, renew=False)
+                connection = await self._open_channel(
+                    attempt, await self._auth.async_ensure_valid()
+                )
             except TionAuthError:
-                connection = await self._open_channel(attempt, renew=True)
+                connection = await self._with_fresh_token(
+                    "Live channel", partial(self._open_channel, attempt)
+                )
             self._connection = connection
             self._attempt = attempt
             self._subscriptions = {}
@@ -373,11 +394,7 @@ class TionCloud:
             self._fail_pending(TionConnectionError("Live channel closed"))
         await connection.async_close()
 
-    async def _open_channel(self, attempt: object, *, renew: bool) -> NatsConnection:
-        if renew:
-            token = (await self._auth.async_renew_access()).access_token
-        else:
-            token = await self._auth.async_ensure_valid()
+    async def _open_channel(self, attempt: object, token: str) -> NatsConnection:
         await self._load_structure(token)
         return await self._connect_nats(
             self._transport.session,
@@ -556,9 +573,10 @@ class TionCloud:
             try:
                 await self._connect()
             except TionAuthError as err:
-                self.auth_error = err
+                _LOGGER.debug("Reconnect paused, the session cannot renew: %s", err)
                 self._notify()
-                return
+                await self._wait_renew_retry()
+                attempt = 0
             except TionError as err:
                 _LOGGER.debug("Reconnect attempt %s failed: %s", attempt + 1, err)
                 attempt += 1
@@ -569,6 +587,31 @@ class TionCloud:
                 attempt += 1
             else:
                 return
+
+    async def _wait_renew_retry(self) -> None:
+        """Wait out the renewal retry interval, or until the tokens are renewed."""
+
+        async def sleep() -> None:
+            await self._sleep(RENEW_RETRY_INTERVAL)
+
+        async def wakeup() -> None:
+            await self._renew_wakeup.wait()
+
+        self._renew_wakeup.clear()
+        waiters = [
+            self._create_task(sleep(), "tion_cloud_renew_retry"),
+            self._create_task(wakeup(), "tion_cloud_renew_wakeup"),
+        ]
+        try:
+            await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for waiter in waiters:
+                waiter.cancel()
+            await asyncio.gather(*waiters, return_exceptions=True)
+
+    def _on_tokens(self, tokens: TionTokens) -> None:
+        self._renew_wakeup.set()
+        self._notify()
 
     def _fail_pending(self, error: TionError) -> None:
         for pending in (self._pending_queries, self._pending_commands):
