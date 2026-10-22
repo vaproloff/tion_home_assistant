@@ -154,7 +154,7 @@ caddy reverse-proxy --from :80 --to https://<домен> --change-host-header
 ## English summary
 
 - Since October 2026 Tion's server accepts the captcha token only from a page whose address is exactly `http://localhost`. Only new setups and re-authentication are affected.
-- An already configured integration keeps working: do not delete it. If you get a re-authentication notice while devices work, reload the integration entry first.
+- An already configured integration keeps working: do not delete it. If you get a re-authentication notice and your devices stopped working only recently, wait: since 2026.10.1 the integration keeps trying and the request disappears by itself once the connection is back. If it stays for more than a day, sign in again. In 2026.10.0 a false request was cleared by reloading the integration entry.
 - `localhost` always means the computer the browser runs on, so forward port 80 of your own computer (`127.0.0.1:80`; it needs `sudo` on Linux and macOS) to Home Assistant (port 8123) for the few minutes of the login.
 - Options: `netsh interface portproxy` (Windows), `ssh -L` or `socat` (macOS/Linux), Docker with `alpine/socat`, or the scripts `captcha_proxy_local.py` (plain TCP, Home Assistant over http) and `captcha_proxy_https.py` (HTTP proxy for Home Assistant behind an HTTPS address, where a TCP forward does not work).
 - Check that `http://localhost/` shows the Home Assistant login page, then enter `http://localhost` in the "Адрес страницы капчи" (captcha page address) field of the login form.
