@@ -25,6 +25,7 @@ from custom_components.tion.api.views import BREEZER_PRODUCTS, STATION_PRODUCTS
 from custom_components.tion.const import (
     CONF_DEVICE_KEY,
     CONF_PID_ENABLED,
+    DATA_START_FAILURES,
     DOMAIN,
     MODEL_NAMES,
     PID_NUMBER_KEYS,
@@ -507,6 +508,22 @@ async def test_removing_the_entry_clears_the_issue(
     await hass.config_entries.async_remove(config_entry.entry_id)
 
     assert issue_registry.async_get_issue(DOMAIN, _issue_id(config_entry)) is None
+
+
+async def test_removing_the_entry_forgets_its_failed_starts(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+) -> None:
+    """Removing the entry drops only its own failed-start record."""
+    with patch("custom_components.tion.PLATFORMS", []):
+        await setup_entry(hass, config_entry, cloud, auth)
+    hass.data[DATA_START_FAILURES] = {config_entry.entry_id: 1.0, "other": 2.0}
+
+    await hass.config_entries.async_remove(config_entry.entry_id)
+
+    assert hass.data[DATA_START_FAILURES] == {"other": 2.0}
 
 
 @pytest.mark.parametrize(

@@ -140,8 +140,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: TionConfigEntry) -> boo
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: TionConfigEntry) -> None:
-    """Drop the entry's repair issue."""
+    """Drop the entry's repair issue and failed-start record."""
     ir.async_delete_issue(hass, DOMAIN, _migration_issue_id(entry))
+    async_forget_failed_starts(hass, entry)
 
 
 async def async_remove_config_entry_device(
