@@ -31,6 +31,8 @@ DEFAULT_HA_PORT = 8123
 BUFFER_SIZE = 65536
 CONNECT_TIMEOUT = 10
 
+_CLIENTS: set[asyncio.StreamWriter] = set()
+
 
 def _port(value: str) -> int:
     """Parse a TCP port number for argparse."""
@@ -56,7 +58,7 @@ async def _pump(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
             await writer.drain()
 
 
-async def _handle(
+async def _relay(
     client_reader: asyncio.StreamReader,
     client_writer: asyncio.StreamWriter,
     host: str,
@@ -71,7 +73,6 @@ async def _handle(
         _LOGGER.warning(
             "Cannot reach %s:%s: %s", host, port, str(err) or type(err).__name__
         )
-        client_writer.close()
         return
 
     _LOGGER.info(
@@ -89,8 +90,22 @@ async def _handle(
     finally:
         for task in tasks:
             task.cancel()
-        client_writer.close()
         upstream_writer.close()
+
+
+async def _handle(
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+    host: str,
+    port: int,
+) -> None:
+    """Serve one browser connection, tracked so that Ctrl+C can drop it."""
+    _CLIENTS.add(client_writer)
+    try:
+        await _relay(client_reader, client_writer, host, port)
+    finally:
+        client_writer.close()
+        _CLIENTS.discard(client_writer)
 
 
 async def _serve(host: str, port: int, listen_port: int) -> int:
@@ -104,8 +119,8 @@ async def _serve(host: str, port: int, listen_port: int) -> int:
     except OSError as err:
         _LOGGER.error(
             "Cannot listen on %s:%s (%s). The port is probably in use by another "
-            "program, or binding it needs elevated privileges (on Linux run the "
-            "script with sudo).",
+            "program, or binding it needs elevated privileges (on Linux or macOS "
+            "run the script with sudo).",
             LISTEN_HOST,
             listen_port,
             err,
@@ -119,8 +134,14 @@ async def _serve(host: str, port: int, listen_port: int) -> int:
         host,
         port,
     )
-    async with server:
-        await server.serve_forever()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        # Not serve_forever() or "async with server": since Python 3.12.1 they
+        # wait for every open browser connection, so one Ctrl+C would do nothing.
+        server.close()
+        for writer in list(_CLIENTS):
+            writer.transport.abort()
     return 0
 
 

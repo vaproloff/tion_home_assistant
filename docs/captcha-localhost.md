@@ -15,7 +15,7 @@
 Проброс порта нужен только на время входа (несколько минут), потом его можно выключить.
 
 - Компьютер с браузером (Windows, macOS или Linux), с которого вы входите в Home Assistant. С телефона и планшета этот способ не работает.
-- На этом компьютере должен быть свободен порт 80. На Linux для этого нужен `sudo`, на macOS и Windows права администратора для порта 80 не нужны (для `netsh` в Windows нужна консоль от имени администратора).
+- На этом компьютере должен быть свободен порт 80. На Linux и macOS для порта 80 на адресе `127.0.0.1` нужен `sudo` (macOS даёт обычному пользователю порты ниже 1024 только на всех адресах сразу, но не на `127.0.0.1`). В Windows `sudo` нет, там для `netsh` нужна консоль от имени администратора.
 - Home Assistant доступен с этого компьютера одним из двух способов. От него зависит рецепт:
   - **по обычному `http` в локальной сети**, например `http://homeassistant.local:8123` или `http://192.168.1.50:8123`. Это раздел «Home Assistant дома, по http»;
   - **по своему HTTPS-адресу**: облачный домен Keenetic, Nabu Casa, собственный домен за прокси. Это раздел «Home Assistant по HTTPS-адресу». Туда же относится случай, когда TLS включён на самом Home Assistant.
@@ -52,7 +52,7 @@ netsh interface portproxy delete v4tov4 listenport=80 listenaddress=127.0.0.1
 ssh -L 127.0.0.1:80:localhost:8123 <пользователь>@<HA>
 ```
 
-На Linux перед командой нужен `sudo`: `sudo ssh -L 127.0.0.1:80:localhost:8123 <пользователь>@<HA>`. Под `sudo` SSH ищет ключи в домашней папке root, поэтому при входе по ключу добавьте `-i ~/.ssh/<файл ключа>`. На macOS `sudo` не нужен.
+На Linux и macOS перед командой нужен `sudo`: `sudo ssh -L 127.0.0.1:80:localhost:8123 <пользователь>@<HA>`. Под `sudo` SSH ищет ключи в домашней папке root, поэтому при входе по ключу добавьте `-i ~/.ssh/<файл ключа>`.
 
 Проброс работает, пока открыт этот сеанс SSH. Чтобы выключить его, завершите сеанс (`exit` или Ctrl+C).
 
@@ -64,7 +64,7 @@ ssh -L 127.0.0.1:80:localhost:8123 <пользователь>@<HA>
 socat TCP-LISTEN:80,bind=127.0.0.1,fork,reuseaddr TCP:<HA>:8123
 ```
 
-На Linux перед командой нужен `sudo`. Выключить проброс: Ctrl+C в этом окне.
+На Linux и macOS перед командой нужен `sudo`. Выключить проброс: Ctrl+C в этом окне.
 
 ### Любая ОС с Python 3: скрипт `captcha_proxy_local.py`
 
@@ -75,7 +75,7 @@ curl -O https://raw.githubusercontent.com/vaproloff/tion_home_assistant/master/d
 python3 captcha_proxy_local.py <HA> 8123
 ```
 
-В Windows команда `curl` в PowerShell это псевдоним другой команды: пишите `curl.exe -O ...`, а Python запускайте как `python` или `py`. На Linux перед `python3` нужен `sudo`. Скрипт пишет в окно, что делает; выключить его можно Ctrl+C. Если порт 80 занят или не хватает прав, скрипт так и скажет.
+В Windows команда `curl` в PowerShell это псевдоним другой команды: пишите `curl.exe -O ...`, а Python запускайте как `python` или `py`. На Linux и macOS перед `python3` нужен `sudo`. Скрипт пишет в окно, что делает; выключить его можно Ctrl+C. Если порт 80 занят или не хватает прав, скрипт так и скажет.
 
 ### Docker
 
@@ -100,7 +100,7 @@ curl -O https://raw.githubusercontent.com/vaproloff/tion_home_assistant/master/d
 python3 captcha_proxy_https.py https://<домен>
 ```
 
-Если адрес с портом, укажите его: `https://<домен>:<порт>`. Допустим и `http://<хост>:<порт>` (например, Home Assistant с http, но за обратным прокси с нестандартным именем хоста). Особенности запуска те же, что у `captcha_proxy_local.py`: `curl.exe` и `py` в Windows, `sudo` на Linux, выключение Ctrl+C. Если у адреса самоподписанный сертификат, скрипт ответит ошибкой 502 «certificate verify failed»: используйте адрес с доверенным сертификатом.
+Если адрес с портом, укажите его: `https://<домен>:<порт>`. Допустим и `http://<хост>:<порт>` (например, Home Assistant с http, но за обратным прокси с нестандартным именем хоста). Особенности запуска те же, что у `captcha_proxy_local.py`: `curl.exe` и `py` в Windows, `sudo` на Linux и macOS, выключение Ctrl+C. Если у адреса самоподписанный сертификат, скрипт ответит ошибкой 502 «certificate verify failed»: используйте адрес с доверенным сертификатом.
 
 ### Готовые альтернативы
 
@@ -121,7 +121,7 @@ caddy reverse-proxy --from :80 --to https://<домен> --change-host-header
 Если Home Assistant запущен на том же компьютере, где открыт браузер (Home Assistant Core в виртуальном окружении или Docker Desktop), отдельный прокси обычно не нужен:
 
 - **Docker (в том числе Docker Desktop):** опубликуйте порт контейнера Home Assistant как порт 80 компьютера: `-p 127.0.0.1:80:8123` в `docker run` или `"127.0.0.1:80:8123"` в `ports:` в `docker-compose.yml`.
-- **Home Assistant Core в виртуальном окружении:** временно запустите Home Assistant на порту 80 (в `configuration.yaml`, раздел `http:`, параметр `server_port: 80`; потом верните `8123`) либо запустите `python3 captcha_proxy_local.py 127.0.0.1 8123`.
+- **Home Assistant Core в виртуальном окружении:** проще всего запустить `python3 captcha_proxy_local.py 127.0.0.1 8123` (на Linux и macOS с `sudo`). Можно и временно запустить сам Home Assistant на порту 80 (раздел `http:` в `configuration.yaml`, параметр `server_port: 80`; потом верните `8123`), но порт 80 на Linux и macOS потребует прав и для него.
 
 ## Проверка
 
@@ -151,7 +151,7 @@ caddy reverse-proxy --from :80 --to https://<домен> --change-host-header
 
 - Since October 2026 Tion's server accepts the captcha token only from a page whose address is exactly `http://localhost`. Only new setups and re-authentication are affected.
 - An already configured integration keeps working: do not delete it. If you get a re-authentication notice while devices work, reload the integration entry first.
-- `localhost` always means the computer the browser runs on, so forward port 80 of your own computer (`127.0.0.1:80`) to Home Assistant (port 8123) for the few minutes of the login.
+- `localhost` always means the computer the browser runs on, so forward port 80 of your own computer (`127.0.0.1:80`; it needs `sudo` on Linux and macOS) to Home Assistant (port 8123) for the few minutes of the login.
 - Options: `netsh interface portproxy` (Windows), `ssh -L` or `socat` (macOS/Linux), Docker with `alpine/socat`, or the scripts `captcha_proxy_local.py` (plain TCP, Home Assistant over http) and `captcha_proxy_https.py` (HTTP proxy for Home Assistant behind an HTTPS address, where a TCP forward does not work).
 - Check that `http://localhost/` shows the Home Assistant login page, then enter `http://localhost` in the "Адрес страницы капчи" (captcha page address) field of the login form.
 - Nothing is spoofed: the captcha page really is opened at `http://localhost`. Remove the forwarding after you have signed in.

@@ -37,6 +37,8 @@ BUFFER_SIZE = 65536
 HEADER_LIMIT = 262144
 CONNECT_TIMEOUT = 15
 
+_CLIENTS: set[asyncio.StreamWriter] = set()
+
 HOP_BY_HOP = frozenset(
     {
         "connection",
@@ -259,13 +261,15 @@ async def _relay(
 async def _handle(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter, target: Target
 ) -> None:
-    """Serve one browser connection and close it afterwards."""
+    """Serve one browser connection, tracked so that Ctrl+C can drop it."""
+    _CLIENTS.add(writer)
     try:
         await _relay(reader, writer, target)
     except (OSError, asyncio.IncompleteReadError) as err:
         _LOGGER.debug("Connection ended early: %r", err)
     finally:
         writer.close()
+        _CLIENTS.discard(writer)
 
 
 async def _serve(target: Target, listen_port: int) -> int:
@@ -280,8 +284,8 @@ async def _serve(target: Target, listen_port: int) -> int:
     except OSError as err:
         _LOGGER.error(
             "Cannot listen on %s:%s (%s). The port is probably in use by another "
-            "program, or binding it needs elevated privileges (on Linux run the "
-            "script with sudo).",
+            "program, or binding it needs elevated privileges (on Linux or macOS "
+            "run the script with sudo).",
             LISTEN_HOST,
             listen_port,
             err,
@@ -295,8 +299,14 @@ async def _serve(target: Target, listen_port: int) -> int:
         "https" if target.ssl_context else "http",
         target.host_header,
     )
-    async with server:
-        await server.serve_forever()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        # Not serve_forever() or "async with server": since Python 3.12.1 they
+        # wait for every open browser connection, so one Ctrl+C would do nothing.
+        server.close()
+        for writer in list(_CLIENTS):
+            writer.transport.abort()
     return 0
 
 
