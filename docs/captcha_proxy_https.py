@@ -285,7 +285,8 @@ async def _serve(target: Target, listen_port: int) -> int:
         _LOGGER.error(
             "Cannot listen on %s:%s (%s). The port is probably in use by another "
             "program, or binding it needs elevated privileges (on Linux or macOS "
-            "run the script with sudo).",
+            "run the script with sudo; on Windows run: netstat -ano | findstr :80 "
+            "(PID 4 means the built-in HTTP service holds the port)).",
             LISTEN_HOST,
             listen_port,
             err,
@@ -324,7 +325,11 @@ def main() -> int:
         "--listen-port",
         type=_port,
         default=DEFAULT_LISTEN_PORT,
-        help=f"local port to listen on (default {DEFAULT_LISTEN_PORT})",
+        help=(
+            f"local port to listen on (default {DEFAULT_LISTEN_PORT}); Tion accepts "
+            "the captcha only from port 80, other ports are for testing the "
+            "forwarder only"
+        ),
     )
     args = parser.parse_args()
 

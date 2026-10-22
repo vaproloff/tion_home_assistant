@@ -46,7 +46,7 @@ netsh interface portproxy delete v4tov4 listenport=80 listenaddress=127.0.0.1
 
 ### macOS и Linux: SSH на Home Assistant
 
-Подходит, если на Home Assistant есть SSH (например аддон Terminal & SSH):
+Подходит, если на Home Assistant есть SSH с разрешённым пробросом портов (на Home Assistant OS см. замечание ниже):
 
 ```
 ssh -L 127.0.0.1:80:localhost:8123 <пользователь>@<HA>
@@ -55,6 +55,8 @@ ssh -L 127.0.0.1:80:localhost:8123 <пользователь>@<HA>
 На Linux и macOS перед командой нужен `sudo`: `sudo ssh -L 127.0.0.1:80:localhost:8123 <пользователь>@<HA>`. Под `sudo` SSH ищет ключи в домашней папке root, поэтому при входе по ключу добавьте `-i ~/.ssh/<файл ключа>`.
 
 Проброс работает, пока открыт этот сеанс SSH. Чтобы выключить его, завершите сеанс (`exit` или Ctrl+C).
+
+На Home Assistant OS аддоны SSH обычно запрещают проброс TCP: в Advanced SSH & Web Terminal нужен параметр `allow_tcp_forwarding: true`, а официальный аддон Terminal & SSH проброс может не разрешать совсем. Кроме того, внутри аддона Home Assistant доступен как `homeassistant:8123`, а не как `localhost:8123`. Поэтому для Home Assistant OS лучше взять `socat` или скрипт ниже, а если проброс в аддоне включён, используйте `ssh -L 127.0.0.1:80:homeassistant:8123 <пользователь>@<HA>` (с `sudo`, как выше). Если ssh пишет `administratively prohibited`, проброс на стороне Home Assistant выключен.
 
 ### macOS и Linux: `socat`
 
@@ -87,6 +89,8 @@ docker run --rm -p 127.0.0.1:80:8123 alpine/socat TCP-LISTEN:8123,fork,reuseaddr
 
 Порт публикуется только на `127.0.0.1`. Выключить: Ctrl+C в этом окне (контейнер удалится сам из-за `--rm`).
 
+Внутри контейнера `alpine/socat` имя `homeassistant.local` не разрешается, поэтому вместо `<HA>` укажите IP-адрес Home Assistant (например `192.168.1.50`).
+
 ## Home Assistant по HTTPS-адресу
 
 Если Home Assistant открывается по `https://<домен>`, обычный проброс TCP-порта (`netsh`, `ssh -L`, `socat`, Docker) здесь не годится. Браузер открывает `http://localhost` без шифрования, а адрес за HTTPS ждёт TLS и запросы со своим именем хоста. Нужен HTTP-прокси: он принимает запрос браузера и в запросе к вашему Home Assistant подставляет имя хоста Home Assistant (заголовок `Host`). Это касается только связи с вашим Home Assistant; Tion прокси не затрагивает: капча и вход идут из вашего браузера со страницы `http://localhost`.
@@ -100,7 +104,7 @@ curl -O https://raw.githubusercontent.com/vaproloff/tion_home_assistant/master/d
 python3 captcha_proxy_https.py https://<домен>
 ```
 
-Если адрес с портом, укажите его: `https://<домен>:<порт>`. Допустим и `http://<хост>:<порт>` (например, Home Assistant с http, но за обратным прокси с нестандартным именем хоста). Особенности запуска те же, что у `captcha_proxy_local.py`: `curl.exe` и `py` в Windows, `sudo` на Linux и macOS, выключение Ctrl+C. Если у адреса самоподписанный сертификат, скрипт ответит ошибкой 502 «certificate verify failed»: используйте адрес с доверенным сертификатом.
+Если адрес с портом, укажите его: `https://<домен>:<порт>`. Допустим и `http://<хост>:<порт>` (например, Home Assistant с http, но за обратным прокси с нестандартным именем хоста). Особенности запуска те же, что у `captcha_proxy_local.py`: `curl.exe` и `py` в Windows, `sudo` на Linux и macOS, выключение Ctrl+C. Если у адреса самоподписанный сертификат, скрипт ответит ошибкой 502 «certificate verify failed»: используйте адрес с доверенным сертификатом. На macOS с Python с python.org та же ошибка появляется для любого HTTPS-адреса, пока один раз не запущен `Install Certificates.command` из папки Python в «Программах» (Applications).
 
 ### Готовые альтернативы
 
@@ -120,7 +124,7 @@ caddy reverse-proxy --from :80 --to https://<домен> --change-host-header
 
 Если Home Assistant запущен на том же компьютере, где открыт браузер (Home Assistant Core в виртуальном окружении или Docker Desktop), отдельный прокси обычно не нужен:
 
-- **Docker (в том числе Docker Desktop):** опубликуйте порт контейнера Home Assistant как порт 80 компьютера: `-p 127.0.0.1:80:8123` в `docker run` или `"127.0.0.1:80:8123"` в `ports:` в `docker-compose.yml`.
+- **Docker (в том числе Docker Desktop):** опубликуйте порт контейнера Home Assistant как порт 80 компьютера: `-p 127.0.0.1:80:8123` в `docker run` или `"127.0.0.1:80:8123"` в `ports:` в `docker-compose.yml`. Но Home Assistant Container обычно запускают с `--network host`, а в этом режиме `-p` игнорируется (порт `8123` и так открыт на самом компьютере). Тогда пробросьте порт 80 на IP-адрес этого компьютера через `socat` или скрипт: например `python3 captcha_proxy_local.py <HA> 8123`, где `<HA>` это IP-адрес компьютера с Home Assistant.
 - **Home Assistant Core в виртуальном окружении:** проще всего запустить `python3 captcha_proxy_local.py 127.0.0.1 8123` (на Linux и macOS с `sudo`). Можно и временно запустить сам Home Assistant на порту 80 (раздел `http:` в `configuration.yaml`, параметр `server_port: 80`; потом верните `8123`), но порт 80 на Linux и macOS потребует прав и для него.
 
 ## Проверка
