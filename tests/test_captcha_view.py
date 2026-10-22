@@ -16,6 +16,7 @@ from custom_components.tion.captcha_view import (
     async_register_captcha_view,
     captcha_page_url,
     captcha_url,
+    parse_captcha_base_url,
 )
 from custom_components.tion.const import CONF_CAPTCHA_TOKEN, DOMAIN
 from homeassistant.components.http import KEY_HASS
@@ -101,6 +102,15 @@ async def test_get_serves_page_with_sitekey_and_post_url(client: TestClient) -> 
     assert f'const POST_URL = "{captcha_url(FLOW_ID)}";' in page
     assert "__SITEKEY__" not in page
     assert "smartcaptcha.cloud.yandex.ru/captcha.js" in page
+
+
+@pytest.mark.asyncio
+async def test_page_served_for_localhost_host_header(client: TestClient) -> None:
+    """Through a port forward the page arrives with Host: localhost and is served."""
+    response = await client.get(captcha_url(FLOW_ID), headers={"Host": "localhost"})
+
+    assert response.status == 200
+    assert f'const SITEKEY = "{CAPTCHA_SITEKEY}";' in await response.text()
 
 
 @pytest.mark.asyncio
@@ -281,3 +291,56 @@ def test_captcha_page_url_uses_frontend_origin(
 def test_captcha_page_url_without_request() -> None:
     """Outside an HTTP request the page path is the best available URL."""
     assert captcha_page_url(FLOW_ID) == f"/api/tion/captcha/{FLOW_ID}"
+
+
+def test_captcha_page_url_with_base_ignores_request() -> None:
+    """An explicit base replaces the frontend origin."""
+    token = current_request.set(
+        SimpleNamespace(headers={HEADER_FRONTEND_BASE: "http://192.168.1.10:8123"})
+    )
+    try:
+        assert (
+            captcha_page_url(FLOW_ID, "http://localhost")
+            == f"http://localhost/api/tion/captcha/{FLOW_ID}"
+        )
+    finally:
+        current_request.reset(token)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(None, None, id="none"),
+        pytest.param("", None, id="empty"),
+        pytest.param("   ", None, id="blank"),
+        pytest.param("http://localhost", "http://localhost", id="plain"),
+        pytest.param("http://localhost/", "http://localhost", id="trailing_slash"),
+        pytest.param(
+            " https://HA.example.org:443 ",
+            "https://HA.example.org:443",
+            id="port_and_spaces",
+        ),
+        pytest.param("http://[::1]", "http://[::1]", id="ipv6"),
+    ],
+)
+def test_parse_captcha_base_url(value: str | None, expected: str | None) -> None:
+    """A bare http(s) origin is normalized; nothing means the frontend origin."""
+    assert parse_captcha_base_url(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("localhost", id="no_scheme"),
+        pytest.param("ftp://localhost", id="wrong_scheme"),
+        pytest.param("http://", id="no_host"),
+        pytest.param("http://localhost/api", id="path"),
+        pytest.param("http://localhost/?x=1", id="query"),
+        pytest.param("http://localhost#top", id="fragment"),
+        pytest.param("http://user:pw@localhost", id="userinfo"),
+    ],
+)
+def test_parse_captcha_base_url_rejects(value: str) -> None:
+    """Anything but an http(s) origin is refused."""
+    with pytest.raises(ValueError):
+        parse_captcha_base_url(value)

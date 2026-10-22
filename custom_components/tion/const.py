@@ -34,6 +34,8 @@ FAN_LOCAL_PID = "local_pid"
 # unique_id keys of a breezer's local PID numbers.
 PID_NUMBER_KEYS = ("min_speed_set", "max_speed_set", "external_target_co2")
 CONF_CAPTCHA_TOKEN = "captcha_token"
+CONF_CAPTCHA_BASE_URL = "captcha_base_url"
+DOCS_CAPTCHA_URL = "https://github.com/vaproloff/tion_home_assistant/blob/master/docs/captcha-localhost.md"
 CONF_DEVICE_KEY = "device_key"
 CONF_DEVICE_KEY_ID = "device_key_id"
 MANUFACTURER = "Tion"

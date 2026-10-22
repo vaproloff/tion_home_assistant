@@ -3,6 +3,7 @@
 from http import HTTPStatus
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -27,8 +28,28 @@ def captcha_url(flow_id: str) -> str:
     return f"{CAPTCHA_PATH}/{flow_id}"
 
 
-def captcha_page_url(flow_id: str) -> str:
+def parse_captcha_base_url(value: str | None) -> str | None:
+    """Return the http(s) origin from user input, None if nothing was entered."""
+    # The page posts the token by a relative path, so only the origin is needed.
+    if value is None or not (value := value.strip()):
+        return None
+    parts = urlsplit(value)
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.netloc
+        or "@" in parts.netloc
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError(value)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def captcha_page_url(flow_id: str, base_url: str | None = None) -> str:
     """Return the captcha page URL for the flow's external step."""
+    if base_url:
+        return f"{base_url}{captcha_url(flow_id)}"
     # The frontend only opens absolute http(s) external-step URLs; it sends its
     # own origin with every config flow request.
     request = current_request.get()
