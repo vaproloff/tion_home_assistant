@@ -140,7 +140,7 @@ async def test_refresh_success_resolves_reauth(
 async def test_refresh_success_keeps_reauth_while_cloud_auth_error(
     hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
 ) -> None:
-    """A refresh that did not renew the token proves nothing while auth_error stands."""
+    """Guard: a refresh without a renewal proves nothing while auth_error stands."""
     cloud.auth_error = TionAuthError("expired")
     cloud.push(cloud.account)
     await hass.async_block_till_done()
@@ -186,7 +186,7 @@ async def test_refresh_failure_with_auth_error_opens_and_closes_reauth(
 async def test_refresh_failure_without_auth_error_opens_nothing(
     hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
 ) -> None:
-    """An ordinary outage is not a sign-in problem."""
+    """Guard: an ordinary outage is not a sign-in problem."""
     cloud.refresh_error = TionConnectionError("down")
 
     await coordinator.async_refresh()
@@ -231,7 +231,7 @@ async def test_push_during_unload_does_not_open_reauth(
 async def test_pushes_without_auth_error_do_not_touch_flows(
     hass: HomeAssistant, cloud: FakeTionCloud
 ) -> None:
-    """Ordinary pushes neither open nor abort anything."""
+    """Guard: ordinary pushes neither open nor abort anything."""
     cloud.push(cloud.account)
     await hass.async_block_till_done()
 

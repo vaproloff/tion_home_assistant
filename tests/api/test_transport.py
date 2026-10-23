@@ -217,7 +217,7 @@ async def test_trailers_only_status_in_headers() -> None:
         pytest.param(
             FakeResponse(200, _trailers("grpc-status: 9")),
             TionApiError,
-            id="failed_precondition",
+            id="failed_precondition_stays_api_error",
         ),
     ],
 )
