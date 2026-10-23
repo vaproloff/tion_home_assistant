@@ -35,26 +35,24 @@ type TionConfigEntry = ConfigEntry[TionCoordinator]
 
 
 @callback
-def async_abort_reauth_flows(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Abort the entry's open reauth flows."""
+def async_abort_reauth_flows(
+    hass: HomeAssistant, entry: ConfigEntry, *, step_id: str | None = None
+) -> None:
+    """Abort the entry's open reauth flows, only those at step_id when given."""
     for flow in hass.config_entries.flow.async_progress_by_handler(
         DOMAIN,
         match_context={"entry_id": entry.entry_id, "source": SOURCE_REAUTH},
     ):
-        hass.config_entries.flow.async_abort(flow["flow_id"])
+        if step_id is None or flow["step_id"] == step_id:
+            hass.config_entries.flow.async_abort(flow["flow_id"])
 
 
 @callback
 def async_open_reauth(hass: HomeAssistant, entry: ConfigEntry, *, stale: bool) -> None:
     """Open the sign-in form for the reason; a refusal replaces an outage form."""
     if not stale:
-        for flow in hass.config_entries.flow.async_progress_by_handler(
-            DOMAIN,
-            match_context={"entry_id": entry.entry_id, "source": SOURCE_REAUTH},
-        ):
-            # A flow past the first form is the user's work in progress.
-            if flow["step_id"] == REAUTH_STEP_STALE:
-                hass.config_entries.flow.async_abort(flow["flow_id"])
+        # A flow past the first form is the user's work in progress.
+        async_abort_reauth_flows(hass, entry, step_id=REAUTH_STEP_STALE)
     entry.async_start_reauth(hass, data={REAUTH_DATA_STALE: True} if stale else None)
 
 

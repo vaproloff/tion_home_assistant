@@ -110,7 +110,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     """Tion config flow."""
 
     VERSION = 1
-    _reauth_step = "reauth_confirm"
+    _reauth_step: str = "reauth_confirm"
 
     def __init__(self) -> None:
         """Initialize the flow."""
