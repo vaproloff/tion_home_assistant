@@ -28,6 +28,7 @@ from custom_components.tion.api.device_key import TionDeviceKey, sha256_b64url
 from custom_components.tion.api.exceptions import (
     TionApiError,
     TionAuthError,
+    TionAuthStaleError,
     TionConnectionError,
 )
 from custom_components.tion.api.protobuf import (
@@ -469,6 +470,7 @@ async def test_terminal_renew_error_is_remembered_until_interval() -> None:
         await auth.async_renew_access()
     assert auth.renew_error is first.value
     assert second.value is first.value
+    assert not isinstance(auth.renew_error, TionAuthStaleError)
     assert len(transport.calls) == 1
 
     transport.now = NOW + RENEW_RETRY_INTERVAL
@@ -640,6 +642,7 @@ async def test_renew_failed_precondition_is_terminal() -> None:
 
     assert auth.renew_error is first.value
     assert second.value is first.value
+    assert not isinstance(auth.renew_error, TionAuthStaleError)
     assert len(transport.calls) == 1
 
 
@@ -684,7 +687,7 @@ async def test_renew_failure_streak_becomes_auth_error_after_stale_interval() ->
     transport.now = NOW + RENEW_STALE_AFTER
     with pytest.raises(TionConnectionError):
         await auth.async_renew_access()
-    assert isinstance(auth.renew_error, TionAuthError)
+    assert isinstance(auth.renew_error, TionAuthStaleError)
     assert "failing since" in str(auth.renew_error)
 
     tokens = await auth.async_renew_access()
@@ -730,7 +733,7 @@ async def test_terminal_error_outranks_the_streak() -> None:
     transport.now = NOW + RENEW_STALE_AFTER
     with pytest.raises(TionConnectionError):
         await auth.async_renew_access()
-    assert isinstance(auth.renew_error, TionAuthError)
+    assert isinstance(auth.renew_error, TionAuthStaleError)
     assert "failing since" in str(auth.renew_error)
 
     with pytest.raises(TionAuthError) as err:
@@ -738,3 +741,4 @@ async def test_terminal_error_outranks_the_streak() -> None:
 
     assert auth.renew_error is err.value
     assert "rejected (1)" in str(auth.renew_error)
+    assert not isinstance(auth.renew_error, TionAuthStaleError)

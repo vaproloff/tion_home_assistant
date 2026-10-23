@@ -19,7 +19,13 @@ from .device_key import (
     b64url,
     sha256_b64url,
 )
-from .exceptions import TionApiError, TionAuthError, TionConnectionError, TionError
+from .exceptions import (
+    TionApiError,
+    TionAuthError,
+    TionAuthStaleError,
+    TionConnectionError,
+    TionError,
+)
 from .protobuf import ProtoMessage, encode_bytes, encode_string, encode_varint
 from .transport import GRPC_FAILED_PRECONDITION, TionTransport
 
@@ -188,7 +194,7 @@ class TionAuth:
         self._renew_lock = asyncio.Lock()
         self._renew_error: TionAuthError | None = None
         self._renew_retry_at = 0.0
-        self._stale_error: TionAuthError | None = None
+        self._stale_error: TionAuthStaleError | None = None
         self._renew_failing_since: float | None = None
         self._email_token: bytes | None = None
         self._email_verifier: str | None = None
@@ -387,7 +393,7 @@ class TionAuth:
             self._stale_error is None
             and now - self._renew_failing_since >= RENEW_STALE_AFTER
         ):
-            self._stale_error = TionAuthError(
+            self._stale_error = TionAuthStaleError(
                 f"RenewAccess has been failing since {self._renew_failing_since:.0f}: "
                 f"{err}"
             )

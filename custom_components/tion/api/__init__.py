@@ -6,6 +6,7 @@ from .device_key import TionDeviceKey
 from .exceptions import (
     TionApiError,
     TionAuthError,
+    TionAuthStaleError,
     TionCommandError,
     TionConnectionError,
     TionDeviceTimeoutError,
@@ -28,6 +29,7 @@ __all__ = [
     "TionApiError",
     "TionAuth",
     "TionAuthError",
+    "TionAuthStaleError",
     "TionCloud",
     "TionCommandError",
     "TionConnectionError",

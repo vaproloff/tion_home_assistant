@@ -9,6 +9,10 @@ class TionAuthError(TionError):
     """Tion authentication error."""
 
 
+class TionAuthStaleError(TionAuthError):
+    """Renewals have been failing for an hour: maybe an outage, not a refusal."""
+
+
 class TionConnectionError(TionError):
     """Tion connection error."""
 
