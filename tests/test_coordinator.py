@@ -3,15 +3,22 @@
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
 from ha_tests.common import MockConfigEntry, async_fire_time_changed
 import pytest
 
-from custom_components.tion.api import TionApiError, TionAuthError, TionConnectionError
-from custom_components.tion.const import DOMAIN
+from custom_components.tion.api import (
+    TionApiError,
+    TionAuthError,
+    TionAuthStaleError,
+    TionConnectionError,
+)
+from custom_components.tion.const import DOMAIN, REAUTH_STEP_STALE
 from custom_components.tion.coordinator import TionCoordinator
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -100,6 +107,15 @@ def _reauth_flows(hass: HomeAssistant) -> list[str]:
     ]
 
 
+def _reauth_steps(hass: HomeAssistant) -> list[str]:
+    return [
+        flow["step_id"]
+        for flow in hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, match_context={"source": SOURCE_REAUTH}
+        )
+    ]
+
+
 async def test_refresh_auth_error_asks_to_sign_in_and_keeps_refreshing(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -165,8 +181,8 @@ async def test_refresh_failure_with_auth_error_opens_and_closes_reauth(
     error: Exception,
     translation_key: str,
 ) -> None:
-    """A failed refresh still reports a flagged session; clearing it closes the request."""
-    cloud.auth_error = TionAuthError("RenewAccess has been failing since 0")
+    """A failed refresh still reports a flagged session; clearing it closes it."""
+    cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
     cloud.refresh_error = error
 
     await coordinator.async_refresh()
@@ -174,7 +190,7 @@ async def test_refresh_failure_with_auth_error_opens_and_closes_reauth(
 
     assert isinstance(coordinator.last_exception, UpdateFailed)
     assert coordinator.last_exception.translation_key == translation_key
-    assert len(_reauth_flows(hass)) == 1
+    assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
 
     cloud.auth_error = None
     await coordinator.async_refresh()
@@ -280,3 +296,46 @@ async def test_unload_cancels_grace(
     cloud.push(replace(cloud.account, connected=False))
 
     assert await hass.config_entries.async_unload(init_integration.entry_id)
+
+
+@pytest.mark.usefixtures("coordinator")
+async def test_refusal_replaces_an_open_outage_form(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """An explicit refusal swaps the open "outage" form for the confirm form."""
+    cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+    assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
+
+    cloud.auth_error = TionAuthError("RenewAccess rejected (1): nope")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert _reauth_steps(hass) == ["reauth_confirm"]
+
+
+@pytest.mark.usefixtures("coordinator")
+async def test_refusal_keeps_a_flow_the_user_is_working_through(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """A refusal does not interrupt a flow already past the password form."""
+    cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+    [flow_id] = _reauth_flows(hass)
+    with (
+        patch("custom_components.tion.config_flow.async_create_auth", AsyncMock()),
+        patch("custom_components.tion.config_flow.async_register_captcha_view"),
+    ):
+        await hass.config_entries.flow.async_configure(flow_id, {CONF_PASSWORD: "pw"})
+
+    cloud.auth_error = TionAuthError("RenewAccess rejected (1): nope")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    [flow] = hass.config_entries.flow.async_progress_by_handler(
+        DOMAIN, match_context={"source": SOURCE_REAUTH}
+    )
+    assert flow["flow_id"] == flow_id
+    assert flow["step_id"] == "captcha"

@@ -13,10 +13,18 @@ from .api import (
     TionAccount,
     TionApiError,
     TionAuthError,
+    TionAuthStaleError,
     TionCloud,
     TionConnectionError,
 )
-from .const import DATA_START_FAILURES, DISCONNECT_GRACE, DOMAIN, REFRESH_INTERVAL
+from .const import (
+    DATA_START_FAILURES,
+    DISCONNECT_GRACE,
+    DOMAIN,
+    REAUTH_DATA_STALE,
+    REAUTH_STEP_STALE,
+    REFRESH_INTERVAL,
+)
 
 if TYPE_CHECKING:
     from .pid_manager import TionPidManager
@@ -34,6 +42,20 @@ def async_abort_reauth_flows(hass: HomeAssistant, entry: ConfigEntry) -> None:
         match_context={"entry_id": entry.entry_id, "source": SOURCE_REAUTH},
     ):
         hass.config_entries.flow.async_abort(flow["flow_id"])
+
+
+@callback
+def async_open_reauth(hass: HomeAssistant, entry: ConfigEntry, *, stale: bool) -> None:
+    """Open the sign-in form for the reason; a refusal replaces an outage form."""
+    if not stale:
+        for flow in hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN,
+            match_context={"entry_id": entry.entry_id, "source": SOURCE_REAUTH},
+        ):
+            # A flow past the first form is the user's work in progress.
+            if flow["step_id"] == REAUTH_STEP_STALE:
+                hass.config_entries.flow.async_abort(flow["flow_id"])
+    entry.async_start_reauth(hass, data={REAUTH_DATA_STALE: True} if stale else None)
 
 
 @callback
@@ -103,13 +125,17 @@ class TionCoordinator(DataUpdateCoordinator[TionAccount]):
 
     @callback
     def async_request_reauth(self) -> None:
-        """Ask the user to sign in again; does nothing while a request is open."""
+        """Ask the user to sign in again; a refusal replaces an open outage form."""
         # A reload after a successful reauth leaves the old coordinator pushing
         # the old auth_error, and a new flow would outlive the reload.
         if self.config_entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS:
             return
         self._reauth_open = True
-        self.config_entry.async_start_reauth(self.hass)
+        async_open_reauth(
+            self.hass,
+            self.config_entry,
+            stale=isinstance(self.cloud.auth_error, TionAuthStaleError),
+        )
 
     @callback
     def _async_resolve_reauth(self) -> None:

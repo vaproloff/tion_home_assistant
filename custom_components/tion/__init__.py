@@ -49,6 +49,7 @@ from .coordinator import (
     TionCoordinator,
     async_abort_reauth_flows,
     async_forget_failed_starts,
+    async_open_reauth,
 )
 from .pid_manager import TionPidManager, breezer_speed_max, is_pid_set_up
 from .session import async_create_cloud
@@ -90,6 +91,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool
     except TionAuthError as err:
         # A refusal ends HA's retry loop; the next start is a new streak.
         async_forget_failed_starts(hass, entry)
+        # Replaces an open outage form; the request HA makes itself is deduplicated.
+        async_open_reauth(hass, entry, stale=False)
         raise ConfigEntryAuthFailed(
             translation_domain=DOMAIN, translation_key="auth_failed"
         ) from err
@@ -131,7 +134,7 @@ def _note_failed_start(hass: HomeAssistant, entry: TionConfigEntry) -> None:
     since = failures.setdefault(entry.entry_id, now)
     # HA retries within 10 minutes, so the request stays open until a retry succeeds.
     if now - since >= RENEW_STALE_AFTER:
-        entry.async_start_reauth(hass)
+        async_open_reauth(hass, entry, stale=True)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: TionConfigEntry) -> bool:

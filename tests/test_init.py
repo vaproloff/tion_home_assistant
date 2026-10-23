@@ -29,6 +29,7 @@ from custom_components.tion.const import (
     DOMAIN,
     MODEL_NAMES,
     PID_NUMBER_KEYS,
+    REAUTH_STEP_STALE,
 )
 from custom_components.tion.coordinator import TionCoordinator
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
@@ -67,6 +68,15 @@ def _reauth_started(hass: HomeAssistant) -> bool:
         flow["context"]["source"] == SOURCE_REAUTH
         for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     )
+
+
+def _reauth_steps(hass: HomeAssistant) -> list[str]:
+    return [
+        flow["step_id"]
+        for flow in hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, match_context={"source": SOURCE_REAUTH}
+        )
+    ]
 
 
 async def test_setup_and_unload(
@@ -204,7 +214,7 @@ async def test_start_failures_open_reauth_after_an_hour(
         await hass.async_block_till_done(wait_background_tasks=True)
 
         assert config_entry.state is ConfigEntryState.SETUP_RETRY
-        assert _reauth_started(hass)
+        assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
 
         cloud.start_error = None
         freezer.tick(timedelta(minutes=10))
@@ -246,6 +256,35 @@ async def test_auth_failure_at_start_resets_the_failure_record(
 
     assert config_entry.state is ConfigEntryState.SETUP_RETRY
     assert not _reauth_started(hass)
+
+
+async def test_auth_failure_at_start_replaces_the_outage_form(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An explicit refusal at start swaps the open "outage" form for the confirm one."""
+    cloud.start_error = TionConnectionError("down")
+    with patch(
+        "custom_components.tion.async_create_cloud",
+        AsyncMock(return_value=(auth, cloud)),
+    ):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        freezer.tick(timedelta(seconds=RENEW_STALE_AFTER))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
+
+        cloud.start_error = TionAuthError("dead")
+        freezer.tick(timedelta(minutes=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert config_entry.state is ConfigEntryState.SETUP_ERROR
+    assert _reauth_steps(hass) == ["reauth_confirm"]
 
 
 async def test_renewed_tokens_are_saved_without_reload(
