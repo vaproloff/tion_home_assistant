@@ -70,7 +70,7 @@ A custom Home Assistant integration for Tion Breezer O2/3S/4S, MagicAir and Modu
 3. Введите email и пароль аккаунта Tion.
 4. Пройдите капчу на открывшейся странице.
 
-   Tion сейчас принимает капчу только со страницы по адресу http://localhost, поэтому для входа нужен проброс порта 80 вашего компьютера на Home Assistant и адрес http://localhost в поле «Адрес страницы капчи». Как это сделать на Windows, macOS, Linux и в Docker — в [инструкции](docs/captcha-localhost.md).
+   Tion сейчас принимает капчу только со страницы по адресу http://localhost, поэтому для входа нужен проброс порта 80 вашего компьютера на Home Assistant и адрес http://localhost в поле «Адрес страницы капчи». Как это сделать на Windows, macOS и Linux — в [инструкции](docs/captcha-localhost.md).
 
 5. Введите код из письма, которое пришлёт Tion.
 
