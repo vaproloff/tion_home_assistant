@@ -181,7 +181,7 @@ async def test_refresh_failure_with_auth_error_opens_and_closes_reauth(
     error: Exception,
     translation_key: str,
 ) -> None:
-    """A failed refresh still reports a flagged session; clearing the flag closes the form."""
+    """A failed refresh still reports the flag; clearing the flag closes the form."""
     cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
     cloud.refresh_error = error
 
