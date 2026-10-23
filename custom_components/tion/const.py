@@ -69,6 +69,9 @@ SUPPORTED_PRESETS: tuple[str, ...] = (
     PRESET_HOME,
 )
 
+REAUTH_DATA_STALE = "tion_reauth_stale"
+REAUTH_STEP_STALE = "reauth_stale"
+
 PLATFORMS = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,

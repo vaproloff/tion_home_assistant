@@ -74,6 +74,8 @@ from .const import (
     DOCS_CAPTCHA_URL,
     DOMAIN,
     PID_INTERVAL_RANGE,
+    REAUTH_DATA_STALE,
+    REAUTH_STEP_STALE,
     SUPPORTED_PRESETS,
     TionPresetType,
 )
@@ -108,6 +110,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     """Tion config flow."""
 
     VERSION = 1
+    _reauth_step = "reauth_confirm"
 
     def __init__(self) -> None:
         """Initialize the flow."""
@@ -165,16 +168,31 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         self._email = entry_data.get(CONF_EMAIL) or entry_data[CONF_USERNAME]
         self._captcha_base_url = entry_data.get(CONF_CAPTCHA_BASE_URL)
         await self.async_set_unique_id(self._unique_id(self._email))
+        if entry_data.get(REAUTH_DATA_STALE):
+            self._reauth_step = REAUTH_STEP_STALE
+            return await self.async_step_reauth_stale()
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask to sign in again: Tion rejected the session or HA asked."""
+        return await self._async_reauth_form(user_input)
+
+    async def async_step_reauth_stale(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask to sign in again: renewals have been failing for over an hour."""
+        return await self._async_reauth_form(user_input)
+
+    async def _async_reauth_form(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Ask for the password of the configured account."""
         if user_input is not None:
             if not self._set_captcha_base_url(user_input):
                 return self._credentials_form(
-                    "reauth_confirm",
+                    self._reauth_step,
                     STEP_REAUTH_SCHEMA,
                     {CONF_CAPTCHA_BASE_URL: user_input[CONF_CAPTCHA_BASE_URL]},
                     {CONF_CAPTCHA_BASE_URL: "invalid_captcha_url"},
@@ -183,7 +201,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self._async_start_login(user_input[CONF_PASSWORD])
 
         return self._credentials_form(
-            "reauth_confirm",
+            self._reauth_step,
             STEP_REAUTH_SCHEMA,
             {CONF_CAPTCHA_BASE_URL: self._captcha_base_url},
             self._pop_login_error(),
@@ -235,7 +253,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
                 if err.reason == LOGIN_ERROR_CODE_EXPIRED:
                     self._login_error = err.reason
                     if self.source == SOURCE_REAUTH:
-                        return await self.async_step_reauth_confirm()
+                        return await self._async_reauth_form()
                     return await self.async_step_user()
                 errors["base"] = err.reason
             except TionConnectionError:
@@ -255,7 +273,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @property
     def _credentials_step_id(self) -> str:
-        return "reauth_confirm" if self.source == SOURCE_REAUTH else "user"
+        return self._reauth_step if self.source == SOURCE_REAUTH else "user"
 
     def _set_captcha_base_url(self, user_input: dict[str, Any]) -> bool:
         """Store the entered captcha page address, False when it is malformed."""

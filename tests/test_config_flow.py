@@ -55,6 +55,8 @@ from custom_components.tion.const import (
     DATA_START_FAILURES,
     DOCS_CAPTCHA_URL,
     DOMAIN,
+    REAUTH_DATA_STALE,
+    REAUTH_STEP_STALE,
     SUPPORTED_PRESETS,
     TionPresetType,
 )
@@ -1444,6 +1446,15 @@ async def test_code_step_aborts_when_account_configured_meanwhile(
     ]
 
 
+REAUTH_FORMS = pytest.mark.parametrize(
+    ("init_extra", "step_id"),
+    [
+        pytest.param({}, "reauth_confirm", id="refused"),
+        pytest.param({REAUTH_DATA_STALE: True}, REAUTH_STEP_STALE, id="stale"),
+    ],
+)
+
+
 @pytest.mark.asyncio
 async def test_code_expired_returns_to_user_form(auths: list[FakeAuth]) -> None:
     """An expired e-mail token needs a new captcha, so the flow starts over."""
@@ -1483,21 +1494,25 @@ async def test_password_token_aborts(auths: list[FakeAuth]) -> None:
         ),
     ],
 )
+@REAUTH_FORMS
 @pytest.mark.asyncio
 async def test_reauth_replaces_entry_data(
-    entry_data: dict[str, Any], auths: list[FakeAuth]
+    entry_data: dict[str, Any],
+    init_extra: dict[str, Any],
+    step_id: str,
+    auths: list[FakeAuth],
 ) -> None:
     """Reauth logs in again with the stored e-mail and rewrites the data."""
     entry = _entry(entry_data)
     hass = FakeFlowHass([entry])
     flow = _config_flow(hass, SOURCE_REAUTH, entry)
 
-    confirm = await flow.async_step_reauth(entry_data)
-    external = await flow.async_step_reauth_confirm({CONF_PASSWORD: "new"})
+    confirm = await flow.async_step_reauth({**entry_data, **init_extra})
+    external = await getattr(flow, f"async_step_{step_id}")({CONF_PASSWORD: "new"})
     await flow.async_step_captcha({CONF_CAPTCHA_TOKEN: "dD0xtoken"})
     result = await flow.async_step_code({CONF_CODE: "6483"})
 
-    assert confirm["step_id"] == "reauth_confirm"
+    assert confirm["step_id"] == step_id
     assert confirm["description_placeholders"]["email"] == EMAIL
     assert confirm["description_placeholders"]["docs_url"] == DOCS_CAPTCHA_URL
     assert set(confirm["data_schema"].schema) == {CONF_PASSWORD, CONF_CAPTCHA_BASE_URL}
@@ -1552,21 +1567,24 @@ async def test_reauth_prefills_stored_captcha_url() -> None:
     assert url_key.description == {"suggested_value": "http://localhost"}
 
 
+@REAUTH_FORMS
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("auths")
-async def test_reauth_rejects_bad_captcha_url() -> None:
-    """A malformed address returns the reauth form with a field error."""
+async def test_reauth_rejects_bad_captcha_url(
+    init_extra: dict[str, Any], step_id: str
+) -> None:
+    """A malformed address returns the same reauth form with a field error."""
     entry_data = {CONF_EMAIL: EMAIL, CONF_DEVICE_KEY: "old"}
     entry = _entry(entry_data)
     flow = _config_flow(FakeFlowHass([entry]), SOURCE_REAUTH, entry)
-    await flow.async_step_reauth(entry_data)
+    await flow.async_step_reauth({**entry_data, **init_extra})
 
-    result = await flow.async_step_reauth_confirm(
+    result = await getattr(flow, f"async_step_{step_id}")(
         {CONF_PASSWORD: "secret", CONF_CAPTCHA_BASE_URL: "localhost"}
     )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "reauth_confirm"
+    assert result["step_id"] == step_id
     assert result["errors"] == {CONF_CAPTCHA_BASE_URL: "invalid_captcha_url"}
     url_key = next(
         k for k in result["data_schema"].schema if k == CONF_CAPTCHA_BASE_URL
@@ -1576,22 +1594,45 @@ async def test_reauth_rejects_bad_captcha_url() -> None:
     assert result["description_placeholders"]["docs_url"] == DOCS_CAPTCHA_URL
 
 
+@REAUTH_FORMS
 @pytest.mark.asyncio
 async def test_reauth_captcha_failure_returns_to_reauth_form(
-    auths: list[FakeAuth],
+    init_extra: dict[str, Any], step_id: str, auths: list[FakeAuth]
 ) -> None:
-    """Reauth errors reappear on the reauth form, not the user form."""
+    """Reauth errors reappear on the same reauth form, not the user form."""
     entry = _entry({CONF_EMAIL: EMAIL})
     flow = _config_flow(FakeFlowHass([entry]), SOURCE_REAUTH, entry)
-    await flow.async_step_reauth(entry.data)
-    await flow.async_step_reauth_confirm({CONF_PASSWORD: "wrong"})
+    await flow.async_step_reauth({**entry.data, **init_extra})
+    step = getattr(flow, f"async_step_{step_id}")
+    await step({CONF_PASSWORD: "wrong"})
     auths[0].fail("get_confirmation_code", TionLoginError(LOGIN_ERROR_INVALID_AUTH))
 
     done = await flow.async_step_captcha({CONF_CAPTCHA_TOKEN: "dD0xtoken"})
-    form = await flow.async_step_reauth_confirm()
+    form = await step()
 
-    assert done["step_id"] == "reauth_confirm"
+    assert done["step_id"] == step_id
+    assert form["step_id"] == step_id
     assert form["errors"] == {"base": "invalid_auth"}
+
+
+@REAUTH_FORMS
+@pytest.mark.asyncio
+async def test_reauth_code_expired_returns_to_the_same_form(
+    init_extra: dict[str, Any], step_id: str, auths: list[FakeAuth]
+) -> None:
+    """An expired e-mail token sends reauth back to the form it came from."""
+    entry = _entry({CONF_EMAIL: EMAIL})
+    flow = _config_flow(FakeFlowHass([entry]), SOURCE_REAUTH, entry)
+    await flow.async_step_reauth({**entry.data, **init_extra})
+    await getattr(flow, f"async_step_{step_id}")({CONF_PASSWORD: "secret"})
+    await flow.async_step_captcha({CONF_CAPTCHA_TOKEN: "dD0xtoken"})
+    auths[0].fail("get_token", TionLoginError(LOGIN_ERROR_CODE_EXPIRED))
+
+    result = await flow.async_step_code({CONF_CODE: "6483"})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == step_id
+    assert result["errors"] == {"base": "code_expired"}
 
 
 @pytest.mark.asyncio
@@ -1618,7 +1659,9 @@ def test_translations_cover_login_flow(language: str) -> None:
         "config"
     ]
 
-    assert {"user", "reauth_confirm", "captcha", "code"} <= set(config["step"])
+    assert {"user", "reauth_confirm", "reauth_stale", "captcha", "code"} <= set(
+        config["step"]
+    )
     assert set(config["step"]["user"]["data"]) == {
         CONF_EMAIL,
         CONF_PASSWORD,

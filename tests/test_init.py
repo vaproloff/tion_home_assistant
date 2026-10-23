@@ -540,17 +540,26 @@ def test_translations_cover_the_issue_and_reauth(language: str, promise: str) ->
     issue = strings["issues"]["account_not_migrated"]
     assert "{" not in issue["title"]
     assert "{email}" in issue["description"]
-    assert "{email}" in strings["config"]["step"]["reauth_confirm"]["description"]
     config = strings["config"]
-    for step in ("user", "reauth_confirm"):
-        assert "{docs_url}" in config["step"][step]["description"]
-        assert "captcha_base_url" in config["step"][step]["data"]
-        assert "captcha_base_url" in config["step"][step]["data_description"]
-    reauth = config["step"]["reauth_confirm"]["description"]
-    assert "30" not in reauth
-    assert promise in reauth
-    assert "reload" not in reauth.lower()
-    assert "перезагрузите" not in reauth
+    steps = config["step"]
+    assert "{email}" in steps["reauth_confirm"]["description"]
+    assert "{email}" in steps["reauth_stale"]["description"]
+    for step in ("user", "reauth_confirm", "reauth_stale"):
+        assert "{docs_url}" in steps[step]["description"]
+        assert "captcha_base_url" in steps[step]["data"]
+        assert "captcha_base_url" in steps[step]["data_description"]
+    assert steps["reauth_stale"]["data"] == steps["reauth_confirm"]["data"]
+    assert (
+        steps["reauth_stale"]["data_description"]
+        == steps["reauth_confirm"]["data_description"]
+    )
+    assert promise in steps["reauth_stale"]["description"]
+    assert promise not in steps["reauth_confirm"]["description"]
+    for step in ("reauth_confirm", "reauth_stale"):
+        reauth = steps[step]["description"]
+        assert "30" not in reauth
+        assert "reload" not in reauth.lower()
+        assert "перезагрузите" not in reauth
     assert "invalid_captcha_url" in config["error"]
     assert "localhost" in config["error"]["invalid_captcha"]
 

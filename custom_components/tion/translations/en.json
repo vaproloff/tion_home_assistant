@@ -32,7 +32,19 @@
       },
       "reauth_confirm": {
         "title": "Sign in to Tion again",
-        "description": "Sign in to Tion again for {email}: Tion rejected the saved session, or the integration moved to the new Tion cloud. Enter the password; a captcha and an e-mail code follow.\n\nTion currently accepts the captcha only from a page at http://localhost, see the [instructions]({docs_url}). If your devices stopped working only recently, Tion may be having an outage: the integration keeps trying, and this request disappears by itself once the connection is back. If it stays for more than a day, sign in again.",
+        "description": "Sign in to Tion again for {email}: Tion rejected the saved session, or the integration moved to the new Tion cloud. Enter the password; a captcha and an e-mail code follow.\n\nTion currently accepts the captcha only from a page at http://localhost, see the [instructions]({docs_url}). Your devices may keep working for a while over the open connection, but without signing in they will not come back once it drops.",
+        "data": {
+          "password": "Password",
+          "captcha_base_url": "Captcha page address"
+        },
+        "data_description": {
+          "password": "Current password for this Tion account.",
+          "captcha_base_url": "Leave empty if you have not set up port forwarding. Otherwise enter http://localhost."
+        }
+      },
+      "reauth_stale": {
+        "title": "Tion has not renewed the session for an hour",
+        "description": "Tion has not renewed the saved session for {email} for more than an hour. This is most likely an outage on Tion's side: the integration keeps trying, and this request disappears by itself once the connection is back. If it stays for more than a day, sign in again: enter the password; a captcha and an e-mail code follow.\n\nTion currently accepts the captcha only from a page at http://localhost, see the [instructions]({docs_url}).",
         "data": {
           "password": "Password",
           "captcha_base_url": "Captcha page address"
