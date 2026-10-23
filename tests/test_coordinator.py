@@ -181,7 +181,7 @@ async def test_refresh_failure_with_auth_error_opens_and_closes_reauth(
     error: Exception,
     translation_key: str,
 ) -> None:
-    """A failed refresh still reports a flagged session; clearing it closes it."""
+    """A failed refresh still reports a flagged session; clearing the flag closes the form."""
     cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
     cloud.refresh_error = error
 
@@ -313,6 +313,25 @@ async def test_refusal_replaces_an_open_outage_form(
     await hass.async_block_till_done()
 
     assert _reauth_steps(hass) == ["reauth_confirm"]
+
+
+@pytest.mark.usefixtures("coordinator")
+async def test_streak_after_a_refusal_keeps_the_refusal_form(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """Guard: an hour-long streak does not replace an open refusal form."""
+    cloud.auth_error = TionAuthError("RenewAccess rejected (1): nope")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+    assert _reauth_steps(hass) == ["reauth_confirm"]
+    [flow_id] = _reauth_flows(hass)
+
+    cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert _reauth_steps(hass) == ["reauth_confirm"]
+    assert _reauth_flows(hass) == [flow_id]
 
 
 @pytest.mark.usefixtures("coordinator")

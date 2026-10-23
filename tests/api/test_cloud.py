@@ -1061,7 +1061,7 @@ async def test_stop_during_renew_wait(
 
 @pytest.mark.asyncio
 async def test_stop_unsubscribes_from_token_updates(harness: Harness) -> None:
-    """A stopped cloud no longer hears about renewals."""
+    """Guard: a stopped cloud no longer hears about renewals."""
     await harness.cloud.async_start()
     await harness.cloud.async_stop()
     before = harness.notifications
