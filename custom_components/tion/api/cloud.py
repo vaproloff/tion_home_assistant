@@ -173,7 +173,6 @@ class TionCloud:
         if self._unsub_tokens is not None:
             self._unsub_tokens()
             self._unsub_tokens = None
-        self._renew_wakeup.set()
         for task in (self._reconnect_task, self._structure_task):
             if task is not None:
                 task.cancel()

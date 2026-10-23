@@ -1060,6 +1060,19 @@ async def test_stop_during_renew_wait(
 
 
 @pytest.mark.asyncio
+async def test_stop_unsubscribes_from_token_updates(harness: Harness) -> None:
+    """A stopped cloud no longer hears about renewals."""
+    await harness.cloud.async_start()
+    await harness.cloud.async_stop()
+    before = harness.notifications
+
+    await harness.auth.async_renew_access()
+
+    assert harness.auth.listeners == []
+    assert harness.notifications == before
+
+
+@pytest.mark.asyncio
 async def test_token_update_notifies_listeners(harness: Harness) -> None:
     """Every renewal reaches the listeners so the HA layer can re-read auth_error."""
     await harness.cloud.async_start()
