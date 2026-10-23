@@ -323,6 +323,7 @@ async def test_refusal_keeps_a_flow_the_user_is_working_through(
     cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
     cloud.push(cloud.account)
     await hass.async_block_till_done()
+    assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
     [flow_id] = _reauth_flows(hass)
     with (
         patch("custom_components.tion.config_flow.async_create_auth", AsyncMock()),
