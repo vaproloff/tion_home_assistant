@@ -8,7 +8,7 @@
 
 Это касается только входа: новой установки интеграции и повторной авторизации (пароль, капча, код из письма).
 
-**Уже настроенная интеграция продолжает работать. Не удаляйте запись интеграции**: после удаления сущности получат новые `entity_id`, а автоматизации и дашборды перестанут на них ссылаться. Если Home Assistant показывает уведомление «нужна повторная авторизация», а устройства перестали работать недавно, подождите: с версии 2026.10.1 интеграция при сбоях Tion продолжает попытки и сама снимает запрос, когда связь восстановится. Если запрос держится больше суток, вход действительно нужен. В версии 2026.10.0 ложный запрос снимала перезагрузка записи: `Настройки` -> `Устройства и службы` -> Tion -> три точки -> `Перезагрузить`.
+**Уже настроенная интеграция продолжает работать. Не удаляйте запись интеграции**: после удаления сущности получат новые `entity_id`, а автоматизации и дашборды перестанут на них ссылаться. docs/captcha-localhost.md`, абзац «**Уже настроенная интеграция продолжает работать…**»: текст от «Если Home Assistant показывает уведомление» до конца абзаца заменить на: `Если Home Assistant показывает уведомление «нужна повторная авторизация», откройте его: форма называет причину. «Tion отклонил сохранённую сессию» — войдите заново, даже если устройства пока работают. «Tion больше часа не продлевает сессию» — скорее всего сбой Tion: подождите, с версии 2026.10.1 интеграция продолжает попытки и сама снимает запрос, когда связь восстановится; если он держится больше суток, войдите заново. В версии 2026.10.0 ложный запрос снимала перезагрузка записи: `Настройки` -> `Устройства и службы` -> Tion -> три точки -> `Перезагрузить`.
 
 ## Что понадобится
 
@@ -137,7 +137,7 @@ caddy reverse-proxy --from :80 --to https://<домен> --change-host-header
 2. Введите почту и пароль, а в поле «Адрес страницы капчи» укажите `http://localhost` (без порта и пути).
 3. Нажмите «Отправить». Страница с капчей откроется в новом окне уже по адресу `http://localhost/...`. Пройдите проверку, если она появится. Страница напишет «Готово, вернитесь в Home Assistant» и закроется сама, а Home Assistant перейдёт к вводу кода из письма.
 4. Введите код из письма. Вход выполнен.
-5. Выключите проброс (команда выключения указана в рецепте, либо Ctrl+C). Он нужен только на время капчи. Home Assistant сам продлевает сессию Tion. Запрос на повторный вход появится, если Tion явно отклонит обновление сессии или если обновление не удаётся больше часа; во втором случае запрос снимется сам, когда связь восстановится, а вход действительно нужен, только если он держится больше суток.
+5. Выключите проброс (команда выключения указана в рецепте, либо Ctrl+C). Он нужен только на время капчи. Home Assistant сам продлевает сессию Tion. docs/captcha-localhost.md`, раздел «Вход», шаг 5: предложение от «Запрос на повторный вход появится» до конца шага заменить на: `Запрос на повторный вход появится, если Tion явно отклонит обновление сессии (форма «Tion отклонил сохранённую сессию»: войдите заново), или если обновление не удаётся больше часа (форма «Tion больше часа не продлевает сессию»: запрос снимется сам, когда связь восстановится, а вход нужен, только если он держится больше суток).
 
 Адрес запоминается в записи интеграции, и при повторной авторизации поле уже заполнено им. Проброс при этом всё равно нужно включить заново.
 
@@ -154,7 +154,7 @@ caddy reverse-proxy --from :80 --to https://<домен> --change-host-header
 ## English summary
 
 - Since October 2026 Tion's server accepts the captcha token only from a page whose address is exactly `http://localhost`. Only new setups and re-authentication are affected.
-- An already configured integration keeps working: do not delete it. If you get a re-authentication notice and your devices stopped working only recently, wait: since 2026.10.1 the integration keeps trying and the request disappears by itself once the connection is back. If it stays for more than a day, sign in again. In 2026.10.0 a false request was cleared by reloading the integration entry.
+- An already configured integration keeps working: do not delete it. If you get a re-authentication notice, open it: the form names the reason. "Tion rejected the saved session" means sign in now, even if your devices still work. "Tion has not renewed the session for an hour" is most likely an outage: wait, the request disappears by itself once the connection is back; if it stays for more than a day, sign in again. In 2026.10.0 a false request was cleared by reloading the integration entry.
 - `localhost` always means the computer the browser runs on, so forward port 80 of your own computer (`127.0.0.1:80`; it needs `sudo` on Linux and macOS) to Home Assistant (port 8123) for the few minutes of the login.
 - Options: `netsh interface portproxy` (Windows), `ssh -L` or `socat` (macOS/Linux), Docker with `alpine/socat`, or the scripts `captcha_proxy_local.py` (plain TCP, Home Assistant over http) and `captcha_proxy_https.py` (HTTP proxy for Home Assistant behind an HTTPS address, where a TCP forward does not work).
 - Check that `http://localhost/` shows the Home Assistant login page, then enter `http://localhost` in the "Адрес страницы капчи" (captcha page address) field of the login form.
