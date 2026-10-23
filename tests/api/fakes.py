@@ -9,7 +9,11 @@ from uuid import UUID
 from custom_components.tion.api.auth import TionTokens
 from custom_components.tion.api.datapoints import DPKind, DPValue, decode_dp_value
 from custom_components.tion.api.device_key import TionDeviceKey
-from custom_components.tion.api.exceptions import TionConnectionError, TionError
+from custom_components.tion.api.exceptions import (
+    TionAuthError,
+    TionConnectionError,
+    TionError,
+)
 from custom_components.tion.api.protobuf import ProtoMessage, encode_varint
 
 from .payloads import (  # noqa: TID251
@@ -124,8 +128,17 @@ class FakeAuth:
         """Start with access-1."""
         self.token = "access-1"
         self.renewals = 0
-        self.renew_error: TionError | None = None
+        self.renew_failure: TionError | None = None
+        self.renew_error: TionAuthError | None = None
+        self.listeners: list[Callable[[TionTokens], None]] = []
         self.device_key = DEVICE_KEY
+
+    def add_update_listener(
+        self, listener: Callable[[TionTokens], None]
+    ) -> Callable[[], None]:
+        """Call listener with new tokens after a renewal; returns unsubscribe."""
+        self.listeners.append(listener)
+        return lambda: self.listeners.remove(listener)
 
     async def async_ensure_valid(self) -> str:
         """Return the current token."""
@@ -133,11 +146,17 @@ class FakeAuth:
 
     async def async_renew_access(self) -> TionTokens:
         """Renew, unless told to fail."""
-        if self.renew_error is not None:
-            raise self.renew_error
+        if self.renew_failure is not None:
+            if isinstance(self.renew_failure, TionAuthError):
+                self.renew_error = self.renew_failure
+            raise self.renew_failure
         self.renewals += 1
+        self.renew_error = None
         self.token = f"access-{self.renewals + 1}"
-        return TionTokens(self.token, "renew", SERVER_TIME + 900, SERVER_TIME + 86400)
+        tokens = TionTokens(self.token, "renew", SERVER_TIME + 900, SERVER_TIME + 86400)
+        for listener in list(self.listeners):
+            listener(tokens)
+        return tokens
 
 
 def _matches(pattern: str, subject: str) -> bool:

@@ -19,9 +19,15 @@ from .device_key import (
     b64url,
     sha256_b64url,
 )
-from .exceptions import TionApiError, TionAuthError
+from .exceptions import (
+    TionApiError,
+    TionAuthError,
+    TionAuthStaleError,
+    TionConnectionError,
+    TionError,
+)
 from .protobuf import ProtoMessage, encode_bytes, encode_string, encode_varint
-from .transport import TionTransport
+from .transport import GRPC_FAILED_PRECONDITION, TionTransport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +40,8 @@ TOKEN_REFRESH_EXPIRES_AT = "refresh_expires_at"
 SVC_ACCOUNT = "api.v1.user.account.AccountService"
 CONFIRMATION_CODE_TYPE_LOGIN = 5
 RENEW_THRESHOLD = 60
+RENEW_RETRY_INTERVAL = 900.0
+RENEW_STALE_AFTER = 3600.0
 VERIFIER_LENGTH = 20
 _VERIFIER_ALPHABET = string.ascii_letters + string.digits
 _UINT32_MAX = 0xFFFFFFFF
@@ -184,6 +192,10 @@ class TionAuth:
         self._tokens = tokens
         self._listeners: list[Callable[[TionTokens], None]] = []
         self._renew_lock = asyncio.Lock()
+        self._renew_error: TionAuthError | None = None
+        self._renew_retry_at = 0.0
+        self._stale_error: TionAuthStaleError | None = None
+        self._renew_failing_since: float | None = None
         self._email_token: bytes | None = None
         self._email_verifier: str | None = None
         self._login_token: bytes | None = None
@@ -203,6 +215,16 @@ class TionAuth:
     def access_token(self) -> str | None:
         """Return the current access token, if logged in."""
         return self._tokens.access_token if self._tokens else None
+
+    @property
+    def renew_error(self) -> TionAuthError | None:
+        """Return the remembered RenewAccess refusal or failure streak, if any."""
+        return self._renew_error or self._stale_error
+
+    @property
+    def renew_failing_since(self) -> float | None:
+        """Return the server time of the first failure of the current streak."""
+        return self._renew_failing_since
 
     def add_update_listener(
         self, listener: Callable[[TionTokens], None]
@@ -319,8 +341,21 @@ class TionAuth:
 
     async def _async_renew(self) -> TionTokens:
         tokens = self._require_tokens()
-        if self._transport.server_time() >= tokens.refresh_expires_at:
-            raise TionAuthError("Renew session expired, a new login is required")
+        if (
+            self._renew_error is not None
+            and self._transport.server_time() < self._renew_retry_at
+        ):
+            raise self._renew_error
+        try:
+            renewed = await self._async_renew_once(tokens)
+        except TionError as err:
+            self._note_renew_failure(err)
+            raise
+        self._renew_error = self._stale_error = self._renew_failing_since = None
+        self._set_tokens(renewed)
+        return renewed
+
+    async def _async_renew_once(self, tokens: TionTokens) -> TionTokens:
         response = await self._async_call_renew(tokens)
         err = response.get_message(2)
         if err is not None and err.get_int(1) == _RENEW_INVALID_DEVICE_PROOF:
@@ -330,14 +365,38 @@ class TionAuth:
             response = await self._async_call_renew(tokens)
         if (raw := response.get_message(1)) is not None:
             renewed = _parse_tokens(raw, tokens)
-            self._set_tokens(renewed)
+            rotated = renewed.renew_session_token != tokens.renew_session_token
+            if rotated or renewed.refresh_expires_at != tokens.refresh_expires_at:
+                _LOGGER.debug(
+                    "renew session changed: token rotated=%s, window moved to %s",
+                    rotated,
+                    renewed.refresh_expires_at,
+                )
             return renewed
         if (err := response.get_message(2)) is None:
             raise TionApiError("RenewAccess: empty response")
         code, message = _error(err)
+        _LOGGER.debug("RenewAccess rejected (%s): %s", code, message)
         if code in _RENEW_TERMINAL_ERRORS:
             raise TionAuthError(f"RenewAccess rejected ({code}): {message}")
         raise TionApiError(f"RenewAccess failed ({code}): {message}")
+
+    def _note_renew_failure(self, err: TionError) -> None:
+        # Unlike a remembered refusal, a failure streak never blocks attempts.
+        now = self._transport.server_time()
+        if self._renew_failing_since is None:
+            self._renew_failing_since = now
+        if isinstance(err, TionAuthError):
+            self._renew_error = err
+            self._renew_retry_at = now + RENEW_RETRY_INTERVAL
+        elif (
+            self._stale_error is None
+            and now - self._renew_failing_since >= RENEW_STALE_AFTER
+        ):
+            self._stale_error = TionAuthStaleError(
+                f"RenewAccess has been failing since {self._renew_failing_since:.0f}: "
+                f"{err}"
+            )
 
     async def _async_call_renew(self, tokens: TionTokens) -> ProtoMessage:
         """Send RenewAccess with a fresh timestamp, nonce and device proof."""
@@ -346,23 +405,35 @@ class TionAuth:
         signature = self._device_key.sign_renew_access(
             tokens.renew_session_token, tokens.access_token, ts, nonce
         )
-        return await self._async_call(
-            "RenewAccess",
-            b"".join(
-                [
-                    encode_string(1, tokens.renew_session_token),
-                    encode_string(2, APP_ID),
-                    encode_string(3, self._device_key.key_id()),
-                    encode_varint(4, ts),
-                    encode_string(5, nonce),
-                    encode_string(7, sha256_b64url(tokens.access_token)),
-                    encode_string(8, signature),
-                    encode_string(9, SIGNATURE_FORMAT),
-                    encode_string(10, KEY_ALGORITHM),
-                ]
-            ),
-            token=tokens.access_token,
+        payload = b"".join(
+            [
+                encode_string(1, tokens.renew_session_token),
+                encode_string(2, APP_ID),
+                encode_string(3, self._device_key.key_id()),
+                encode_varint(4, ts),
+                encode_string(5, nonce),
+                encode_string(7, sha256_b64url(tokens.access_token)),
+                encode_string(8, signature),
+                encode_string(9, SIGNATURE_FORMAT),
+                encode_string(10, KEY_ALGORITHM),
+            ]
         )
+        try:
+            return await self._async_call(
+                "RenewAccess", payload, token=tokens.access_token
+            )
+        except TionAuthError as err:
+            # The session verdict lives in the response body, not in a 401.
+            raise TionConnectionError(
+                f"RenewAccess: rejected by transport: {err}"
+            ) from err
+        except TionApiError as err:
+            # The server reports a bad signature by status, not by a body code.
+            if err.grpc_status == GRPC_FAILED_PRECONDITION:
+                raise TionAuthError(
+                    f"RenewAccess: device proof rejected: {err}"
+                ) from err
+            raise
 
     def _set_tokens(self, tokens: TionTokens) -> None:
         self._tokens = tokens
@@ -380,6 +451,7 @@ class TionAuth:
     def _login_error(
         reasons: Mapping[int, str], code: int, message: str
     ) -> TionLoginError | TionApiError:
+        _LOGGER.debug("Login step rejected (%s): %s", code, message)
         if (reason := reasons.get(code)) is not None:
             return TionLoginError(reason, message)
         return TionApiError(f"Login rejected ({code}): {message}")

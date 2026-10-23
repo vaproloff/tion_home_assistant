@@ -113,7 +113,7 @@ class TionEntity[ViewT: Breezer | Station](CoordinatorEntity[TionCoordinator]):
                 translation_domain=DOMAIN, translation_key="cloud_unavailable"
             ) from err
         except TionAuthError as err:
-            self.coordinator.config_entry.async_start_reauth(self.hass)
+            self.coordinator.async_request_reauth()
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="auth_failed"
             ) from err

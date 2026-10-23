@@ -4,19 +4,21 @@
     "step": {
       "user": {
         "title": "Add Tion account",
-        "description": "Sign in with the Tion account used in the MagicAir app. Home Assistant then opens a captcha page, and Tion e-mails you a confirmation code.",
+        "description": "Sign in with the Tion account used in the MagicAir app. Home Assistant then opens a captcha page, and Tion e-mails you a confirmation code.\n\nTion currently accepts the captcha only from a page at http://localhost. To sign in, forward port 80 of this computer to Home Assistant and enter http://localhost below, see the [instructions]({docs_url}). An integration that is already set up keeps working: do not delete it.",
         "data": {
           "email": "Email",
-          "password": "Password"
+          "password": "Password",
+          "captcha_base_url": "Captcha page address"
         },
         "data_description": {
           "email": "Email address of the Tion account.",
-          "password": "Tion account password. It is only used to sign in and is not stored."
+          "password": "Tion account password. It is only used to sign in and is not stored.",
+          "captcha_base_url": "Leave empty if you have not set up port forwarding. Otherwise enter http://localhost."
         }
       },
       "captcha": {
         "title": "Captcha",
-        "description": "Complete the check on the page opened in a new window. Home Assistant continues automatically when it is done."
+        "description": "Complete the check on the page that opened in a new window (at the captcha page address, if you entered one). Home Assistant continues automatically when it is done."
       },
       "code": {
         "title": "Confirmation code",
@@ -30,12 +32,26 @@
       },
       "reauth_confirm": {
         "title": "Sign in to Tion again",
-        "description": "Sign in to Tion again for {email}: the session has ended (it lasts at most 30 days) or the integration moved to the new Tion cloud. Enter the password; a captcha and an e-mail code follow.",
+        "description": "Sign in to Tion again for {email}: Tion rejected the saved session, or the integration moved to the new Tion cloud. Enter the password; a captcha and an e-mail code follow.\n\nTion currently accepts the captcha only from a page at http://localhost, see the [instructions]({docs_url}). Your devices may keep working for a while over the open connection, but without signing in they will not come back once it drops.",
         "data": {
-          "password": "Password"
+          "password": "Password",
+          "captcha_base_url": "Captcha page address"
         },
         "data_description": {
-          "password": "Current password for this Tion account."
+          "password": "Current password for this Tion account.",
+          "captcha_base_url": "Leave empty if you have not set up port forwarding. Otherwise enter http://localhost."
+        }
+      },
+      "reauth_stale": {
+        "title": "Tion has not renewed the session for an hour",
+        "description": "Tion has not renewed the saved session for {email} for more than an hour. This is most likely an outage on Tion's side: the integration keeps trying, and this request disappears by itself once the connection is back. If it stays for more than a day, sign in again: enter the password; a captcha and an e-mail code follow.\n\nTion currently accepts the captcha only from a page at http://localhost, see the [instructions]({docs_url}).",
+        "data": {
+          "password": "Password",
+          "captcha_base_url": "Captcha page address"
+        },
+        "data_description": {
+          "password": "Current password for this Tion account.",
+          "captcha_base_url": "Leave empty if you have not set up port forwarding. Otherwise enter http://localhost."
         }
       }
     },
@@ -49,7 +65,8 @@
     "error": {
       "cannot_connect": "Failed to connect",
       "invalid_auth": "Invalid email or password",
-      "invalid_captcha": "The captcha was not accepted or has expired. Submit the form to try again.",
+      "invalid_captcha": "Tion did not accept the captcha from this page. It currently accepts it only from a page at http://localhost: set up port forwarding as described in the instructions above and enter http://localhost as the captcha page address. If the integration is already set up, do not delete it.",
+      "invalid_captcha_url": "Enter an address like http://localhost or https://host:port, without a path.",
       "invalid_code": "Wrong confirmation code.",
       "code_expired": "The confirmation code has expired. Submit the form to get a new one.",
       "unknown": "Unexpected error"

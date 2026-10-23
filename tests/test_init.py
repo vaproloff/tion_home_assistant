@@ -1,12 +1,14 @@
 """Tests for setting up and unloading a Tion account."""
 
 from dataclasses import replace
+from datetime import timedelta
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from ha_tests.common import MockConfigEntry
+from freezegun.api import FrozenDateTimeFactory
+from ha_tests.common import MockConfigEntry, async_fire_time_changed
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
@@ -18,13 +20,16 @@ from custom_components.tion.api import (
     TionConnectionError,
     TionTokens,
 )
+from custom_components.tion.api.auth import RENEW_STALE_AFTER
 from custom_components.tion.api.views import BREEZER_PRODUCTS, STATION_PRODUCTS
 from custom_components.tion.const import (
     CONF_DEVICE_KEY,
     CONF_PID_ENABLED,
+    DATA_START_FAILURES,
     DOMAIN,
     MODEL_NAMES,
     PID_NUMBER_KEYS,
+    REAUTH_STEP_STALE,
 )
 from custom_components.tion.coordinator import TionCoordinator
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
@@ -63,6 +68,15 @@ def _reauth_started(hass: HomeAssistant) -> bool:
         flow["context"]["source"] == SOURCE_REAUTH
         for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     )
+
+
+def _reauth_steps(hass: HomeAssistant) -> list[str]:
+    return [
+        flow["step_id"]
+        for flow in hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, match_context={"source": SOURCE_REAUTH}
+        )
+    ]
 
 
 async def test_setup_and_unload(
@@ -167,6 +181,110 @@ async def test_start_errors(
     assert config_entry.state is state
     assert _reauth_started(hass) is reauth
     assert auth.listeners == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(TionConnectionError("down"), id="connection"),
+        pytest.param(TionApiError("bad"), id="api"),
+    ],
+)
+async def test_start_failures_open_reauth_after_an_hour(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    freezer: FrozenDateTimeFactory,
+    error: Exception,
+) -> None:
+    """An hour of failed starts asks to sign in; the first successful start closes it."""
+    cloud.start_error = error
+    with patch(
+        "custom_components.tion.async_create_cloud",
+        AsyncMock(return_value=(auth, cloud)),
+    ):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert config_entry.state is ConfigEntryState.SETUP_RETRY
+        assert not _reauth_started(hass)
+
+        freezer.tick(timedelta(seconds=RENEW_STALE_AFTER))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert config_entry.state is ConfigEntryState.SETUP_RETRY
+        assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
+
+        cloud.start_error = None
+        freezer.tick(timedelta(minutes=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert config_entry.state is ConfigEntryState.LOADED
+    assert not _reauth_started(hass)
+
+
+async def test_auth_failure_at_start_resets_the_failure_record(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An explicit refusal ends the retry streak; the next start counts from zero."""
+    cloud.start_error = TionConnectionError("down")
+    with patch(
+        "custom_components.tion.async_create_cloud",
+        AsyncMock(return_value=(auth, cloud)),
+    ):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert config_entry.state is ConfigEntryState.SETUP_RETRY
+
+        cloud.start_error = TionAuthError("dead")
+        freezer.tick(timedelta(minutes=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert config_entry.state is ConfigEntryState.SETUP_ERROR
+        assert _reauth_started(hass)
+
+        cloud.start_error = TionConnectionError("down")
+        freezer.tick(timedelta(seconds=RENEW_STALE_AFTER))
+        await hass.config_entries.async_reload(config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert config_entry.state is ConfigEntryState.SETUP_RETRY
+    assert not _reauth_started(hass)
+
+
+async def test_auth_failure_at_start_replaces_the_outage_form(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An explicit refusal at start swaps the open "outage" form for the confirm one."""
+    cloud.start_error = TionConnectionError("down")
+    with patch(
+        "custom_components.tion.async_create_cloud",
+        AsyncMock(return_value=(auth, cloud)),
+    ):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        freezer.tick(timedelta(seconds=RENEW_STALE_AFTER))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
+
+        cloud.start_error = TionAuthError("dead")
+        freezer.tick(timedelta(minutes=10))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert config_entry.state is ConfigEntryState.SETUP_ERROR
+    assert _reauth_steps(hass) == ["reauth_confirm"]
 
 
 async def test_renewed_tokens_are_saved_without_reload(
@@ -431,15 +549,58 @@ async def test_removing_the_entry_clears_the_issue(
     assert issue_registry.async_get_issue(DOMAIN, _issue_id(config_entry)) is None
 
 
-@pytest.mark.parametrize("language", ["en", "ru"])
-def test_translations_cover_the_issue_and_reauth(language: str) -> None:
+async def test_removing_the_entry_forgets_its_failed_starts(
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    cloud: FakeTionCloud,
+    auth: FakeAuth,
+) -> None:
+    """Removing the entry drops only its own failed-start record."""
+    with patch("custom_components.tion.PLATFORMS", []):
+        await setup_entry(hass, config_entry, cloud, auth)
+    hass.data[DATA_START_FAILURES] = {config_entry.entry_id: 1.0, "other": 2.0}
+
+    await hass.config_entries.async_remove(config_entry.entry_id)
+
+    assert hass.data[DATA_START_FAILURES] == {"other": 2.0}
+
+
+@pytest.mark.parametrize(
+    ("language", "promise"),
+    [
+        pytest.param("en", "disappears by itself", id="en"),
+        pytest.param("ru", "исчезнет сам", id="ru"),
+    ],
+)
+def test_translations_cover_the_issue_and_reauth(language: str, promise: str) -> None:
     """The issue and the re-login text are translated with their placeholders."""
     strings = json.loads((TRANSLATIONS / f"{language}.json").read_text("utf-8"))
 
     issue = strings["issues"]["account_not_migrated"]
     assert "{" not in issue["title"]
     assert "{email}" in issue["description"]
-    assert "{email}" in strings["config"]["step"]["reauth_confirm"]["description"]
+    config = strings["config"]
+    steps = config["step"]
+    assert "{email}" in steps["reauth_confirm"]["description"]
+    assert "{email}" in steps["reauth_stale"]["description"]
+    for step in ("user", "reauth_confirm", "reauth_stale"):
+        assert "{docs_url}" in steps[step]["description"]
+        assert "captcha_base_url" in steps[step]["data"]
+        assert "captcha_base_url" in steps[step]["data_description"]
+    assert steps["reauth_stale"]["data"] == steps["reauth_confirm"]["data"]
+    assert (
+        steps["reauth_stale"]["data_description"]
+        == steps["reauth_confirm"]["data_description"]
+    )
+    assert promise in steps["reauth_stale"]["description"]
+    assert promise not in steps["reauth_confirm"]["description"]
+    for step in ("reauth_confirm", "reauth_stale"):
+        reauth = steps[step]["description"]
+        assert "30" not in reauth
+        assert "reload" not in reauth.lower()
+        assert "перезагрузите" not in reauth
+    assert "invalid_captcha_url" in config["error"]
+    assert "localhost" in config["error"]["invalid_captcha"]
 
 
 @pytest.mark.parametrize("language", ["en", "ru"])

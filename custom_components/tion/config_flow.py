@@ -37,9 +37,15 @@ from .api.auth import (
 from .api.device_key import TionDeviceKey
 from .api.exceptions import TionConnectionError
 from .api.views import Breezer, view
-from .captcha_view import CAPTCHA_STEP_ID, async_register_captcha_view, captcha_page_url
+from .captcha_view import (
+    CAPTCHA_STEP_ID,
+    async_register_captcha_view,
+    captcha_page_url,
+    parse_captcha_base_url,
+)
 from .const import (
     CONF_BREEZER_GUID,
+    CONF_CAPTCHA_BASE_URL,
     CONF_CAPTCHA_TOKEN,
     CONF_CO2_SENSOR_ENTITY_ID,
     CONF_DEVICE_KEY,
@@ -65,12 +71,15 @@ from .const import (
     DEFAULT_PID_KI,
     DEFAULT_PID_KP,
     DEFAULT_PID_MIN_SPEED,
+    DOCS_CAPTCHA_URL,
     DOMAIN,
     PID_INTERVAL_RANGE,
+    REAUTH_DATA_STALE,
+    REAUTH_STEP_STALE,
     SUPPORTED_PRESETS,
     TionPresetType,
 )
-from .coordinator import TionConfigEntry
+from .coordinator import TionConfigEntry, async_forget_failed_starts
 from .pid_manager import is_pid_set_up
 from .session import async_create_auth
 
@@ -85,9 +94,15 @@ STEP_USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_EMAIL): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Optional(CONF_CAPTCHA_BASE_URL): str,
     }
 )
-STEP_REAUTH_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
+STEP_REAUTH_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_PASSWORD): str,
+        vol.Optional(CONF_CAPTCHA_BASE_URL): str,
+    }
+)
 STEP_CODE_SCHEMA = vol.Schema({vol.Required(CONF_CODE): str})
 
 
@@ -95,11 +110,13 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
     """Tion config flow."""
 
     VERSION = 1
+    _reauth_step: str = "reauth_confirm"
 
     def __init__(self) -> None:
         """Initialize the flow."""
         self._email = ""
         self._password = ""
+        self._captcha_base_url: str | None = None
         self._auth: TionAuth | None = None
         self._login_error: str | None = None
 
@@ -120,18 +137,27 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         """Ask for the Tion account e-mail and password."""
         if user_input is not None:
             self._email = user_input[CONF_EMAIL]
+            if not self._set_captcha_base_url(user_input):
+                return self._credentials_form(
+                    "user",
+                    STEP_USER_SCHEMA,
+                    {
+                        CONF_EMAIL: self._email,
+                        CONF_CAPTCHA_BASE_URL: user_input[CONF_CAPTCHA_BASE_URL],
+                    },
+                    {CONF_CAPTCHA_BASE_URL: "invalid_captcha_url"},
+                )
             await self.async_set_unique_id(
                 self._unique_id(self._email), raise_on_progress=False
             )
             self._abort_if_unique_id_configured()
             return await self._async_start_login(user_input[CONF_PASSWORD])
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=self.add_suggested_values_to_schema(
-                STEP_USER_SCHEMA, {CONF_EMAIL: self._email}
-            ),
-            errors=self._pop_login_error(),
+        return self._credentials_form(
+            "user",
+            STEP_USER_SCHEMA,
+            {CONF_EMAIL: self._email, CONF_CAPTCHA_BASE_URL: self._captcha_base_url},
+            self._pop_login_error(),
         )
 
     async def async_step_reauth(
@@ -140,21 +166,46 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         """Start a new login for the configured account."""
         # Entries created before the v4 login keep the e-mail as the username.
         self._email = entry_data.get(CONF_EMAIL) or entry_data[CONF_USERNAME]
+        self._captcha_base_url = entry_data.get(CONF_CAPTCHA_BASE_URL)
         await self.async_set_unique_id(self._unique_id(self._email))
+        if entry_data.get(REAUTH_DATA_STALE):
+            self._reauth_step = REAUTH_STEP_STALE
+            return await self.async_step_reauth_stale()
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Ask to sign in again: Tion rejected the session or HA asked."""
+        return await self._async_reauth_form(user_input)
+
+    async def async_step_reauth_stale(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask to sign in again: renewals have been failing for over an hour."""
+        return await self._async_reauth_form(user_input)
+
+    async def _async_reauth_form(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Ask for the password of the configured account."""
         if user_input is not None:
+            if not self._set_captcha_base_url(user_input):
+                return self._credentials_form(
+                    self._reauth_step,
+                    STEP_REAUTH_SCHEMA,
+                    {CONF_CAPTCHA_BASE_URL: user_input[CONF_CAPTCHA_BASE_URL]},
+                    {CONF_CAPTCHA_BASE_URL: "invalid_captcha_url"},
+                    {"email": self._email},
+                )
             return await self._async_start_login(user_input[CONF_PASSWORD])
 
-        return self.async_show_form(
-            step_id="reauth_confirm",
-            data_schema=STEP_REAUTH_SCHEMA,
-            description_placeholders={"email": self._email},
-            errors=self._pop_login_error(),
+        return self._credentials_form(
+            self._reauth_step,
+            STEP_REAUTH_SCHEMA,
+            {CONF_CAPTCHA_BASE_URL: self._captcha_base_url},
+            self._pop_login_error(),
+            {"email": self._email},
         )
 
     async def async_step_captcha(
@@ -164,7 +215,8 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             async_register_captcha_view(self.hass)
             return self.async_external_step(
-                step_id=CAPTCHA_STEP_ID, url=captcha_page_url(self.flow_id)
+                step_id=CAPTCHA_STEP_ID,
+                url=captcha_page_url(self.flow_id, self._captcha_base_url),
             )
 
         # An external step may only end with external_step_done, so a failure
@@ -201,7 +253,7 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
                 if err.reason == LOGIN_ERROR_CODE_EXPIRED:
                     self._login_error = err.reason
                     if self.source == SOURCE_REAUTH:
-                        return await self.async_step_reauth_confirm()
+                        return await self._async_reauth_form()
                     return await self.async_step_user()
                 errors["base"] = err.reason
             except TionConnectionError:
@@ -221,7 +273,37 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @property
     def _credentials_step_id(self) -> str:
-        return "reauth_confirm" if self.source == SOURCE_REAUTH else "user"
+        return self._reauth_step if self.source == SOURCE_REAUTH else "user"
+
+    def _set_captcha_base_url(self, user_input: dict[str, Any]) -> bool:
+        """Store the entered captcha page address, False when it is malformed."""
+        try:
+            self._captcha_base_url = parse_captcha_base_url(
+                user_input.get(CONF_CAPTCHA_BASE_URL)
+            )
+        except ValueError:
+            return False
+        return True
+
+    def _credentials_form(
+        self,
+        step_id: str,
+        schema: vol.Schema,
+        suggested: dict[str, str | None],
+        errors: dict[str, str],
+        placeholders: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self.add_suggested_values_to_schema(
+                schema, {key: value for key, value in suggested.items() if value}
+            ),
+            description_placeholders={
+                **(placeholders or {}),
+                "docs_url": DOCS_CAPTCHA_URL,
+            },
+            errors=errors,
+        )
 
     async def _async_start_login(self, password: str) -> ConfigFlowResult:
         self._password = password
@@ -246,10 +328,15 @@ class TionConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_DEVICE_KEY_ID: device_key.key_id(),
             **tokens.as_dict(),
         }
+        if self._captcha_base_url is not None:
+            data[CONF_CAPTCHA_BASE_URL] = self._captcha_base_url
         if self.source == SOURCE_REAUTH:
             self._abort_if_unique_id_mismatch(reason="wrong_account")
+            entry = self._get_reauth_entry()
+            # Fresh tokens start a new episode of failed starts.
+            async_forget_failed_starts(self.hass, entry)
             return self.async_update_reload_and_abort(
-                self._get_reauth_entry(), title=self._email, data=data
+                entry, title=self._email, data=data
             )
         self._abort_if_unique_id_configured()
         return self.async_create_entry(title=self._email, data=data)

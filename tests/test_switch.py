@@ -259,6 +259,7 @@ async def test_command_auth_error_asks_to_sign_in(
     hass: HomeAssistant, cloud: FakeTionCloud
 ) -> None:
     """A rejected sign-in during a command starts reauthentication."""
+    cloud.auth_error = TionAuthError("expired")
     cloud.command_error = TionAuthError("expired")
 
     with pytest.raises(HomeAssistantError) as exc_info:
@@ -268,3 +269,9 @@ async def test_command_auth_error_asks_to_sign_in(
     assert exc_info.value.translation_key == "auth_failed"
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
+
+    cloud.auth_error = None
+    cloud.command_error = None
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []

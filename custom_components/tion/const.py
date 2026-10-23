@@ -13,8 +13,10 @@ from homeassistant.components.climate import (
     PRESET_SLEEP,
 )
 from homeassistant.const import Platform
+from homeassistant.util.hass_dict import HassKey
 
 DOMAIN = "tion"
+DATA_START_FAILURES: HassKey[dict[str, float]] = HassKey(f"{DOMAIN}.start_failures")
 # v4 pushes no online/offline events: only re-reading the structure shows them.
 REFRESH_INTERVAL = timedelta(seconds=60)
 # Seconds entities stay available after the live channel drops.
@@ -34,6 +36,8 @@ FAN_LOCAL_PID = "local_pid"
 # unique_id keys of a breezer's local PID numbers.
 PID_NUMBER_KEYS = ("min_speed_set", "max_speed_set", "external_target_co2")
 CONF_CAPTCHA_TOKEN = "captcha_token"
+CONF_CAPTCHA_BASE_URL = "captcha_base_url"
+DOCS_CAPTCHA_URL = "https://github.com/vaproloff/tion_home_assistant/blob/master/docs/captcha-localhost.md"
 CONF_DEVICE_KEY = "device_key"
 CONF_DEVICE_KEY_ID = "device_key_id"
 MANUFACTURER = "Tion"
@@ -64,6 +68,9 @@ SUPPORTED_PRESETS: tuple[str, ...] = (
     PRESET_ACTIVITY,
     PRESET_HOME,
 )
+
+REAUTH_DATA_STALE = "tion_reauth_stale"
+REAUTH_STEP_STALE = "reauth_stale"
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,

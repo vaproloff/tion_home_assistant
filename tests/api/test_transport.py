@@ -214,6 +214,11 @@ async def test_trailers_only_status_in_headers() -> None:
         pytest.param(
             FakeResponse(200, _trailers("grpc-status: 2")), TionApiError, id="unknown"
         ),
+        pytest.param(
+            FakeResponse(200, _trailers("grpc-status: 9")),
+            TionApiError,
+            id="failed_precondition_stays_api_error",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -225,6 +230,26 @@ async def test_call_normalizes_errors(
         await TionTransport(FakeSession(response), SSL_CONTEXT).async_call(
             "s", "m", b""
         )
+
+
+@pytest.mark.parametrize(
+    ("response", "expected_status"),
+    [
+        pytest.param(
+            FakeResponse(200, _trailers("grpc-status: 9")), 9, id="failed_precondition"
+        ),
+        pytest.param(FakeResponse(403, b""), None, id="http_403"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_api_error_carries_grpc_status(
+    response: FakeResponse, expected_status: int | None
+) -> None:
+    """The gRPC status travels with the error so callers can tell cases apart."""
+    client = TionTransport(FakeSession(response), SSL_CONTEXT)
+    with pytest.raises(TionApiError) as err:
+        await client.async_call("Svc", "Method", b"")
+    assert err.value.grpc_status == expected_status
 
 
 @pytest.mark.parametrize(

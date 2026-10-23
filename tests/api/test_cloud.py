@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 
 from custom_components.tion.api import cloud as cloud_module
+from custom_components.tion.api.auth import RENEW_RETRY_INTERVAL
 from custom_components.tion.api.cloud import TionCloud
 from custom_components.tion.api.datapoints import DPKind, DPValue, encode_update_request
 from custom_components.tion.api.exceptions import (
@@ -66,6 +67,8 @@ class Harness:
         self.auth = FakeAuth()
         self.broker = FakeBroker()
         self.sleeps: list[float] = []
+        self.hold: set[float] = set()
+        self.held: list[asyncio.Future[None]] = []
         self.notifications = 0
         self.cloud = TionCloud(
             self.transport,
@@ -77,9 +80,20 @@ class Harness:
         self.cloud.add_listener(self.listener)
 
     async def sleep(self, delay: float) -> None:
-        """Record the delay and yield once."""
+        """Record the delay and yield once; held delays wait for release."""
         self.sleeps.append(delay)
+        if delay in self.hold:
+            future = asyncio.get_running_loop().create_future()
+            self.held.append(future)
+            await future
+            return
         await asyncio.sleep(0)
+
+    def release(self) -> None:
+        """End every held sleep."""
+        for future in self.held:
+            if not future.done():
+                future.set_result(None)
 
     def listener(self) -> None:
         """Count snapshot changes."""
@@ -667,7 +681,7 @@ async def test_reconnect_survives_unreachable_renewal(harness: Harness) -> None:
     """A token renewal that cannot reach the server is only a failed attempt."""
     await harness.cloud.async_start()
     harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
-    harness.auth.renew_error = TionConnectionError("offline")
+    harness.auth.renew_failure = TionConnectionError("offline")
 
     harness.broker.last.drop(TionConnectionError("gone"))
     await _eventually(lambda: harness.cloud.connected)
@@ -675,6 +689,35 @@ async def test_reconnect_survives_unreachable_renewal(harness: Harness) -> None:
     assert harness.sleeps == [1.0, 2.0]
     assert harness.cloud.auth_error is None
     assert len(harness.broker.connections) == 2
+
+
+@pytest.mark.asyncio
+async def test_reconnect_failure_notifies_when_auth_error_is_set(
+    harness: Harness,
+) -> None:
+    """With the channel down, the HA layer learns about auth_error from reconnect."""
+    await harness.cloud.async_start()
+    harness.hold.update({1.0, 2.0})
+    harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
+    harness.auth.renew_failure = TionConnectionError("down")
+    harness.broker.last.drop(TionAuthError("User Authentication Expired"))
+    await _eventually(lambda: 1.0 in harness.sleeps)
+    # The disconnect notification has fired; only the failed attempt can notify now.
+    harness.auth.renew_error = TionAuthError("RenewAccess has been failing since 0")
+    before = harness.notifications
+
+    harness.release()
+    await _eventually(lambda: harness.notifications > before)
+
+    assert str(harness.cloud.auth_error) == "RenewAccess has been failing since 0"
+    assert not harness.cloud.connected
+
+    harness.auth.renew_failure = None
+    harness.auth.renew_error = None
+    harness.release()
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.cloud.auth_error is None
 
 
 @pytest.mark.asyncio
@@ -710,18 +753,53 @@ async def test_nats_auth_error_renews_and_rereads_structure(harness: Harness) ->
 
 
 @pytest.mark.asyncio
-async def test_start_auth_failure_raises_and_cleans_up(harness: Harness) -> None:
-    """A login the server keeps refusing fails the start without leftovers."""
+async def test_start_fresh_token_rejected_is_connection_error(harness: Harness) -> None:
+    """Two refused CONNECTs in a row: the second one came with a fresh token."""
     harness.broker.connect_errors = [
         TionAuthError("Authorization Violation"),
         TionAuthError("Authorization Violation"),
     ]
 
-    with pytest.raises(TionAuthError):
+    with pytest.raises(TionConnectionError, match="fresh token rejected"):
         await harness.cloud.async_start()
 
+    assert harness.auth.renewals == 1
+    assert harness.cloud.auth_error is None
     assert harness.broker.connections == []
     assert not harness.cloud.connected
+
+
+@pytest.mark.asyncio
+async def test_rpc_fresh_token_rejected_is_connection_error(harness: Harness) -> None:
+    """401 after a successful renewal is a server fault, not a dead session."""
+    harness.transport.answers["GetDeviceProfiles"] = [
+        TionAuthError("401"),
+        TionAuthError("401"),
+        PROFILES,
+    ]
+
+    with pytest.raises(TionConnectionError, match="fresh token rejected"):
+        await harness.cloud.async_start()
+
+    assert harness.auth.renewals == 1
+    assert harness.cloud.auth_error is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_fresh_token_rejected_is_connection_error(
+    harness: Harness,
+) -> None:
+    """The periodic structure read follows the same rule."""
+    await harness.cloud.async_start()
+    harness.transport.answers["GetFullStructureLocations"] = [
+        TionAuthError("401"),
+        TionAuthError("401"),
+    ]
+
+    with pytest.raises(TionConnectionError, match="fresh token rejected"):
+        await harness.cloud.async_refresh()
+
+    assert harness.cloud.auth_error is None
 
 
 @pytest.mark.asyncio
@@ -897,21 +975,112 @@ async def test_stale_disconnect_is_ignored(harness: Harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconnect_auth_failure_sets_auth_error(harness: Harness) -> None:
-    """A login refused in the background stops reconnecting and is reported."""
+async def test_reconnect_auth_failure_waits_and_retries(harness: Harness) -> None:
+    """A terminal renew in the background reports auth_error, waits, then tries again."""
     await harness.cloud.async_start()
-    harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
-    harness.auth.renew_error = TionAuthError("Renew session expired")
+    harness.hold.add(RENEW_RETRY_INTERVAL)
+    harness.broker.connect_errors = [
+        TionAuthError("Authorization Violation"),
+        TionAuthError("Authorization Violation"),
+    ]
+    harness.auth.renew_failure = TionAuthError("Renew session expired")
     notified: list[TionAuthError | None] = []
     harness.cloud.add_listener(lambda: notified.append(harness.cloud.auth_error))
 
     harness.broker.last.drop(TionAuthError("User Authentication Expired"))
-    await _eventually(lambda: harness.cloud.auth_error is not None)
+    await _eventually(lambda: RENEW_RETRY_INTERVAL in harness.sleeps)
 
     assert str(harness.cloud.auth_error) == "Renew session expired"
     assert notified[-1] is harness.cloud.auth_error
-    assert len(harness.broker.connections) == 1
     assert not harness.cloud.connected
+    assert len(harness.broker.connections) == 1
+
+    harness.auth.renew_failure = None
+    harness.release()
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.cloud.auth_error is None
+    assert notified[-1] is None
+    assert harness.auth.renewals == 1
+    assert harness.sleeps == [1.0, RENEW_RETRY_INTERVAL, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_nats_fresh_token_rejected_keeps_reconnecting(harness: Harness) -> None:
+    """A refused CONNECT with a fresh token is a failed attempt with normal backoff."""
+    await harness.cloud.async_start()
+    harness.broker.connect_errors = [
+        TionAuthError("Authorization Violation"),
+        TionAuthError("Authorization Violation"),
+    ]
+
+    harness.broker.last.drop(TionConnectionError("gone"))
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.sleeps == [1.0, 2.0]
+    assert harness.cloud.auth_error is None
+
+
+@pytest.mark.asyncio
+async def test_renewal_elsewhere_wakes_reconnect(harness: Harness) -> None:
+    """A token renewed by another path ends the wait at once."""
+    await harness.cloud.async_start()
+    harness.hold.add(RENEW_RETRY_INTERVAL)
+    harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
+    harness.auth.renew_failure = TionAuthError("Renew session expired")
+    harness.broker.last.drop(TionAuthError("User Authentication Expired"))
+    await _eventually(lambda: RENEW_RETRY_INTERVAL in harness.sleeps)
+
+    harness.auth.renew_failure = None
+    await harness.auth.async_renew_access()
+    await _eventually(lambda: harness.cloud.connected)
+
+    assert harness.cloud.auth_error is None
+    assert harness.sleeps == [1.0, RENEW_RETRY_INTERVAL, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_stop_during_renew_wait(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Stopping while waiting out the interval ends the loop quietly."""
+    await harness.cloud.async_start()
+    harness.hold.add(RENEW_RETRY_INTERVAL)
+    harness.broker.connect_errors = [TionAuthError("Authorization Violation")]
+    harness.auth.renew_failure = TionAuthError("Renew session expired")
+    harness.broker.last.drop(TionAuthError("User Authentication Expired"))
+    await _eventually(lambda: RENEW_RETRY_INTERVAL in harness.sleeps)
+
+    await harness.cloud.async_stop()
+    await asyncio.sleep(0)
+
+    assert len(harness.broker.connections) == 1
+    assert "Unexpected error" not in caplog.text
+    assert harness.sleeps == [1.0, RENEW_RETRY_INTERVAL]
+
+
+@pytest.mark.asyncio
+async def test_stop_unsubscribes_from_token_updates(harness: Harness) -> None:
+    """Guard: a stopped cloud no longer hears about renewals."""
+    await harness.cloud.async_start()
+    await harness.cloud.async_stop()
+    before = harness.notifications
+
+    await harness.auth.async_renew_access()
+
+    assert harness.auth.listeners == []
+    assert harness.notifications == before
+
+
+@pytest.mark.asyncio
+async def test_token_update_notifies_listeners(harness: Harness) -> None:
+    """Every renewal reaches the listeners so the HA layer can re-read auth_error."""
+    await harness.cloud.async_start()
+    before = harness.notifications
+
+    await harness.auth.async_renew_access()
+
+    assert harness.notifications == before + 1
 
 
 @pytest.mark.asyncio

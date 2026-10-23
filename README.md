@@ -3,7 +3,7 @@
 [![HACS validation](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hacs.yaml)
 [![Hassfest](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/vaproloff/tion_home_assistant/actions/workflows/hassfest.yaml)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2026.1%2B-blue)
-![Version](https://img.shields.io/badge/version-2026.10.0-blue)
+![Version](https://img.shields.io/badge/version-2026.10.1-blue)
 ![HACS](https://img.shields.io/badge/HACS-Custom-orange)
 [![GitHub stars](https://img.shields.io/github/stars/vaproloff/tion_home_assistant?style=social)](https://github.com/vaproloff/tion_home_assistant/stargazers)
 
@@ -69,9 +69,12 @@ A custom Home Assistant integration for Tion Breezer O2/3S/4S, MagicAir and Modu
 2. Нажмите `Добавить интеграцию` и найдите `Tion`.
 3. Введите email и пароль аккаунта Tion.
 4. Пройдите капчу на открывшейся странице.
+
+   Tion сейчас принимает капчу только со страницы по адресу http://localhost, поэтому для входа нужен проброс порта 80 вашего компьютера на Home Assistant и адрес http://localhost в поле «Адрес страницы капчи». Как это сделать на Windows, macOS и Linux — в [инструкции](docs/captcha-localhost.md).
+
 5. Введите код из письма, которое пришлёт Tion.
 
-После входа интеграция сама найдёт устройства аккаунта. Если сессия Tion закончится (она длится не больше 30 дней), Home Assistant попросит войти заново.
+После входа интеграция сама найдёт устройства аккаунта. Если Tion отклонит сохранённую сессию, Home Assistant попросит войти заново.
 
 ## Обновление с 2026.6.x
 
@@ -191,6 +194,8 @@ PID считает мощность 0–100 %, переводит её в ско
 2. Станция MagicAir онлайн.
 3. После установки или обновления Home Assistant был перезапущен.
 4. В разделе `Настройки` -> `Исправления` нет уведомления от Tion.
+5. Ошибка «Tion не принял капчу»: см. [инструкцию по входу через localhost](docs/captcha-localhost.md). Уже настроенную интеграцию не удаляйте: она продолжает работать.
+6. Уведомление «нужна повторная авторизация»: откройте его, форма называет причину. «Tion отклонил сохранённую сессию» — войдите заново по [инструкции](docs/captcha-localhost.md), даже если устройства пока работают: после обрыва связи они без входа не вернутся. «Tion больше часа не продлевает сессию» — скорее всего сбой Tion: подождите, интеграция продолжает попытки и сама снимет запрос, когда связь восстановится; если он держится больше суток, войдите заново. В версии 2026.10.0 ложный запрос снимала перезагрузка записи (`Настройки` -> `Устройства и службы` -> Tion -> `Перезагрузить`).
 
 Для диагностики можно включить debug-логирование:
 
@@ -205,7 +210,7 @@ logger:
 
 ## Техническая информация
 
-- Вход в облако Tion MagicAir по gRPC-Web с капчей и кодом из письма; сессия обновляется сама.
+- Вход в облако Tion MagicAir по gRPC-Web с капчей и кодом из письма; сессия обновляется сама. Запрос на повторный вход появляется, когда Tion явно отклонил обновление, либо когда обновление не удаётся больше часа; во втором случае запрос снимется сам, когда связь восстановится.
 - Состояние устройств приходит по живому каналу облака (NATS поверх WebSocket); раз в минуту интеграция для страховки перечитывает структуру аккаунта.
 - Свой минимальный клиент протокола без сторонних зависимостей.
 - Нативные платформы Home Assistant: `climate`, `sensor`, `binary_sensor`, `button`, `number`, `switch`.

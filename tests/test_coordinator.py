@@ -3,15 +3,22 @@
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
 from ha_tests.common import MockConfigEntry, async_fire_time_changed
 import pytest
 
-from custom_components.tion.api import TionApiError, TionAuthError, TionConnectionError
-from custom_components.tion.const import DOMAIN
+from custom_components.tion.api import (
+    TionApiError,
+    TionAuthError,
+    TionAuthStaleError,
+    TionConnectionError,
+)
+from custom_components.tion.const import DOMAIN, REAUTH_STEP_STALE
 from custom_components.tion.coordinator import TionCoordinator
-from homeassistant.config_entries import SOURCE_REAUTH
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -91,17 +98,160 @@ async def test_refresh_errors(
     assert coordinator.last_exception.translation_key == translation_key
 
 
-async def test_refresh_auth_error_asks_to_sign_in(
-    hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
+def _reauth_flows(hass: HomeAssistant) -> list[str]:
+    return [
+        flow["flow_id"]
+        for flow in hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, match_context={"source": SOURCE_REAUTH}
+        )
+    ]
+
+
+def _reauth_steps(hass: HomeAssistant) -> list[str]:
+    return [
+        flow["step_id"]
+        for flow in hass.config_entries.flow.async_progress_by_handler(
+            DOMAIN, match_context={"source": SOURCE_REAUTH}
+        )
+    ]
+
+
+async def test_refresh_auth_error_asks_to_sign_in_and_keeps_refreshing(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    coordinator: TionCoordinator,
+    cloud: FakeTionCloud,
 ) -> None:
-    """A rejected sign-in during the refresh starts reauthentication."""
+    """A terminal renew opens reauth as UpdateFailed; the next refresh still runs."""
     cloud.refresh_error = TionAuthError("expired")
 
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
-    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
-    assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+    assert coordinator.last_exception.translation_key == "auth_failed"
+    assert len(_reauth_flows(hass)) == 1
+
+    await _tick(hass, freezer, 61)
+
+    assert cloud.refreshes == 2
+
+
+async def test_refresh_success_resolves_reauth(
+    hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
+) -> None:
+    """The first successful refresh after a terminal renew closes the reauth flow."""
+    cloud.refresh_error = TionAuthError("expired")
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    cloud.refresh_error = None
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert coordinator.last_update_success
+    assert _reauth_flows(hass) == []
+
+
+async def test_refresh_success_keeps_reauth_while_cloud_auth_error(
+    hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
+) -> None:
+    """Guard: a refresh without a renewal proves nothing while auth_error stands."""
+    cloud.auth_error = TionAuthError("expired")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert len(_reauth_flows(hass)) == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "translation_key"),
+    [
+        pytest.param(TionConnectionError("down"), "cloud_unavailable", id="connection"),
+        pytest.param(TionApiError("bad"), "cloud_error", id="api"),
+    ],
+)
+async def test_refresh_failure_with_auth_error_opens_and_closes_reauth(
+    hass: HomeAssistant,
+    coordinator: TionCoordinator,
+    cloud: FakeTionCloud,
+    error: Exception,
+    translation_key: str,
+) -> None:
+    """A failed refresh still reports the flag; clearing the flag closes the form."""
+    cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
+    cloud.refresh_error = error
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert isinstance(coordinator.last_exception, UpdateFailed)
+    assert coordinator.last_exception.translation_key == translation_key
+    assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
+
+    cloud.auth_error = None
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert _reauth_flows(hass) == []
+
+
+async def test_refresh_failure_without_auth_error_opens_nothing(
+    hass: HomeAssistant, coordinator: TionCoordinator, cloud: FakeTionCloud
+) -> None:
+    """Guard: an ordinary outage is not a sign-in problem."""
+    cloud.refresh_error = TionConnectionError("down")
+
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+
+
+@pytest.mark.usefixtures("coordinator")
+async def test_cloud_auth_error_opens_and_resolves_reauth(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """auth_error set opens reauth once; auth_error cleared closes it."""
+    cloud.auth_error = TionAuthError("expired")
+    cloud.push(cloud.account)
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+    assert len(_reauth_flows(hass)) == 1
+
+    cloud.auth_error = None
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert _reauth_flows(hass) == []
+
+
+async def test_push_during_unload_does_not_open_reauth(
+    hass: HomeAssistant, init_integration: MockConfigEntry, cloud: FakeTionCloud
+) -> None:
+    """The old coordinator stays quiet while the entry reloads after a reauth."""
+    cloud.auth_error = TionAuthError("expired")
+    init_integration.mock_state(hass, ConfigEntryState.UNLOAD_IN_PROGRESS)
+
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+    init_integration.mock_state(hass, ConfigEntryState.LOADED)
+
+
+@pytest.mark.usefixtures("coordinator")
+async def test_pushes_without_auth_error_do_not_touch_flows(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """Guard: ordinary pushes neither open nor abort anything."""
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
 
 
 async def test_channel_down_after_grace(
@@ -146,3 +296,66 @@ async def test_unload_cancels_grace(
     cloud.push(replace(cloud.account, connected=False))
 
     assert await hass.config_entries.async_unload(init_integration.entry_id)
+
+
+@pytest.mark.usefixtures("coordinator")
+async def test_refusal_replaces_an_open_outage_form(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """An explicit refusal swaps the open "outage" form for the confirm form."""
+    cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+    assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
+
+    cloud.auth_error = TionAuthError("RenewAccess rejected (1): nope")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert _reauth_steps(hass) == ["reauth_confirm"]
+
+
+@pytest.mark.usefixtures("coordinator")
+async def test_streak_after_a_refusal_keeps_the_refusal_form(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """Guard: an hour-long streak does not replace an open refusal form."""
+    cloud.auth_error = TionAuthError("RenewAccess rejected (1): nope")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+    assert _reauth_steps(hass) == ["reauth_confirm"]
+    [flow_id] = _reauth_flows(hass)
+
+    cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    assert _reauth_steps(hass) == ["reauth_confirm"]
+    assert _reauth_flows(hass) == [flow_id]
+
+
+@pytest.mark.usefixtures("coordinator")
+async def test_refusal_keeps_a_flow_the_user_is_working_through(
+    hass: HomeAssistant, cloud: FakeTionCloud
+) -> None:
+    """A refusal does not interrupt a flow already past the password form."""
+    cloud.auth_error = TionAuthStaleError("RenewAccess has been failing since 0")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+    assert _reauth_steps(hass) == [REAUTH_STEP_STALE]
+    [flow_id] = _reauth_flows(hass)
+    with (
+        patch("custom_components.tion.config_flow.async_create_auth", AsyncMock()),
+        patch("custom_components.tion.config_flow.async_register_captcha_view"),
+    ):
+        await hass.config_entries.flow.async_configure(flow_id, {CONF_PASSWORD: "pw"})
+
+    cloud.auth_error = TionAuthError("RenewAccess rejected (1): nope")
+    cloud.push(cloud.account)
+    await hass.async_block_till_done()
+
+    [flow] = hass.config_entries.flow.async_progress_by_handler(
+        DOMAIN, match_context={"source": SOURCE_REAUTH}
+    )
+    assert flow["flow_id"] == flow_id
+    assert flow["step_id"] == "captcha"
