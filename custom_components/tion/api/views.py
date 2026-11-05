@@ -1,7 +1,7 @@
 """Semantic device views: the only place that knows datapoint codes."""
 
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import StrEnum
 from typing import Any
 
 from .datapoints import DPKind, DPValue
@@ -20,17 +20,24 @@ _CLIMATIC_HEATER_INSTALLED = 0
 _CLIMATIC_FILTER_REPLACE = 2
 
 
-class Flap(IntEnum):
-    """Where a breezer takes air from (flap_mode)."""
+class Flap(StrEnum):
+    """Where a breezer takes air from.
 
-    OUTSIDE = 0
-    INSIDE = 1
-    MIXED = 2
+    The definition order is the order in which the positions are offered.
+    """
+
+    OUTSIDE = "outside"
+    INSIDE = "inside"
+    MIXED = "mixed"
 
 
-# A 4S takes MIXED but stays INSIDE; the O2 is assumed to match the 4S.
-_FLAP_MODES = {"br3s_rf": (Flap.OUTSIDE, Flap.INSIDE, Flap.MIXED)}
-_DEFAULT_FLAP_MODES = (Flap.OUTSIDE, Flap.INSIDE)
+# Flap codes from the flap screen of the Tion profile. A 4S takes code 2 but
+# stays "from the room", so it has no MIXED. The O2 has no row: the Tion app
+# shows no flap for it.
+_FLAP_CODES: dict[str, dict[Flap, int]] = {
+    "br3s_rf": {Flap.INSIDE: 0, Flap.MIXED: 1, Flap.OUTSIDE: 2},
+    "b4s_ble": {Flap.OUTSIDE: 0, Flap.INSIDE: 1},
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,17 +229,36 @@ class Breezer(_DeviceView):
         return self._raw("sensor_heater_type")
 
     @property
+    def _has_flap(self) -> bool:
+        """Return True if the model has a flap, whatever its profile declares."""
+        return self.device.product_id in _FLAP_CODES
+
+    def supports(self, name: str) -> bool:
+        """Return True if the model has the datapoint behind a property or command."""
+        if name == "flap" and not self._has_flap:
+            return False
+        return super().supports(name)
+
+    def can_set(self, name: str) -> bool:
+        """Return True if command() can set this property or command for the model."""
+        if name == "flap" and not self._has_flap:
+            return False
+        return super().can_set(name)
+
+    @property
     def flap(self) -> Flap | None:
         """Return where the breezer takes air from."""
         raw = self._raw("flap_mode")
-        return Flap(raw) if raw in Flap else None
+        codes = _FLAP_CODES.get(self.device.product_id, {})
+        return next((flap for flap, code in codes.items() if code == raw), None)
 
     @property
     def flap_modes(self) -> tuple[Flap, ...]:
         """Return the flap modes the breezer can be set to."""
         if not self.can_set("flap"):
             return ()
-        return _FLAP_MODES.get(self.device.product_id, _DEFAULT_FLAP_MODES)
+        codes = _FLAP_CODES.get(self.device.product_id, {})
+        return tuple(flap for flap in Flap if flap in codes)
 
     @property
     def filter_remaining(self) -> int | None:
@@ -281,11 +307,12 @@ class Breezer(_DeviceView):
                 spec = self._writable("filter_hours")
                 return _encode_value(spec, FILTER_RESOURCE_SECONDS)
             case "flap":
-                if value not in self.flap_modes:
+                codes = _FLAP_CODES.get(self.device.product_id, {})
+                if value not in codes:
                     raise ValueError(
                         f"{self.device.product_id} cannot set flap={value}"
                     )
-                return _encode_value(self._writable("flap_mode"), int(value))
+                return _encode_value(self._writable("flap_mode"), codes[value])
             case "is_on" | "backlight" | "sound":
                 code = self._FEATURES[name]
                 return _encode_value(self._writable(code), int(value))
