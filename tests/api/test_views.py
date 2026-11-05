@@ -258,13 +258,6 @@ def test_speed_max(
     assert _breezer(profiles, profile_id, *values).speed_max == speed_max
 
 
-def test_unknown_flap_value(profiles: dict[UUID, DeviceProfile]) -> None:
-    """A flap mode outside the known ones reads as unknown."""
-    breezer = _breezer(profiles, PROFILE_4S, DPValue(195, DPKind.INT, 7))
-
-    assert breezer.flap is None
-
-
 @pytest.mark.parametrize(
     ("profile_id", "feature", "supported"),
     [
@@ -339,11 +332,52 @@ def test_flap_modes(
     assert _breezer(profiles, profile_id).flap_modes == modes
 
 
-def test_3s_mixed_flap_command(profiles: dict[UUID, DeviceProfile]) -> None:
-    """A 3S can mix outside and inside air."""
-    command = _breezer(profiles, PROFILE_3S).command(flap=Flap.MIXED)
+@pytest.mark.parametrize(
+    ("profile_id", "code", "flap"),
+    [
+        pytest.param(PROFILE_3S, 0, Flap.INSIDE, id="3s_inside"),
+        pytest.param(PROFILE_3S, 1, Flap.MIXED, id="3s_mixed"),
+        pytest.param(PROFILE_3S, 2, Flap.OUTSIDE, id="3s_outside"),
+        pytest.param(PROFILE_4S, 0, Flap.OUTSIDE, id="4s_outside"),
+        pytest.param(PROFILE_4S, 1, Flap.INSIDE, id="4s_inside"),
+    ],
+)
+def test_flap_codes(
+    profiles: dict[UUID, DeviceProfile], profile_id: UUID, code: int, flap: Flap
+) -> None:
+    """Each model reads and writes the flap codes of its Tion profile.
 
-    assert command.values == (DPValue(195, DPKind.INT, 2),)
+    The 4S cases are a guard: the 4S, checked live, keeps its codes.
+    """
+    breezer = _breezer(profiles, profile_id, DPValue(195, DPKind.INT, code))
+
+    assert breezer.flap is flap
+    assert breezer.command(flap=flap).values == (DPValue(195, DPKind.INT, code),)
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "code"),
+    [
+        pytest.param(PROFILE_4S, 7, id="4s_unknown"),
+        pytest.param(PROFILE_3S, 7, id="3s_unknown"),
+        pytest.param(PROFILE_4S, 2, id="4s_mixed_code"),
+    ],
+)
+def test_flap_code_outside_the_model(
+    profiles: dict[UUID, DeviceProfile], profile_id: UUID, code: int
+) -> None:
+    """A code the model's flap does not have reads as unknown.
+
+    The *_unknown cases are a guard: those codes read as unknown before too.
+    """
+    breezer = _breezer(profiles, profile_id, DPValue(195, DPKind.INT, code))
+
+    assert breezer.flap is None
+
+
+def test_flap_positions_are_not_codes() -> None:
+    """A position is not a number, so it cannot pass for another model's code."""
+    assert not any(isinstance(flap.value, int) for flap in Flap)
 
 
 def test_recorded_magicair_state(profiles: dict[UUID, DeviceProfile]) -> None:

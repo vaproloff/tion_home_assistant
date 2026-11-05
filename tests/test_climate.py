@@ -251,7 +251,7 @@ async def test_fan_modes(
     ("device_id", "swing_modes", "swing_mode"),
     [
         pytest.param(BREEZER_4S, ["outside", "inside"], "outside", id="4s"),
-        pytest.param(BREEZER_3S, ["outside", "inside", "mixed"], "mixed", id="3s"),
+        pytest.param(BREEZER_3S, ["outside", "inside", "mixed"], "outside", id="3s"),
         pytest.param(BREEZER_O2, ["outside", "inside"], "inside", id="o2"),
     ],
 )
@@ -386,6 +386,14 @@ async def test_swing_modes(
             {ATTR_SWING_MODE: "inside"},
             [_command(BREEZER_4S, (195, DPKind.INT, 1))],
             id="swing",
+        ),
+        pytest.param(
+            default_account(),
+            SERVICE_SET_SWING_MODE,
+            BREEZER_3S,
+            {ATTR_SWING_MODE: "outside"},
+            [_command(BREEZER_3S, (195, DPKind.INT, 2))],
+            id="3s_swing",
         ),
     ],
 )

@@ -277,7 +277,7 @@
       'mode': None,
       'speed': 0,
       <EntityStateAttribute.SUPPORTED_FEATURES: 'supported_features'>: <ClimateEntityFeature: 425>,
-      <ClimateEntityStateAttribute.SWING_MODE: 'swing_mode'>: <SwingMode.SWING_MIXED: 'mixed'>,
+      <ClimateEntityStateAttribute.SWING_MODE: 'swing_mode'>: <SwingMode.SWING_OUTSIDE: 'outside'>,
       <ClimateEntityCapabilityAttribute.SWING_MODES: 'swing_modes'>: list([
         <SwingMode.SWING_OUTSIDE: 'outside'>,
         <SwingMode.SWING_INSIDE: 'inside'>,
