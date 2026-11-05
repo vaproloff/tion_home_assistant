@@ -175,7 +175,7 @@ def test_profile_by_model(
 
 
 def test_reference_wins_over_model(profiles: dict[UUID, DeviceProfile]) -> None:
-    """Guard (passes before the change too): a reference in the catalog is used as is."""
+    """Guard (passes before the change too): a catalogued reference is used."""
     found = _only_device(device("DEV0000001", PROFILE_4S, model=4103), profiles)
 
     assert found.profile is profiles[PROFILE_4S]
@@ -214,7 +214,7 @@ def test_station_model_alone_is_not_enough(
 def test_no_single_profile_fits(
     model: int, submodel: int, catalog: dict[UUID, DeviceProfile]
 ) -> None:
-    """Guard (passes before the change too): without exactly one fit there is no profile."""
+    """Guard (passes before the change too): without one fit there is no profile."""
     found = _only_device(
         device("DEV0000001", UNKNOWN_PROFILE, model=model, submodel=submodel), catalog
     )

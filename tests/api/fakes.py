@@ -46,7 +46,7 @@ MISSING_PROFILE = UUID("0199bbbb-0000-7000-8000-000000000002")
 
 
 def catalog_renaming(profile_id: UUID, new_id: UUID) -> bytes:
-    """Return the recorded catalog with one profile under another id, like an older version."""
+    """Return the recorded catalog with one profile under another id."""
     entries = []
     for raw in ProtoMessage.parse(PROFILES).get_all(1):
         assert isinstance(raw, bytes)

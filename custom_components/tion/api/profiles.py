@@ -80,7 +80,7 @@ def find_profile(
     submodel: int,
 ) -> DeviceProfile | None:
     """Return the referenced profile, else the only one that fits the device's model."""
-    if profile_id is not None and (referenced := profiles.get(profile_id)):
+    if profile_id is not None and (referenced := profiles.get(profile_id)) is not None:
         return referenced
     if model == 0:
         return None
@@ -90,7 +90,8 @@ def find_profile(
         if profile.model == model
         and (not profile.submodels or submodel in profile.submodels)
     ]
-    # Tion replaces profiles with new versions while devices keep the old references.
+    # Tion replaced the breezer profiles while devices kept the old references;
+    # several fitting versions would be a guess, so none is taken.
     return fitting[0] if len(fitting) == 1 else None
 
 
