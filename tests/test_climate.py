@@ -122,7 +122,7 @@ async def test_climate(
         pytest.param(
             BREEZER_O2,
             [HVACMode.OFF, HVACMode.FAN_ONLY],
-            ClimateEntityFeature.SWING_MODE,
+            ClimateEntityFeature(0),
             id="o2_without_heater",
         ),
     ],
@@ -252,7 +252,6 @@ async def test_fan_modes(
     [
         pytest.param(BREEZER_4S, ["outside", "inside"], "outside", id="4s"),
         pytest.param(BREEZER_3S, ["outside", "inside", "mixed"], "outside", id="3s"),
-        pytest.param(BREEZER_O2, ["outside", "inside"], "inside", id="o2"),
     ],
 )
 @pytest.mark.usefixtures("init_integration")
@@ -266,6 +265,28 @@ async def test_swing_modes(
         swing_modes,
         swing_mode,
     )
+
+
+@pytest.mark.usefixtures("init_integration")
+async def test_o2_offers_no_swing_modes(hass: HomeAssistant) -> None:
+    """An O2 shows no flap, though it reports a flap code."""
+    attributes = _attributes(hass, BREEZER_O2)
+
+    assert (ATTR_SWING_MODES in attributes, ATTR_SWING_MODE in attributes) == (
+        False,
+        False,
+    )
+
+
+@pytest.mark.usefixtures("init_integration")
+async def test_o2_refuses_swing_mode(hass: HomeAssistant, cloud: FakeTionCloud) -> None:
+    """Setting the flap of an O2 is refused and sends nothing."""
+    with pytest.raises(ServiceValidationError):
+        await _call(
+            hass, SERVICE_SET_SWING_MODE, BREEZER_O2, **{ATTR_SWING_MODE: "inside"}
+        )
+
+    assert cloud.calls == []
 
 
 @pytest.mark.parametrize(

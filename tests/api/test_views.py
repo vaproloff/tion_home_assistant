@@ -270,6 +270,9 @@ def test_speed_max(
         pytest.param(PROFILE_BS310, "pm25", False, id="bs310_pm25"),
         pytest.param(PROFILE_CO2, "backlight", True, id="co2_backlight"),
         pytest.param(PROFILE_O2, "filter_reset", True, id="o2_filter_reset"),
+        pytest.param(PROFILE_O2, "flap", False, id="o2_flap"),
+        pytest.param(PROFILE_3S, "flap", True, id="3s_flap"),
+        pytest.param(PROFILE_4S, "flap", True, id="4s_flap"),
     ],
 )
 def test_supports(
@@ -278,7 +281,10 @@ def test_supports(
     feature: str,
     supported: bool,
 ) -> None:
-    """Features follow the model's profile."""
+    """Features follow the model's profile.
+
+    The 3s_flap and 4s_flap cases are a guard: those models keep their flap.
+    """
     device_view = view(_device(profiles, profile_id))
 
     assert device_view is not None
@@ -294,12 +300,18 @@ def test_supports(
         pytest.param(PROFILE_3S, "heater_enabled", True, id="3s_heater"),
         pytest.param(PROFILE_4S, "temperature_outdoor", False, id="read_only"),
         pytest.param(PROFILE_BS310, "backlight", True, id="bs310_backlight"),
+        pytest.param(PROFILE_O2, "flap", False, id="o2_flap"),
+        pytest.param(PROFILE_3S, "flap", True, id="3s_flap"),
+        pytest.param(PROFILE_4S, "flap", True, id="4s_flap"),
     ],
 )
 def test_can_set(
     profiles: dict[UUID, DeviceProfile], profile_id: UUID, name: str, settable: bool
 ) -> None:
-    """Only writable datapoints of the model can be set."""
+    """Only writable datapoints of the model can be set.
+
+    The 3s_flap and 4s_flap cases are a guard: those models keep their flap.
+    """
     device_view = view(_device(profiles, profile_id))
 
     assert device_view is not None
@@ -322,7 +334,7 @@ def test_unknown_name(profiles: dict[UUID, DeviceProfile], name: str) -> None:
     [
         pytest.param(PROFILE_3S, (Flap.OUTSIDE, Flap.INSIDE, Flap.MIXED), id="3s"),
         pytest.param(PROFILE_4S, (Flap.OUTSIDE, Flap.INSIDE), id="4s"),
-        pytest.param(PROFILE_O2, (Flap.OUTSIDE, Flap.INSIDE), id="o2"),
+        pytest.param(PROFILE_O2, (), id="o2"),
     ],
 )
 def test_flap_modes(
@@ -361,6 +373,7 @@ def test_flap_codes(
         pytest.param(PROFILE_4S, 7, id="4s_unknown"),
         pytest.param(PROFILE_3S, 7, id="3s_unknown"),
         pytest.param(PROFILE_4S, 2, id="4s_mixed_code"),
+        pytest.param(PROFILE_O2, 1, id="o2_reported"),
     ],
 )
 def test_flap_code_outside_the_model(
@@ -373,6 +386,15 @@ def test_flap_code_outside_the_model(
     breezer = _breezer(profiles, profile_id, DPValue(195, DPKind.INT, code))
 
     assert breezer.flap is None
+
+
+@pytest.mark.parametrize("flap", [Flap.OUTSIDE, Flap.INSIDE])
+def test_o2_refuses_flap_command(
+    profiles: dict[UUID, DeviceProfile], flap: Flap
+) -> None:
+    """No flap command reaches an O2: the Tion app shows no flap for it."""
+    with pytest.raises(ValueError):
+        _breezer(profiles, PROFILE_O2).command(flap=flap)
 
 
 def test_flap_positions_are_not_codes() -> None:

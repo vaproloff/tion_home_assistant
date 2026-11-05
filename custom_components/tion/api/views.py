@@ -32,11 +32,11 @@ class Flap(StrEnum):
 
 
 # Flap codes from the flap screen of the Tion profile. A 4S takes code 2 but
-# stays "from the room", so it has no MIXED. The O2 row copies the 4S.
+# stays "from the room", so it has no MIXED. The O2 has no row: the Tion app
+# shows no flap for it.
 _FLAP_CODES: dict[str, dict[Flap, int]] = {
     "br3s_rf": {Flap.INSIDE: 0, Flap.MIXED: 1, Flap.OUTSIDE: 2},
     "b4s_ble": {Flap.OUTSIDE: 0, Flap.INSIDE: 1},
-    "o2_rf": {Flap.OUTSIDE: 0, Flap.INSIDE: 1},
 }
 
 
@@ -227,6 +227,18 @@ class Breezer(_DeviceView):
     def heater_type(self) -> int | None:
         """Return the heater type code."""
         return self._raw("sensor_heater_type")
+
+    def supports(self, name: str) -> bool:
+        """Return True if the model has the datapoint behind a property or command."""
+        if name == "flap" and self.device.product_id not in _FLAP_CODES:
+            return False
+        return super().supports(name)
+
+    def can_set(self, name: str) -> bool:
+        """Return True if command() can set this property or command for the model."""
+        if name == "flap" and self.device.product_id not in _FLAP_CODES:
+            return False
+        return super().can_set(name)
 
     @property
     def flap(self) -> Flap | None:
