@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import partial
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -31,6 +32,7 @@ from custom_components.tion.api.views import Breezer, DeviceCommand, Station, vi
 from .fakes import (  # noqa: TID251
     BREEZER,
     DEVICE_KEY,
+    MISSING_PROFILE,
     PROFILES,
     SECOND_LOCATION_ID,
     SECOND_ROOM_ID,
@@ -41,10 +43,13 @@ from .fakes import (  # noqa: TID251
     FakeBroker,
     FakeNats,
     FakeTransport,
+    catalog_renaming,
     cloud_structure,
 )
 from .payloads import (  # noqa: TID251
     LOCATION_ID,
+    PROFILE_4S,
+    PROFILE_BS310,
     ROOM_ID,
     auto_control,
     auto_control_changed,
@@ -602,6 +607,129 @@ async def test_unknown_profile_reloads_catalog_only_once(harness: Harness) -> No
         "GetFullStructureLocations",
         "GetFullStructureLocations",
     ]
+
+
+@pytest.mark.parametrize(
+    ("breezer_profile", "methods"),
+    [
+        pytest.param(
+            MISSING_PROFILE,
+            [
+                "GetDeviceProfiles",
+                "GetFullStructureLocations",
+                "GetDeviceProfiles",
+                "GetFullStructureLocations",
+                "GetFullStructureLocations",
+            ],
+            id="reference_not_in_catalog",
+        ),
+        pytest.param(
+            None,
+            [
+                "GetDeviceProfiles",
+                "GetFullStructureLocations",
+                "GetFullStructureLocations",
+            ],
+            id="no_reference",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_missing_profile_matched_by_model(
+    harness: Harness, breezer_profile: UUID | None, methods: list[str]
+) -> None:
+    """A breezer without its profile in the catalog gets its model's and keeps it."""
+    harness.transport.answers["GetFullStructureLocations"] = [
+        cloud_structure(breezer_profile=breezer_profile, breezer_model=32771)
+    ]
+
+    await harness.cloud.async_start()
+    await harness.cloud.async_refresh()
+
+    assert harness.transport.methods() == methods
+    breezer = harness.cloud.account.device(BREEZER)
+    assert breezer is not None
+    assert (breezer.profile_id, breezer.product_id) == (breezer_profile, "b4s_ble")
+    assert isinstance(view(breezer), Breezer)
+
+
+def _model_match_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if "missing from the catalog" in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+async def test_profile_matched_by_model_is_logged_once(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Each device matched by model is logged once, not on every refresh."""
+    caplog.set_level(logging.DEBUG, logger=cloud_module.__name__)
+    devices = (
+        device(BREEZER, MISSING_PROFILE, model=32771),
+        device("BRZ0000002", MISSING_PROFILE, model=32771),
+        device("NEW0000001", UUID(int=77)),
+        device("BRZ0000003", None, model=32771),
+    )
+    harness.transport.answers["GetFullStructureLocations"] = [
+        structure_response(location(SID, devices=devices))
+    ]
+
+    await harness.cloud.async_start()
+    await harness.cloud.async_refresh()
+    # A later unknown reference reloads the catalog again; the earlier ones stay quiet.
+    harness.transport.answers["GetFullStructureLocations"] = [
+        structure_response(
+            location(SID, devices=(*devices, device("NEW0000002", UUID(int=78))))
+        )
+    ]
+    await harness.cloud.async_refresh()
+
+    matched = (
+        f"references profile {MISSING_PROFILE} missing from the catalog; "
+        f"using b4s_ble ({PROFILE_4S}) by its model"
+    )
+    assert _model_match_lines(caplog) == [
+        f"Device {BREEZER} {matched}",
+        f"Device BRZ0000002 {matched}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_profile_found_by_the_reload_is_not_logged(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Guard (passes before the change too): a reference the reload finds is exact.
+
+    The stale catalog holds the 4S under an older id, so the first read matches it
+    by model; only the reload may decide, and it finds the reference.
+    """
+    caplog.set_level(logging.DEBUG, logger=cloud_module.__name__)
+    harness.transport.answers["GetDeviceProfiles"] = [
+        catalog_renaming(PROFILE_4S, UUID(int=5)),
+        PROFILES,
+    ]
+    harness.transport.answers["GetFullStructureLocations"] = [
+        structure_response(
+            location(
+                SID,
+                devices=(
+                    device(BREEZER, PROFILE_4S, model=32771, parent_id=STATION),
+                    device(STATION, PROFILE_BS310, is_gateway=True),
+                ),
+            )
+        )
+    ]
+
+    await harness.cloud.async_start()
+
+    breezer = harness.cloud.account.device(BREEZER)
+    assert breezer is not None
+    assert breezer.profile is not None
+    assert breezer.profile.profile_id == PROFILE_4S
+    assert _model_match_lines(caplog) == []
 
 
 @pytest.mark.asyncio

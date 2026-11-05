@@ -67,7 +67,7 @@ def room(
 
 def device(
     device_id: str,
-    profile_id: UUID,
+    profile_id: UUID | None,
     *,
     name: str = "Device",
     model: int = 0,
@@ -90,10 +90,11 @@ def device(
         + _wrapped_int(5, firmware)
         + _wrapped_int(6, hardware)
         + _wrapped_guid(7, created_by)
-        + _wrapped_guid(11, profile_id)
         + encode_varint(15, int(is_online))
         + encode_varint(23, int(is_gateway))
     )
+    if profile_id is not None:
+        payload += _wrapped_guid(11, profile_id)
     if room_id is not None:
         payload += _wrapped_guid(10, room_id)
     if parent_id is not None:

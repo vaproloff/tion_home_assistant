@@ -1,5 +1,6 @@
 """Tests for the location structure and room auto mode messages."""
 
+from collections.abc import Mapping
 from pathlib import Path
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from .payloads import (  # noqa: TID251
     LOCATION_ID,
     PROFILE_4S,
     PROFILE_BS310,
+    PROFILE_BS410,
     ROOM_ID,
     auto_control,
     auto_control_changed,
@@ -129,6 +131,95 @@ def test_decode_structure(profiles: dict[UUID, DeviceProfile]) -> None:
     assert station.is_cloud_stub is True
     assert (unknown.profile, unknown.product_id, unknown.room_id) == (None, "", None)
     assert structure.profile_ids() == {PROFILE_4S, PROFILE_BS310, UNKNOWN_PROFILE}
+
+
+def _only_device(payload: bytes, profiles: Mapping[UUID, DeviceProfile]) -> Device:
+    (home,) = decode_structure(
+        structure_response(location("LOC0000001", devices=(payload,))), profiles
+    ).locations
+    (only,) = home.devices
+    return only
+
+
+def _synthetic(
+    profile_id: UUID, model: int, submodels: tuple[int, ...] = ()
+) -> DeviceProfile:
+    return DeviceProfile(
+        profile_id, "synthetic", "Synthetic", model, submodels, False, ()
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "model", "submodel", "expected"),
+    [
+        pytest.param(UNKNOWN_PROFILE, 32771, 0, PROFILE_4S, id="4s"),
+        pytest.param(UNKNOWN_PROFILE, 16384, 32772, PROFILE_BS310, id="bs310"),
+        pytest.param(UNKNOWN_PROFILE, 16384, 32771, PROFILE_BS410, id="bs410"),
+        pytest.param(None, 32771, 0, PROFILE_4S, id="4s_without_reference"),
+    ],
+)
+def test_profile_by_model(
+    profiles: dict[UUID, DeviceProfile],
+    profile_id: UUID | None,
+    model: int,
+    submodel: int,
+    expected: UUID,
+) -> None:
+    """A device whose reference the catalog lacks gets the only profile of its model."""
+    found = _only_device(
+        device("DEV0000001", profile_id, model=model, submodel=submodel), profiles
+    )
+
+    assert found.profile is profiles[expected]
+    assert found.profile_id == profile_id
+
+
+def test_reference_wins_over_model(profiles: dict[UUID, DeviceProfile]) -> None:
+    """Guard (passes before the change too): a catalogued reference is used."""
+    found = _only_device(device("DEV0000001", PROFILE_4S, model=4103), profiles)
+
+    assert found.profile is profiles[PROFILE_4S]
+
+
+def test_station_model_alone_is_not_enough(
+    profiles: dict[UUID, DeviceProfile],
+) -> None:
+    """Guard (passes before the change too): no station profile lists submodel 0."""
+    found = _only_device(device("DEV0000001", UNKNOWN_PROFILE, model=16384), profiles)
+
+    assert found.profile is None
+
+
+@pytest.mark.parametrize(
+    ("model", "submodel", "catalog"),
+    [
+        pytest.param(
+            4100,
+            0,
+            {
+                UUID(int=1): _synthetic(UUID(int=1), 4100),
+                UUID(int=2): _synthetic(UUID(int=2), 4100),
+            },
+            id="two_versions",
+        ),
+        pytest.param(
+            4100,
+            1024,
+            {UUID(int=1): _synthetic(UUID(int=1), 4100, (512,))},
+            id="submodel_not_listed",
+        ),
+        pytest.param(0, 0, {UUID(int=1): _synthetic(UUID(int=1), 0)}, id="model_zero"),
+    ],
+)
+def test_no_single_profile_fits(
+    model: int, submodel: int, catalog: dict[UUID, DeviceProfile]
+) -> None:
+    """Guard (passes before the change too): without one fit there is no profile."""
+    found = _only_device(
+        device("DEV0000001", UNKNOWN_PROFILE, model=model, submodel=submodel), catalog
+    )
+
+    assert found.profile is None
 
 
 def test_legacy_location_needs_migration(
