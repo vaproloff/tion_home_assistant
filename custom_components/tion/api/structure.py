@@ -6,7 +6,7 @@ from uuid import UUID
 
 from .exceptions import TionApiError
 from .model import AutoControl, Device, Location, Room
-from .profiles import DeviceProfile
+from .profiles import DeviceProfile, find_profile
 from .protobuf import ProtoMessage, encode_bytes, encode_guid, encode_varint
 
 SVC_LOCATION_READER = "api.v1.scheme.location.LocationServiceReader"
@@ -106,12 +106,14 @@ def _decode_device(
     message: ProtoMessage, profiles: Mapping[UUID, DeviceProfile]
 ) -> Device:
     profile_id = _wrapped_guid(message, 11)
+    model = _wrapped(message, 3).get_sint64(1)
+    submodel = _wrapped(message, 4).get_int(1)
     parent = message.get_message(20)
     return Device(
         id=_wrapped(message, 1).get_str(1),
         name=_wrapped(message, 2).get_str(1),
-        model=_wrapped(message, 3).get_sint64(1),
-        submodel=_wrapped(message, 4).get_int(1),
+        model=model,
+        submodel=submodel,
         room_id=_wrapped_guid(message, 10),
         parent_id=parent.get_str(1) if parent is not None else None,
         is_online=message.get_bool(15),
@@ -121,7 +123,7 @@ def _decode_device(
         macs=_macs(message),
         is_cloud_stub=_wrapped_guid(message, 7) in _CLOUD_STUB_CREATORS,
         profile_id=profile_id,
-        profile=profiles.get(profile_id) if profile_id is not None else None,
+        profile=find_profile(profiles, profile_id, model, submodel),
     )
 
 

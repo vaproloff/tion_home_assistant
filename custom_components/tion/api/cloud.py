@@ -307,7 +307,7 @@ class TionCloud:
         auto_seq = dict(self._room_auto_seq)
         structure = await self._read_structure(token)
         unknown = structure.profile_ids() - self._profiles.keys()
-        # One catalog reload per unknown profile; then the device stays without one.
+        # One catalog reload per unknown profile; then the device keeps its model's profile, if any.
         if unknown - self._profiles_retried:
             await self._load_profiles()
             self._profiles_retried |= unknown

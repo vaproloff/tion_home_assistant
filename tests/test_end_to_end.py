@@ -9,6 +9,7 @@ import pytest
 from custom_components.tion.api import TionCloud, TionDeviceKey, TionTokens
 from custom_components.tion.api.datapoints import DPKind, DPValue
 from custom_components.tion.api.nats import TaskFactory
+from custom_components.tion.const import DOMAIN
 from homeassistant.components.climate import (
     ATTR_FAN_MODE,
     DOMAIN as CLIMATE_DOMAIN,
@@ -17,14 +18,17 @@ from homeassistant.components.climate import (
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from .api.fakes import (  # noqa: TID251
     BREEZER,
+    MISSING_PROFILE,
     SID,
     STATION,
     FakeAuth as FakeSession,
     FakeBroker,
     FakeTransport,
+    cloud_structure,
 )
 from .api.payloads import ROOM_ID, auto_control_changed, state_report  # noqa: TID251
 from .common import PID_SENSOR, entity_id, pid_options  # noqa: TID251
@@ -38,8 +42,17 @@ def broker() -> FakeBroker:
 
 
 @pytest.fixture
+def structure() -> bytes:
+    """The structure the cloud answers."""
+    return cloud_structure()
+
+
+@pytest.fixture
 async def loaded_entry(
-    hass: HomeAssistant, config_entry: MockConfigEntry, broker: FakeBroker
+    hass: HomeAssistant,
+    config_entry: MockConfigEntry,
+    broker: FakeBroker,
+    structure: bytes,
 ) -> MockConfigEntry:
     """Set up the entry on a real TionCloud and the entry's task factory."""
 
@@ -49,8 +62,10 @@ async def loaded_entry(
         tokens: TionTokens,
         create_task: TaskFactory,
     ) -> tuple[FakeAuth, TionCloud]:
+        transport = FakeTransport()
+        transport.answers["GetFullStructureLocations"] = [structure]
         cloud = TionCloud(
-            FakeTransport(),
+            transport,
             FakeSession(),
             create_task=create_task,
             connect=broker.connect,
@@ -107,6 +122,33 @@ async def _set_fan_mode(hass: HomeAssistant, fan_mode: str) -> None:
         },
         blocking=True,
     )
+
+
+@pytest.mark.parametrize(
+    "structure",
+    [
+        pytest.param(
+            cloud_structure(breezer_profile=MISSING_PROFILE, breezer_model=32771),
+            id="missing_profile",
+        )
+    ],
+)
+async def test_breezer_whose_profile_left_the_catalog(
+    hass: HomeAssistant,
+    loaded_entry: MockConfigEntry,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """A 4S whose profile Tion dropped from the catalog is set up and obeys commands."""
+    device_entry = device_registry.async_get_device_by_identifier(
+        (DOMAIN, BREEZER), loaded_entry.entry_id
+    )
+    assert device_entry is not None
+    assert device_entry.model == "Breezer 4S"
+    assert _state(hass, Platform.CLIMATE, BREEZER).attributes[ATTR_FAN_MODE] == "1"
+
+    await _set_fan_mode(hass, "3")
+
+    assert _state(hass, Platform.CLIMATE, BREEZER).attributes[ATTR_FAN_MODE] == "3"
 
 
 @pytest.mark.parametrize("options", [pytest.param(pid_options(BREEZER), id="pid")])

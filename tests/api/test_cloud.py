@@ -31,6 +31,7 @@ from custom_components.tion.api.views import Breezer, DeviceCommand, Station, vi
 from .fakes import (  # noqa: TID251
     BREEZER,
     DEVICE_KEY,
+    MISSING_PROFILE,
     PROFILES,
     SECOND_LOCATION_ID,
     SECOND_ROOM_ID,
@@ -602,6 +603,50 @@ async def test_unknown_profile_reloads_catalog_only_once(harness: Harness) -> No
         "GetFullStructureLocations",
         "GetFullStructureLocations",
     ]
+
+
+@pytest.mark.parametrize(
+    ("breezer_profile", "methods"),
+    [
+        pytest.param(
+            MISSING_PROFILE,
+            [
+                "GetDeviceProfiles",
+                "GetFullStructureLocations",
+                "GetDeviceProfiles",
+                "GetFullStructureLocations",
+                "GetFullStructureLocations",
+            ],
+            id="reference_not_in_catalog",
+        ),
+        pytest.param(
+            None,
+            [
+                "GetDeviceProfiles",
+                "GetFullStructureLocations",
+                "GetFullStructureLocations",
+            ],
+            id="no_reference",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_missing_profile_matched_by_model(
+    harness: Harness, breezer_profile: UUID | None, methods: list[str]
+) -> None:
+    """A breezer without its profile in the catalog gets its model's and keeps it."""
+    harness.transport.answers["GetFullStructureLocations"] = [
+        cloud_structure(breezer_profile=breezer_profile, breezer_model=32771)
+    ]
+
+    await harness.cloud.async_start()
+    await harness.cloud.async_refresh()
+
+    assert harness.transport.methods() == methods
+    breezer = harness.cloud.account.device(BREEZER)
+    assert breezer is not None
+    assert (breezer.profile_id, breezer.product_id) == (breezer_profile, "b4s_ble")
+    assert isinstance(view(breezer), Breezer)
 
 
 @pytest.mark.asyncio

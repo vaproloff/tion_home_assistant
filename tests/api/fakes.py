@@ -37,9 +37,16 @@ SERVER_TIME = 1_790_865_786.0
 SECOND_LOCATION_ID = UUID(int=9)
 SECOND_ROOM_ID = UUID(int=10)
 DEVICE_KEY = TionDeviceKey.generate()
+MISSING_PROFILE = UUID("0199bbbb-0000-7000-8000-000000000002")
 
 
-def cloud_structure(*, wstoken: str = "ws-1", extra_location: bool = False) -> bytes:
+def cloud_structure(
+    *,
+    wstoken: str = "ws-1",
+    extra_location: bool = False,
+    breezer_profile: UUID | None = PROFILE_4S,
+    breezer_model: int = 0,
+) -> bytes:
     """Return a structure with a 4S behind a BS310, and an unsupported device."""
     home = location(
         SID,
@@ -51,7 +58,7 @@ def cloud_structure(*, wstoken: str = "ws-1", extra_location: bool = False) -> b
             ),
         ),
         devices=(
-            device(BREEZER, PROFILE_4S, parent_id=STATION),
+            device(BREEZER, breezer_profile, model=breezer_model, parent_id=STATION),
             device(STATION, PROFILE_BS310, is_gateway=True),
             device("CLV0000001", PROFILE_CLEVER),
         ),
