@@ -14,7 +14,12 @@ from custom_components.tion.api.exceptions import (
     TionConnectionError,
     TionError,
 )
-from custom_components.tion.api.protobuf import ProtoMessage, encode_varint
+from custom_components.tion.api.protobuf import (
+    ProtoMessage,
+    encode_bytes,
+    encode_guid,
+    encode_varint,
+)
 
 from .payloads import (  # noqa: TID251
     PROFILE_4S,
@@ -38,6 +43,21 @@ SECOND_LOCATION_ID = UUID(int=9)
 SECOND_ROOM_ID = UUID(int=10)
 DEVICE_KEY = TionDeviceKey.generate()
 MISSING_PROFILE = UUID("0199bbbb-0000-7000-8000-000000000002")
+
+
+def catalog_renaming(profile_id: UUID, new_id: UUID) -> bytes:
+    """Return the recorded catalog with one profile under another id, like an older version."""
+    entries = []
+    for raw in ProtoMessage.parse(PROFILES).get_all(1):
+        assert isinstance(raw, bytes)
+        entry = ProtoMessage.parse(raw)
+        wrapper = entry.get_message(1)
+        if wrapper is not None and wrapper.get_guid(1) == profile_id:
+            raw = encode_bytes(1, encode_guid(1, new_id)) + encode_bytes(
+                2, entry.get_bytes(2)
+            )
+        entries.append(encode_bytes(1, raw))
+    return b"".join(entries)
 
 
 def cloud_structure(

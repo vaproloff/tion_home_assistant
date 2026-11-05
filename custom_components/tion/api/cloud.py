@@ -307,13 +307,33 @@ class TionCloud:
         auto_seq = dict(self._room_auto_seq)
         structure = await self._read_structure(token)
         unknown = structure.profile_ids() - self._profiles.keys()
-        # One catalog reload per unknown profile; then the device keeps its model's profile, if any.
-        if unknown - self._profiles_retried:
+        # One catalog reload per unknown profile;
+        # then the device keeps its model's profile, if any.
+        if fresh := unknown - self._profiles_retried:
             await self._load_profiles()
             self._profiles_retried |= unknown
             structure = await self._read_structure(token)
+            self._log_model_matches(structure, fresh)
         self._locations = self._keep_newer_autos(structure.locations, auto_seq)
         self._wstoken = structure.wstoken
+
+    def _log_model_matches(self, structure: Structure, references: set[UUID]) -> None:
+        """Log each device of the new references that got its model's profile."""
+        for location in structure.locations:
+            for device in location.devices:
+                if (
+                    device.profile_id in references
+                    and device.profile_id not in self._profiles
+                    and (profile := device.profile) is not None
+                ):
+                    _LOGGER.debug(
+                        "Device %s references profile %s missing from the catalog; "
+                        "using %s (%s) by its model",
+                        device.id,
+                        device.profile_id,
+                        profile.product_id,
+                        profile.profile_id,
+                    )
 
     def _keep_newer_autos(
         self, locations: tuple[Location, ...], auto_seq: dict[UUID, int]
