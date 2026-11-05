@@ -228,15 +228,20 @@ class Breezer(_DeviceView):
         """Return the heater type code."""
         return self._raw("sensor_heater_type")
 
+    @property
+    def _has_flap(self) -> bool:
+        """Return True if the model has a flap, whatever its profile declares."""
+        return self.device.product_id in _FLAP_CODES
+
     def supports(self, name: str) -> bool:
         """Return True if the model has the datapoint behind a property or command."""
-        if name == "flap" and self.device.product_id not in _FLAP_CODES:
+        if name == "flap" and not self._has_flap:
             return False
         return super().supports(name)
 
     def can_set(self, name: str) -> bool:
         """Return True if command() can set this property or command for the model."""
-        if name == "flap" and self.device.product_id not in _FLAP_CODES:
+        if name == "flap" and not self._has_flap:
             return False
         return super().can_set(name)
 
@@ -302,12 +307,12 @@ class Breezer(_DeviceView):
                 spec = self._writable("filter_hours")
                 return _encode_value(spec, FILTER_RESOURCE_SECONDS)
             case "flap":
-                if value not in self.flap_modes:
+                codes = _FLAP_CODES.get(self.device.product_id, {})
+                if value not in codes:
                     raise ValueError(
                         f"{self.device.product_id} cannot set flap={value}"
                     )
-                flap_code = _FLAP_CODES[self.device.product_id][value]
-                return _encode_value(self._writable("flap_mode"), flap_code)
+                return _encode_value(self._writable("flap_mode"), codes[value])
             case "is_on" | "backlight" | "sound":
                 code = self._FEATURES[name]
                 return _encode_value(self._writable(code), int(value))
